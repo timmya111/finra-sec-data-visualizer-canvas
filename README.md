@@ -217,7 +217,9 @@ Vercel runs a **daily** cron (`0 10 * * *` UTC) against `/api/finra/external-val
 2. Walks **backward through gaps only** (unknown CRD numbers), skipping known CRDs.
 3. When a live CRD is found, updates inventory via `rememberInventoryEntitiesDurable` (sidecar when writable + Redis `dashboard:cached-crd-count` / highest-CRD zsets).
 
-Search and roster reads stay local-first (gzip sidecars / Redis). The cron is the deliberate external FINRA/SEC discovery path; it does not re-validate known CRDs.
+**Selection refresh:** after a node is selected and the expand/pulse animation settles, the client POSTs `/api/finra/selection-refresh`. The server reads Redis, compares against live FINRA/SEC, and writes Redis + returns detail when newer. Click handling stays local-first. On HTTP 429 the server pauses 7–9 minutes (shared Redis backoff) and shortens that pause after later successes (floor 3 minutes). Per-node cooldown avoids re-checking the same CRD on every click.
+
+Search and roster reads stay local-first (gzip sidecars / Redis). The cron discovers new/gap CRDs; selection refresh keeps selected known CRDs fresh without local pushes.
 
 ## CONTRIBUTING & TESTS
 

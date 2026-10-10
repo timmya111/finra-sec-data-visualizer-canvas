@@ -1,12 +1,84 @@
 {
   "firms": [
     {
-      "id": 119241,
-      "name": "HERITAGE ADVISORY SERVICES, INC."
+      "id": 13572,
+      "name": "CETERA ADVISOR NETWORKS LLC"
+    },
+    {
+      "id": 32444,
+      "name": "FIRST ALLIED SECURITIES, INC."
+    },
+    {
+      "id": 15340,
+      "name": "CETERA INVESTMENT SERVICES LLC"
+    },
+    {
+      "id": 10358,
+      "name": "CETERA FINANCIAL SPECIALISTS LLC"
+    },
+    {
+      "id": 10299,
+      "name": "CETERA ADVISORS LLC"
+    },
+    {
+      "id": 127787,
+      "name": "SORRENTO PACIFIC FINANCIAL, LLC"
+    },
+    {
+      "id": 42132,
+      "name": "CUSO FINANCIAL SERVICES, L.P."
+    },
+    {
+      "id": 139135,
+      "name": "RIVERSOURCE DISTRIBUTORS, INC."
+    },
+    {
+      "id": 26506,
+      "name": "AMERICAN ENTERPRISE INVESTMENT SERVICES INC."
+    },
+    {
+      "id": 6363,
+      "name": "AMERIPRISE FINANCIAL SERVICES, LLC"
+    },
+    {
+      "id": 840,
+      "name": "COLUMBIA MANAGEMENT INVESTMENT DISTRIBUTORS, INC."
+    },
+    {
+      "id": 6413,
+      "name": "LPL FINANCIAL LLC"
+    },
+    {
+      "id": 7784,
+      "name": "FIDELITY BROKERAGE SERVICES LLC"
+    },
+    {
+      "id": 111528,
+      "name": "G1 EXECUTION SERVICES, LLC"
+    },
+    {
+      "id": 25025,
+      "name": "E*TRADE CLEARING LLC"
+    },
+    {
+      "id": 29106,
+      "name": "E*TRADE SECURITIES LLC"
+    },
+    {
+      "id": 8733,
+      "name": "LPL ENTERPRISE, LLC"
+    },
+    {
+      "id": 16986,
+      "name": "THE HUNTINGTON INVESTMENT COMPANY"
     },
     {
       "id": 7691,
       "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
+    },
+    {
+      "id": 119241,
+      "name": "HERITAGE ADVISORY SERVICES, INC."
     },
     {
       "id": 7471,
@@ -27,10 +99,6 @@
     {
       "id": 18272,
       "name": "ALLSTATE FINANCIAL SERVICES, LLC"
-    },
-    {
-      "id": 6363,
-      "name": "AMERIPRISE FINANCIAL SERVICES, INC."
     },
     {
       "id": 45915,
@@ -223,10 +291,6 @@
     {
       "id": 866,
       "name": "WADDELL & REED"
-    },
-    {
-      "id": 6413,
-      "name": "LPL FINANCIAL LLC"
     },
     {
       "id": 31194,
@@ -1417,10 +1481,6 @@
       "name": "INTERFIRST CAPITAL CORPORATION"
     },
     {
-      "id": 32444,
-      "name": "FIRST ALLIED SECURITIES, INC."
-    },
-    {
       "id": 35528,
       "name": "THE SHEMANO GROUP, INC."
     },
@@ -1433,20 +1493,12 @@
       "name": "WESTERN INTERNATIONAL SECURITIES, INC."
     },
     {
-      "id": 127787,
-      "name": "SORRENTO PACIFIC FINANCIAL, LLC"
-    },
-    {
       "id": 47275,
       "name": "SCF SECURITIES, INC."
     },
     {
       "id": 46214,
       "name": "NEXT FINANCIAL GROUP, INC."
-    },
-    {
-      "id": 42132,
-      "name": "CUSO FINANCIAL SERVICES, L.P."
     },
     {
       "id": 10641,
@@ -1619,10 +1671,6 @@
     {
       "id": 23988,
       "name": "CITICORP INVESTMENT SERVICES"
-    },
-    {
-      "id": 15340,
-      "name": "PRIMEVEST FINANCIAL SERVICES, INC."
     },
     {
       "id": 127001,
@@ -2149,20 +2197,8 @@
       "name": "NATIONAL PLANNING CORPORATION"
     },
     {
-      "id": 10299,
-      "name": "CETERA ADVISORS LLC"
-    },
-    {
-      "id": 10358,
-      "name": "CETERA FINANCIAL SPECIALISTS LLC"
-    },
-    {
       "id": 18697,
       "name": "GIRARD SECURITIES, INC."
-    },
-    {
-      "id": 13572,
-      "name": "CETERA ADVISOR NETWORKS LLC"
     },
     {
       "id": 133022,
@@ -3963,10 +3999,6 @@
     {
       "id": 104555,
       "name": "STRATEGIC ADVISERS LLC"
-    },
-    {
-      "id": 7784,
-      "name": "FIDELITY BROKERAGE SERVICES LLC"
     },
     {
       "id": 111514,
@@ -5803,10 +5835,6 @@
     {
       "id": 18456,
       "name": "SAL FINANCIAL SERVICES, INC."
-    },
-    {
-      "id": 29106,
-      "name": "E*TRADE SECURITIES LLC"
     },
     {
       "id": 14503,
@@ -8541,14 +8569,6 @@
       "name": "THE STUART-JAMES COMPANY, INC."
     },
     {
-      "id": 111528,
-      "name": "E*TRADE CAPITAL MARKETS LLC"
-    },
-    {
-      "id": 25025,
-      "name": "E*TRADE CLEARING LLC"
-    },
-    {
       "id": 104353,
       "name": "THE VERTICAL GROUP"
     },
@@ -8795,10 +8815,6 @@
     {
       "id": 17490,
       "name": "NATCITY INVESTMENTS, INC."
-    },
-    {
-      "id": 16986,
-      "name": "THE HUNTINGTON INVESTMENT COMPANY"
     },
     {
       "id": 13109,
@@ -9331,10 +9347,6 @@
     {
       "id": 292163,
       "name": "ALL OF US SECURITIES LLC"
-    },
-    {
-      "id": 8733,
-      "name": "LPL ENTERPRISE, LLC"
     },
     {
       "id": 7404,
@@ -10919,14 +10931,6 @@
     {
       "id": 34954,
       "name": "TCF INVESTMENTS, INC."
-    },
-    {
-      "id": 840,
-      "name": "RIVERSOURCE FUND DISTRIBUTORS, INC."
-    },
-    {
-      "id": 139135,
-      "name": "RIVERSOURCE DISTRIBUTORS, INC."
     },
     {
       "id": 29357,
@@ -19995,13 +19999,37 @@
     {
       "id": 337986,
       "name": "VISTINA STRUCTURED CREDIT ADVISORY LLC"
-    },
-    {
-      "id": 337987,
-      "name": "VISTINA ADVISORY LLC"
     }
   ],
   "individuals": [
+    {
+      "id": 3257001,
+      "name": "Theodore Robert Horwith"
+    },
+    {
+      "id": 7248335,
+      "name": "Aneri Jambusaria"
+    },
+    {
+      "id": 3178848,
+      "name": "STEVEN THOMAS MALFITANO"
+    },
+    {
+      "id": 5404843,
+      "name": "MINDY ANN VANCE"
+    },
+    {
+      "id": 8270594,
+      "name": "Jacob Parker"
+    },
+    {
+      "id": 6736810,
+      "name": "Thomas Alan Gregg"
+    },
+    {
+      "id": 6888757,
+      "name": "PAUL SCOTT TAVA"
+    },
     {
       "id": 1085996,
       "name": "Timothy Dale Register"
@@ -22367,10 +22395,6 @@
       "name": "DAVID FELIX DESIMONE"
     },
     {
-      "id": 3178848,
-      "name": "STEVEN THOMAS MALFITANO"
-    },
-    {
       "id": 4003349,
       "name": "MATTHEW JON AUDETTE"
     },
@@ -22385,10 +22409,6 @@
     {
       "id": 5706387,
       "name": "HECTOR ANDRES LOPEZ"
-    },
-    {
-      "id": 7248335,
-      "name": "Aneri Jambusaria"
     },
     {
       "id": 1531787,
@@ -26339,16 +26359,8 @@
       "name": "Peter Mozer"
     },
     {
-      "id": 6888757,
-      "name": "PAUL SCOTT TAVA"
-    },
-    {
       "id": 1954117,
       "name": "William Williams"
-    },
-    {
-      "id": 3257001,
-      "name": "Theodore Robert Horwith"
     },
     {
       "id": 2627931,

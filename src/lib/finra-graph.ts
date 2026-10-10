@@ -48,6 +48,7 @@ import {
 	setRuntimeHopDefaults,
 } from './finra-graph-defaults';
 import { mergeGraphNodesForAppend } from './graphIdentity';
+import { scheduleSelectionExternalRefresh } from './selectionRefreshClient';
 import { isValidLocationStateFilter, isZipLikeLocationQuery, normalizeLocationStateFilter } from './locationSearch';
 import { buildParentFirmSummaryLinks } from './finra-graph/externalLinks';
 import { resolveIndividualSourceDetail, hasIndividualSourceCoverage } from './sourceTruth';
@@ -2529,25 +2530,50 @@ async function applyPendingRouteNodeSelection() {
 			// Session restore often re-selects the same person with only a partial set of
 			// previous-employer links (batch fetch used on-screen firm ids). Still inject
 			// the full employment history so gray previous firms appear without a re-click.
+			let employmentPromise: Promise<unknown> = Promise.resolve();
 			if (liveNode.group === 'individual') {
-				try {
-					await ensureIndividualDetail(liveNode, {
-						allowOwnerEvidenceFirmFetch: true,
-						injectEmploymentGraph: true,
-					});
-					if (personNeedsEmploymentHistoryReinject(liveNode)) {
-						delete liveNode._employmentHistoryResolved;
-						delete liveNode._detailLoaded;
+				employmentPromise = (async () => {
+					try {
 						await ensureIndividualDetail(liveNode, {
 							allowOwnerEvidenceFirmFetch: true,
 							injectEmploymentGraph: true,
 						});
+						if (personNeedsEmploymentHistoryReinject(liveNode)) {
+							delete liveNode._employmentHistoryResolved;
+							delete liveNode._detailLoaded;
+							await ensureIndividualDetail(liveNode, {
+								allowOwnerEvidenceFirmFetch: true,
+								injectEmploymentGraph: true,
+							});
+						}
+						revealPersonEmploymentNeighbors(liveNode);
+					} catch (error) {
+						console.warn('Failed to inject employment graph for already-selected route person:', error);
 					}
-					revealPersonEmploymentNeighbors(liveNode);
-				} catch (error) {
-					console.warn('Failed to inject employment graph for already-selected route person:', error);
-				}
+				})();
 			}
+			// Still run deferred Redis-vs-external freshness even when selectNode is skipped.
+			scheduleSelectionExternalRefresh({
+				node: liveNode,
+				afterPromise: employmentPromise,
+				getSelectedId: () => globalState.selectedId,
+				getAlpha: () => Number(globalState.simulation?.alpha?.() || 0),
+				isSimStopped: () => {
+					try {
+						const sim = globalState.simulation;
+						if (!sim) return true;
+						const alpha = Number(sim.alpha?.() || 0);
+						const target = Number(sim.alphaTarget?.() || 0);
+						return alpha < 0.05 && target <= 0;
+					} catch {
+						return true;
+					}
+				},
+				onUpdated: (result) => {
+					applySelectionRefreshDetailToNode(liveNode, result.detail);
+				},
+			});
+			await employmentPromise;
 			return true;
 		}
 
@@ -18847,7 +18873,68 @@ function selectNode(
 		});
 	}
 
+	// Deferred Redis-vs-external freshness check — never on the click hot path.
+	scheduleSelectionExternalRefresh({
+		node: d,
+		afterPromise: expansionPromise,
+		getSelectedId: () => globalState.selectedId,
+		getAlpha: () => Number(globalState.simulation?.alpha?.() || 0),
+		isSimStopped: () => {
+			try {
+				const sim = globalState.simulation;
+				if (!sim) return true;
+				const alpha = Number(sim.alpha?.() || 0);
+				const target = Number(sim.alphaTarget?.() || 0);
+				return alpha < 0.05 && target <= 0;
+			} catch {
+				return true;
+			}
+		},
+		onUpdated: (result) => {
+			applySelectionRefreshDetailToNode(d, result.detail);
+		},
+	});
+
 	return expansionPromise;
+}
+
+function applySelectionRefreshDetailToNode(node, detail) {
+	if (!node || !detail || typeof detail !== 'object') return;
+	try {
+		if (node.group === 'individual') {
+			applyIndividualDetail(node, detail, node.crd || String(node.id || '').replace(/^person:/, ''));
+		} else if (node.group === 'firm') {
+			const basic = (detail as any).basicInformation || detail;
+			if (basic && typeof basic === 'object') {
+				node.basicInformation = { ...(node.basicInformation || {}), ...basic };
+				if ((detail as any).firmName || basic.firmName) node.label = String((detail as any).firmName || basic.firmName || node.label);
+				node.bcScope = (detail as any).bcScope ?? basic.bcScope ?? node.bcScope;
+				node.iaScope = (detail as any).iaScope ?? basic.iaScope ?? node.iaScope;
+				node.firmStatus = (detail as any).firmStatus ?? basic.firmStatus ?? node.firmStatus;
+				node.hasFinraData = Boolean((detail as any).hasFinraData ?? node.hasFinraData);
+				node.hasSecData = Boolean((detail as any).hasSecData ?? node.hasSecData);
+			}
+		}
+		node.lastCheckedAt = new Date().toISOString();
+		if (globalState.graphData?.nodes) {
+			const graphNode = globalState.graphData.nodes.find((entry) => entry?.id === node.id);
+			if (graphNode && graphNode !== node) {
+				if (node.group === 'individual') applyIndividualDetail(graphNode, detail, node.crd);
+				else Object.assign(graphNode, { basicInformation: node.basicInformation, label: node.label, bcScope: node.bcScope, iaScope: node.iaScope, firmStatus: node.firmStatus });
+			}
+		}
+		if (globalState.selectedId === node.id && shouldRevealSidebarPanel()) {
+			renderSidebar(node, { reveal: true });
+		}
+		try {
+			saveSession();
+		} catch {
+			/* ignore */
+		}
+		scheduleGraphTickPositions(null, null, null);
+	} catch (error) {
+		console.warn('Failed to apply selection-refresh detail:', error);
+	}
 }
 
 function getAlternatingSlotOffset(slotIndex) {

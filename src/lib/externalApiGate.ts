@@ -31,13 +31,14 @@ function getExternalApiContext() {
 }
 
 export function canCallExternalApis() {
-	if (isExplicitlyDisabled()) return false;
-	
 	const context = getExternalApiContext();
-	if (context === 'cronjob' || context === 'build') {
+	// Deliberate server jobs may run even when ambient UI fetches are disabled.
+	// cronjob/build: scheduled discovery. selection-refresh: deferred post-click freshness checks.
+	if (context === 'cronjob' || context === 'build' || context === 'selection-refresh') {
 		return true;
 	}
-	
+
+	if (isExplicitlyDisabled()) return false;
 	return false;
 }
 

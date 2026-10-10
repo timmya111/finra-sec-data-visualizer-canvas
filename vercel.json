@@ -12,6 +12,9 @@
 		},
 		"src/app/api/finra/external-validity/route.ts": {
 			"maxDuration": 60
+		},
+		"src/app/api/finra/selection-refresh/route.ts": {
+			"maxDuration": 60
 		}
 	}
 }
