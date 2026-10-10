@@ -98,6 +98,11 @@ describe('applySidecarInventoryPreference', () => {
 		expect(applySidecarInventoryPreference(redisTotals, null)).toEqual(redisTotals);
 		expect(applySidecarInventoryPreference(redisTotals, { people: 0, firms: 0, unique: 0 })).toEqual(redisTotals);
 	});
+
+	it('keeps live Redis totals when they are ahead of the shipped sidecar', () => {
+		const redisTotals = { people: 61140, firms: 14500, unique: 75640, source: 'redis' as const, cachedCrdCount: '75640' };
+		expect(applySidecarInventoryPreference(redisTotals, { people: 61138, firms: 14498, unique: 75636 })).toEqual(redisTotals);
+	});
 });
 
 describe('chooseDisplayInventoryTotals', () => {

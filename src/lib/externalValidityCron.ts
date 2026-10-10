@@ -4,6 +4,7 @@ import { getRedisClientInstance } from '@/lib/redisClient';
 import { saveGraph, getFullGraph } from '@/lib/graphStore';
 import { getSeedBankFromStore } from '@/lib/graphStore';
 import { DEFAULT_HEADERS } from '@/lib/requestConstants';
+import { flushCrdInventorySidecar, rememberInventoryEntitiesDurable } from '@/lib/crdInventorySidecar';
 import { randomUUID } from 'crypto';
 
 const STATE_KEY = 'finra:cron:external-validity:state';
@@ -716,6 +717,13 @@ async function processCandidate(
 		`[External API Access Success] Time: ${new Date().toISOString()} | Cron Synced and Added CRD | Domain: ${domain} | CRDs added: [${normalizeId(id)}] | Added count: 1`,
 	);
 
+	// Inventory: in-memory/disk sidecar + durable Redis counter/high-water zset.
+	try {
+		await rememberInventoryEntitiesDurable([{ kind, id: normalizeId(id) }], redis as any);
+	} catch {
+		// best effort — graph/Redis detail keys above are the source of truth for the CRD itself
+	}
+
 	// refresh direct cache keys so the app reads the newest payloads on the next lookup
 	try {
 		const searchParams = kind === 'individual' ? INDIVIDUAL_QUERY : FIRM_QUERY;
@@ -931,6 +939,15 @@ export async function runExternalValidityCron() {
 
 		nextState.updatedAt = new Date().toISOString();
 		await storeState(redis, nextState);
+
+		// Flush sidecar writes before the serverless isolate freezes (no-op on Vercel disk).
+		if (summary.discovered > 0) {
+			try {
+				await flushCrdInventorySidecar();
+			} catch {
+				/* ignore */
+			}
+		}
 
 		try {
 			await redis.lpush(

@@ -224,6 +224,16 @@ function scheduleFlush() {
 	}
 }
 
+export const DASHBOARD_CACHED_CRD_COUNT_KEY = 'dashboard:cached-crd-count';
+
+type InventoryRedisClient = {
+	get: (key: string) => Promise<unknown>;
+	set: (key: string, value: string | number) => Promise<unknown>;
+	incrby: (key: string, amount: number) => Promise<unknown>;
+	del: (key: string) => Promise<unknown>;
+	zadd: (key: string, opts: { score: number; member: string }) => Promise<unknown>;
+};
+
 /**
  * Merge coverage-valid entities into the sidecar (debounced disk write).
  * Callers must only pass entities that already passed host coverage.
@@ -252,6 +262,47 @@ export async function rememberInventoryEntities(entries: CrdInventoryEntity[]): 
 	}
 
 	return { added, counts: { ...cache!.counts } };
+}
+
+/**
+ * Remember new coverage-valid CRDs in the in-memory/disk sidecar and bump durable
+ * Redis counters (Vercel cannot keep gzip writes). Seeds the Redis counter from the
+ * sidecar unique count when Redis is behind, then INCRBY by newly added IDs.
+ */
+export async function rememberInventoryEntitiesDurable(
+	entries: CrdInventoryEntity[],
+	redis: InventoryRedisClient | null | undefined,
+): Promise<{ added: number; counts: CrdInventoryCounts; redisCount: number | null }> {
+	const remembered = await rememberInventoryEntities(entries);
+	if (!remembered.added || !redis) {
+		return { ...remembered, redisCount: null };
+	}
+
+	let redisCount: number | null = null;
+	try {
+		const sidecarUnique = Number(remembered.counts.unique || 0);
+		const currentRaw = await redis.get(DASHBOARD_CACHED_CRD_COUNT_KEY).catch(() => null);
+		const current = Number(currentRaw ?? 0);
+		const base = Math.max(Number.isFinite(current) ? current : 0, Number.isFinite(sidecarUnique) ? sidecarUnique - remembered.added : 0);
+		if (!Number.isFinite(current) || current < base) {
+			await redis.set(DASHBOARD_CACHED_CRD_COUNT_KEY, base);
+		}
+		const next = await redis.incrby(DASHBOARD_CACHED_CRD_COUNT_KEY, remembered.added);
+		redisCount = Number(next ?? 0);
+		if (!Number.isFinite(redisCount)) redisCount = null;
+
+		for (const entry of entries) {
+			const id = Number(entry.id);
+			if (!Number.isFinite(id) || id <= 0) continue;
+			const kind = entry.kind === 'firm' ? 'firm' : 'individual';
+			await redis.zadd(`dashboard:highest-crds:${kind}`, { score: id, member: String(id) }).catch(() => null);
+		}
+		await redis.del('dashboard:new-crds-cache').catch(() => null);
+	} catch {
+		redisCount = null;
+	}
+
+	return { ...remembered, redisCount };
 }
 
 /** Full replace used by reconcile / offline rebuilds. Writes immediately. */

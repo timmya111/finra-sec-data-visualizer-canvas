@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { rememberInventoryEntitiesDurable, resetCrdInventoryModuleCache } from '@/lib/crdInventorySidecar';
 import {
 	buildGapCandidates,
 	buildNameQueryCandidates,
@@ -66,5 +67,50 @@ describe('externalValidityCron candidate discovery', () => {
 		const { candidates, nextCursor } = buildGapCandidates(5, new Set(['5', '4', '3']), 5, 3);
 		expect(candidates).toEqual([]);
 		expect(nextCursor).toBe(2);
+	});
+
+	it('rememberInventoryEntitiesDurable bumps Redis when new CRDs are added', async () => {
+		const prevPath = process.env.CRD_INVENTORY_PATH;
+		const prevVercel = process.env.VERCEL;
+		process.env.CRD_INVENTORY_PATH = `/tmp/crd-inventory-test-${Date.now()}.json.gz`;
+		process.env.VERCEL = '1'; // skip durable disk writes in the test isolate
+		resetCrdInventoryModuleCache();
+		try {
+			const calls: Array<{ op: string; args: unknown[] }> = [];
+			const redis = {
+				get: async (key: string) => {
+					calls.push({ op: 'get', args: [key] });
+					return '10';
+				},
+				set: async (key: string, value: string | number) => {
+					calls.push({ op: 'set', args: [key, value] });
+					return 'OK';
+				},
+				incrby: async (key: string, amount: number) => {
+					calls.push({ op: 'incrby', args: [key, amount] });
+					return 11;
+				},
+				del: async (key: string) => {
+					calls.push({ op: 'del', args: [key] });
+					return 1;
+				},
+				zadd: async (key: string, opts: { score: number; member: string }) => {
+					calls.push({ op: 'zadd', args: [key, opts] });
+					return 1;
+				},
+			};
+
+			const result = await rememberInventoryEntitiesDurable([{ kind: 'individual', id: 9990001 }], redis);
+			expect(result.added).toBe(1);
+			expect(result.redisCount).toBe(11);
+			expect(calls.some((c) => c.op === 'incrby' && c.args[1] === 1)).toBe(true);
+			expect(calls.some((c) => c.op === 'zadd' && String(c.args[0]).includes('individual'))).toBe(true);
+		} finally {
+			if (prevPath == null) delete process.env.CRD_INVENTORY_PATH;
+			else process.env.CRD_INVENTORY_PATH = prevPath;
+			if (prevVercel == null) delete process.env.VERCEL;
+			else process.env.VERCEL = prevVercel;
+			resetCrdInventoryModuleCache();
+		}
 	});
 });

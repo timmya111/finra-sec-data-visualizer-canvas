@@ -215,6 +215,7 @@ Vercel runs a **daily** cron (`0 10 * * *` UTC) against `/api/finra/external-val
 
 1. Probes sequential CRDs **above** the current high-water mark (new discoveries).
 2. Walks **backward through gaps only** (unknown CRD numbers), skipping known CRDs.
+3. When a live CRD is found, updates inventory via `rememberInventoryEntitiesDurable` (sidecar when writable + Redis `dashboard:cached-crd-count` / highest-CRD zsets).
 
 Search and roster reads stay local-first (gzip sidecars / Redis). The cron is the deliberate external FINRA/SEC discovery path; it does not re-validate known CRDs.
 

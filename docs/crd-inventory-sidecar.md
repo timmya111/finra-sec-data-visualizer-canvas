@@ -22,6 +22,7 @@ FINRA+SEC for the same `type:crd` collapse to one ID. Names live in search-index
 
 - Dashboard `fetch-crds` after a new coverage-valid entity is saved
 - Firm / individual detail routes when coverage is confirmed
+- Daily Vercel cron `/api/finra/external-validity` via `rememberInventoryEntitiesDurable` (in-memory/disk sidecar + Redis `dashboard:cached-crd-count` / `dashboard:highest-crds:*`). On Vercel the gzip file is not writable; Redis is the durable counter and wins when ahead of the shipped sidecar.
 - Rare full rebuild: `node .local/scripts/reconcile-cached-crd-count.mjs --apply` (or `--sidecar-only --apply`)
 - Also rebuilt at the end of `.local/scrape/sync_redis_details_to_raw.js --apply`
 

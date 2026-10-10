@@ -367,13 +367,19 @@ export function chooseDisplayInventoryTotals(redisTotals: InventoryTotals, prime
 	return resolveDashboardInventoryTotals(redisTotals, primedTotals, null);
 }
 
-/** Prefer the local gzip inventory census over drifted Redis counters / truncated crd-log. */
+/**
+ * Prefer the local gzip inventory census over drifted Redis counters / truncated crd-log.
+ * If Redis (or another live counter) is already ahead of the shipped gzip — e.g. cron
+ * discoveries on Vercel — keep the live totals so new CRDs are not hidden.
+ */
 export function applySidecarInventoryPreference(
 	totals: InventoryTotals,
 	sidecar: { people: number; firms: number; unique: number } | null | undefined,
 ): InventoryTotals {
 	const unique = Number(sidecar?.unique || 0);
 	if (!Number.isFinite(unique) || unique <= 0) return totals;
+	const liveUnique = Number(totals?.cachedCrdCount ?? totals?.unique ?? 0);
+	if (Number.isFinite(liveUnique) && liveUnique > unique) return totals;
 	return {
 		...totals,
 		people: Number(sidecar?.people || 0),
@@ -1477,18 +1483,15 @@ function ensureRedisClient() {
 const DASHBOARD_INVENTORY_COUNTER_KEY = 'dashboard:cached-crd-count';
 
 async function getInventoryCounterFromRedis() {
-	// Gzip inventory sidecar is the cheap source of truth for dashboard totals.
+	// Gzip inventory sidecar is the cheap baseline; Redis may be ahead after cron discoveries.
 	const sidecarUnique = hasCrdInventorySidecar() ? getCrdInventoryCounts().unique : 0;
-	if (sidecarUnique > 0) return sidecarUnique;
 
 	const redis = ensureRedisClient();
-	if (!redis) return 0;
+	if (!redis) return sidecarUnique > 0 ? sidecarUnique : 0;
 	const value = await redis.get(DASHBOARD_INVENTORY_COUNTER_KEY).catch(() => null);
-	let numericValue = Number(value ?? 0);
-	if (!Number.isFinite(numericValue) || numericValue === 0) {
-		return 0;
-	}
-	return numericValue;
+	const numericValue = Number(value ?? 0);
+	const redisUnique = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 0;
+	return Math.max(sidecarUnique, redisUnique);
 }
 
 function readSidecarInventoryTotals(): InventoryTotals | null {
