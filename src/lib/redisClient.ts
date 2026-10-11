@@ -1,6 +1,15 @@
 import { Redis as UpstashRedis } from '@upstash/redis';
 import IORedis from 'ioredis';
 import { isRedisCacheOnly, markRedisUnusable, noteRedisError } from '@/lib/redisAvailability';
+import {
+	DEFAULT_REDIS_SHARD,
+	extractRoutingKeys,
+	partitionKeysByShard,
+	readShardEnvConfig,
+	resolveRedisShard,
+	resolveShardForCommand,
+	type RedisShard,
+} from '@/lib/redisShard';
 
 let localIoRedis: IORedis | null = null;
 // Cache Upstash client instances to avoid recreating HTTP clients on every
@@ -132,6 +141,268 @@ async function executeLocalRequest(req: any): Promise<any> {
 	}
 }
 
+function getOrCreateUpstash(url: string, token: string): UpstashRedis {
+	const cacheKey = `${url}:${token}`;
+	const existing = upstashClientCache.get(cacheKey);
+	if (existing) return existing;
+	const client = new UpstashRedis({ url, token });
+	upstashClientCache.set(cacheKey, client);
+	return client;
+}
+
+function markShardUnusable(err: any, shard: RedisShard, dead: { individual: boolean; firm: boolean }) {
+	const msg = String(err?.message || '').toLowerCase();
+	const authDead =
+		msg.includes('wrongpass') ||
+		msg.includes('invalid or missing auth') ||
+		msg.includes('unauthorized') ||
+		msg.includes('forbidden') ||
+		msg.includes('401') ||
+		msg.includes('403');
+	const quotaDead =
+		msg.includes('max') ||
+		msg.includes('limit') ||
+		msg.includes('exceeded') ||
+		msg.includes('daily') ||
+		msg.includes('quota') ||
+		msg.includes('too many requests') ||
+		msg.includes('429');
+	if (!authDead && !quotaDead) return;
+	dead[shard] = true;
+	console.warn(`[Redis shard] ${shard} DB marked offline (${authDead ? 'auth' : 'quota'})`);
+	if (dead.individual && dead.firm) {
+		markRedisUnusable(authDead ? 'both Upstash shard DBs auth-failed' : 'both Upstash shard DBs maxxed');
+	}
+}
+
+async function splitMget(
+	clients: { individual: UpstashRedis; firm: UpstashRedis },
+	dead: { individual: boolean; firm: boolean },
+	keys: string[],
+): Promise<unknown[]> {
+	const { individual, firm } = partitionKeysByShard(keys);
+	const indIdx = new Map<string, number[]>();
+	const firmIdx = new Map<string, number[]>();
+	keys.forEach((key, i) => {
+		const map = resolveRedisShard(key) === 'individual' ? indIdx : firmIdx;
+		const list = map.get(key) || [];
+		list.push(i);
+		map.set(key, list);
+	});
+
+	const out: unknown[] = new Array(keys.length).fill(null);
+
+	const run = async (shard: RedisShard, shardKeys: string[]) => {
+		if (!shardKeys.length || dead[shard]) return;
+		const unique = [...new Set(shardKeys)];
+		try {
+			const values = await (clients[shard] as any).mget(...unique);
+			unique.forEach((key, i) => {
+				const val = Array.isArray(values) ? values[i] : null;
+				const positions = (shard === 'individual' ? indIdx : firmIdx).get(key) || [];
+				for (const pos of positions) out[pos] = val;
+			});
+		} catch (err: any) {
+			markShardUnusable(err, shard, dead);
+			noteRedisError(err, 'mget');
+		}
+	};
+
+	await Promise.all([run('individual', individual), run('firm', firm)]);
+	return out;
+}
+
+async function splitMset(
+	clients: { individual: UpstashRedis; firm: UpstashRedis },
+	dead: { individual: boolean; firm: boolean },
+	args: any[],
+): Promise<unknown> {
+	const first = args[0];
+	let entries: Array<[string, unknown]> = [];
+	if (first && typeof first === 'object' && !Array.isArray(first)) {
+		entries = Object.entries(first as Record<string, unknown>);
+	} else if (Array.isArray(first)) {
+		for (let i = 0; i < first.length; i += 2) entries.push([String(first[i]), first[i + 1]]);
+	} else {
+		for (let i = 0; i < args.length; i += 2) entries.push([String(args[i]), args[i + 1]]);
+	}
+
+	const indObj: Record<string, unknown> = {};
+	const firmObj: Record<string, unknown> = {};
+	for (const [k, v] of entries) {
+		if (resolveRedisShard(k) === 'individual') indObj[k] = v;
+		else firmObj[k] = v;
+	}
+
+	const ops: Promise<unknown>[] = [];
+	if (Object.keys(indObj).length && !dead.individual) {
+		ops.push(
+			(clients.individual as any)
+				.mset(indObj)
+				.catch((err: any) => {
+					markShardUnusable(err, 'individual', dead);
+					console.error('[Redis shard] mset individual error:', err?.message || err);
+					return undefined;
+				}),
+		);
+	}
+	if (Object.keys(firmObj).length && !dead.firm) {
+		ops.push(
+			(clients.firm as any)
+				.mset(firmObj)
+				.catch((err: any) => {
+					markShardUnusable(err, 'firm', dead);
+					console.error('[Redis shard] mset firm error:', err?.message || err);
+					return undefined;
+				}),
+		);
+	}
+	const results = await Promise.all(ops);
+	return results.find((r) => r !== undefined);
+}
+
+async function splitDelOrExists(
+	clients: { individual: UpstashRedis; firm: UpstashRedis },
+	dead: { individual: boolean; firm: boolean },
+	method: 'del' | 'exists',
+	keys: string[],
+): Promise<number> {
+	const { individual, firm } = partitionKeysByShard(keys);
+	let total = 0;
+	const run = async (shard: RedisShard, shardKeys: string[]) => {
+		if (!shardKeys.length || dead[shard]) return;
+		try {
+			const res = await (clients[shard] as any)[method](...shardKeys);
+			total += Number(res) || 0;
+		} catch (err: any) {
+			markShardUnusable(err, shard, dead);
+			noteRedisError(err, method);
+		}
+	};
+	await Promise.all([run('individual', individual), run('firm', firm)]);
+	return total;
+}
+
+/**
+ * Prefix-routed proxy: individuals DB + firms DB, single-write, no mirror failover.
+ */
+function createShardProxy(individualClient: UpstashRedis, firmClient: UpstashRedis): UpstashRedis {
+	const clients = { individual: individualClient, firm: firmClient };
+	const dead = { individual: false, firm: false };
+
+	const pick = (shard: RedisShard) => clients[shard];
+
+	const shardProxy = new Proxy(firmClient, {
+		get(target, prop) {
+			const val = (target as any)[prop];
+			if (typeof val !== 'function') return val;
+
+			return function (...args: any[]) {
+				const propStr = String(prop);
+
+				if (propStr === 'dbsize') {
+					return (async () => {
+						if (isRedisCacheOnly() || (dead.individual && dead.firm)) return 0;
+						const sizes = await Promise.all(
+							(['individual', 'firm'] as RedisShard[]).map(async (shard) => {
+								if (dead[shard]) return 0;
+								try {
+									return Number(await (clients[shard] as any).dbsize()) || 0;
+								} catch (err: any) {
+									markShardUnusable(err, shard, dead);
+									return 0;
+								}
+							}),
+						);
+						return sizes[0] + sizes[1];
+					})();
+				}
+
+				if (propStr === 'flushall' || propStr === 'flushdb') {
+					return (async () => {
+						if (isRedisCacheOnly()) return undefined;
+						await Promise.all(
+							(['individual', 'firm'] as RedisShard[]).map(async (shard) => {
+								if (dead[shard]) return;
+								try {
+									await (clients[shard] as any)[propStr]();
+								} catch (err: any) {
+									markShardUnusable(err, shard, dead);
+									console.error(`[Redis shard] ${propStr} ${shard} error:`, err?.message || err);
+								}
+							}),
+						);
+						return 'OK';
+					})();
+				}
+
+				if (propStr === 'mget') {
+					return (async () => {
+						if (isRedisCacheOnly() || (dead.individual && dead.firm)) return emptyReadResult('mget');
+						const keys = extractRoutingKeys('mget', args);
+						return splitMget(clients, dead, keys);
+					})();
+				}
+
+				if (propStr === 'mset') {
+					return (async () => {
+						if (isRedisCacheOnly()) return undefined;
+						return splitMset(clients, dead, args);
+					})();
+				}
+
+				if (propStr === 'del' || propStr === 'exists') {
+					return (async () => {
+						if (isRedisCacheOnly()) {
+							return propStr === 'exists' ? 0 : undefined;
+						}
+						const keys = extractRoutingKeys(propStr, args);
+						const parts = partitionKeysByShard(keys);
+						if (parts.individual.length && parts.firm.length) {
+							return splitDelOrExists(clients, dead, propStr as 'del' | 'exists', keys);
+						}
+						const shard = resolveShardForCommand(propStr, args);
+						if (dead[shard]) return propStr === 'exists' ? 0 : 0;
+						try {
+							return await (pick(shard) as any)[propStr](...args);
+						} catch (err: any) {
+							markShardUnusable(err, shard, dead);
+							noteRedisError(err, propStr);
+							return propStr === 'exists' ? 0 : 0;
+						}
+					})();
+				}
+
+				if (READ_METHODS.has(propStr) || WRITE_METHODS.has(propStr)) {
+					return (async () => {
+						if (isRedisCacheOnly()) {
+							if (WRITE_METHODS.has(propStr)) return undefined;
+							return emptyReadResult(propStr);
+						}
+						const shard = resolveShardForCommand(propStr, args);
+						if (dead[shard]) {
+							return WRITE_METHODS.has(propStr) ? undefined : emptyReadResult(propStr);
+						}
+						try {
+							return await (pick(shard) as any)[propStr](...args);
+						} catch (err: any) {
+							markShardUnusable(err, shard, dead);
+							noteRedisError(err, propStr);
+							if (WRITE_METHODS.has(propStr)) return undefined;
+							return emptyReadResult(propStr);
+						}
+					})();
+				}
+
+				// pipeline / other: prefer firms DB (shared default)
+				const shard = DEFAULT_REDIS_SHARD;
+				return (pick(dead[shard] ? 'individual' : shard) as any)[propStr](...args);
+			};
+		},
+	}) as UpstashRedis;
+
+	return shardProxy;
+}
 
 export function getRedisClientInstance(config: { url: string; token: string }) {
 	const isLocalhost = process.env.USE_LOCAL_REDIS === '1';
@@ -144,177 +415,38 @@ export function getRedisClientInstance(config: { url: string; token: string }) {
 		);
 	}
 
-	const url1 = process.env.UPSTASH_REDIS_REST_URL;
-	const token1 = process.env.UPSTASH_REDIS_REST_TOKEN;
-	// prefer the MIRROR env var but fall back to legacy _2 env names for compatibility
-	const url2 = process.env.UPSTASH_REDIS_REST_URL_MIRROR || process.env.UPSTASH_REDIS_REST_URL_2;
-	const token2 = process.env.UPSTASH_REDIS_REST_TOKEN_MIRROR || process.env.UPSTASH_REDIS_REST_TOKEN_2 || process.env.UPSTASH_REDIS_REST_TOKEN__2;
+	const shards = readShardEnvConfig();
+	const disableFirm =
+		process.env.UPSTASH_REDIS_DISABLE_MIRROR === '1' ||
+		process.env.UPSTASH_REDIS_DISABLE_2 === '1' ||
+		process.env.UPSTASH_REDIS_DISABLE_FIRM === '1';
 
-	const hasDb1 = !!(url1 && token1);
-	const hasDb2 = !!(url2 && token2);
-	const disableDb2 = process.env.UPSTASH_REDIS_DISABLE_MIRROR === '1' || process.env.UPSTASH_REDIS_DISABLE_2 === '1';
+	if (shards.individual && shards.firm && !disableFirm) {
+		const cacheKey = `shard:${shards.individual.url}:${shards.individual.token}:${shards.firm.url}:${shards.firm.token}:co`;
+		const existing = upstashClientCache.get(cacheKey);
+		if (existing) return existing;
 
-	// If DB2 is explicitly disabled via env, prefer DB1 when available and avoid the dual-proxy.
-	if (hasDb1 && hasDb2 && !disableDb2) {
-		const dualCacheKey = `dual:${url1}:${token1}:${url2}:${token2}:co`;
-		const existingProxy = upstashClientCache.get(dualCacheKey);
-		if (existingProxy) return existingProxy;
-
-		const cacheKey1 = `${url1}:${token1}`;
-		const cacheKey2 = `${url2}:${token2}`;
-		const client1 = upstashClientCache.get(cacheKey1) ?? new UpstashRedis({ url: url1, token: token1 });
-		const client2 = upstashClientCache.get(cacheKey2) ?? new UpstashRedis({ url: url2, token: token2 });
-		upstashClientCache.set(cacheKey1, client1);
-		upstashClientCache.set(cacheKey2, client2);
-
-		let db1Maxxed = false;
-		let db2Maxxed = false;
-
-		const checkMaxxed = (err: any, dbIndex: 1 | 2) => {
-			const msg = String(err?.message || '').toLowerCase();
-			// Treat auth failures like a dead DB for this process so we stop retrying a bad
-			// token on every request (prod WRONGPASS on DB1 was doubling latency).
-			const authDead =
-				msg.includes('wrongpass') ||
-				msg.includes('invalid or missing auth') ||
-				msg.includes('unauthorized') ||
-				msg.includes('forbidden') ||
-				msg.includes('401') ||
-				msg.includes('403');
-			const quotaDead =
-				msg.includes('max') ||
-				msg.includes('limit') ||
-				msg.includes('exceeded') ||
-				msg.includes('daily') ||
-				msg.includes('quota') ||
-				msg.includes('too many requests') ||
-				msg.includes('429');
-			if (!authDead && !quotaDead) return;
-			if (dbIndex === 1) db1Maxxed = true;
-			else db2Maxxed = true;
-			console.warn(`[Redis LB] DB${dbIndex} marked offline (${authDead ? 'auth' : 'quota'})!`);
-			// Only flip global cache-only when BOTH DBs are unusable — a single bad
-			// credential / quota must not disable the healthy mirror.
-			if (db1Maxxed && db2Maxxed) {
-				markRedisUnusable(authDead ? 'both Upstash DBs auth-failed' : 'both Upstash DBs maxxed');
-			}
-		};
-
-		const dualProxy = new Proxy(client2, {
-			get(target, prop) {
-				const val = (target as any)[prop];
-				if (typeof val === 'function') {
-					return function (...args: any[]) {
-						const propStr = prop as string;
-						if (READ_METHODS.has(propStr)) {
-							return (async () => {
-								if (isRedisCacheOnly() || (db1Maxxed && db2Maxxed)) {
-									return emptyReadResult(propStr);
-								}
-
-								let primary = client2;
-								let secondary = client1;
-								let primaryIndex: 1 | 2 = 2;
-								let secondaryIndex: 1 | 2 = 1;
-
-								if (!db1Maxxed && (db2Maxxed || Math.random() < 0.5)) {
-									primary = client1;
-									secondary = client2;
-									primaryIndex = 1;
-									secondaryIndex = 2;
-								}
-
-								try {
-									let res = await (primary as any)[propStr](...args);
-
-									// Fallback if null (helpful during partial migrations), only if other DB is healthy
-									let needsFallback = res === null || res === undefined;
-									if (Array.isArray(res) && res.length > 0 && res.some((item) => item === null || item === undefined)) {
-										needsFallback = true;
-									}
-
-									if (needsFallback && !db1Maxxed && !db2Maxxed) {
-										res = await (secondary as any)[propStr](...args);
-									}
-									return res;
-								} catch (err: any) {
-									checkMaxxed(err, primaryIndex);
-									if (db1Maxxed && db2Maxxed) {
-										return emptyReadResult(propStr);
-									}
-									console.warn(`[Redis LB] Error on DB${primaryIndex} for ${propStr}, falling back to DB${secondaryIndex}... (${err.message})`);
-									try {
-										return await (secondary as any)[propStr](...args);
-									} catch (err2: any) {
-										checkMaxxed(err2, secondaryIndex);
-										return emptyReadResult(propStr);
-									}
-								}
-							})();
-						} else if (WRITE_METHODS.has(propStr)) {
-							return (async () => {
-								if (isRedisCacheOnly()) return undefined;
-								// Perform writes to both DBs concurrently. Await both fully before
-								// returning so Serverless/Edge does not drop the second write.
-								const wrapped = (p: Promise<any>, dbIndex: 1 | 2) =>
-									p
-										.then((res) => ({ ok: true, res, dbIndex }))
-										.catch((e: any) => {
-											checkMaxxed(e, dbIndex);
-											console.error(`[Redis LB] Write error DB${dbIndex}:`, e?.message || e);
-											return { ok: false, err: e, dbIndex };
-										});
-
-								const promises: Array<Promise<any>> = [];
-								if (!db1Maxxed) promises.push(wrapped((client1 as any)[propStr](...args), 1));
-								else promises.push(Promise.resolve({ ok: false, dbIndex: 1 }));
-
-								if (!db2Maxxed) promises.push(wrapped((client2 as any)[propStr](...args), 2));
-								else promises.push(Promise.resolve({ ok: false, dbIndex: 2 }));
-
-								try {
-									const all = await Promise.all(promises);
-									let successRes = undefined;
-									for (const a of all) {
-										if (a && a.ok) successRes = a.res;
-									}
-									return successRes;
-								} catch {
-									const settled = await Promise.allSettled(promises);
-									for (const s of settled) {
-										if ((s as any).status === 'fulfilled' && (s as any).value && (s as any).value.ok) return (s as any).value.res;
-									}
-									return undefined;
-								}
-							})();
-						}
-						// Direct passthrough for other methods (like pipeline)
-						return (db1Maxxed ? client2 : (client1 as any))[propStr](...args);
-					};
-				}
-				return val;
-			},
-		}) as UpstashRedis;
-
-		const wrappedProxy = wrapClientForCacheOnly(dualProxy);
-		upstashClientCache.set(dualCacheKey, wrappedProxy);
-		return wrappedProxy;
+		const individualClient = getOrCreateUpstash(shards.individual.url, shards.individual.token);
+		const firmClient = getOrCreateUpstash(shards.firm.url, shards.firm.token);
+		const wrapped = wrapClientForCacheOnly(createShardProxy(individualClient, firmClient));
+		upstashClientCache.set(cacheKey, wrapped);
+		return wrapped;
 	}
 
-	// Single-instance behavior. Prefer DB1 when present; otherwise use DB2 or the provided config.
-	if (hasDb1) {
-		const cacheKey = `${url1}:${token1}:co`;
+	// Single-shard fallbacks
+	if (shards.individual) {
+		const cacheKey = `${shards.individual.url}:${shards.individual.token}:co`;
 		const c =
 			upstashClientCache.get(cacheKey) ??
-			wrapClientForCacheOnly(new UpstashRedis({ url: url1, token: token1 }));
+			wrapClientForCacheOnly(getOrCreateUpstash(shards.individual.url, shards.individual.token));
 		upstashClientCache.set(cacheKey, c);
 		return c;
 	}
-	if (hasDb2) {
-		const cacheKey = `${url2}:${token2}:co`;
+	if (shards.firm) {
+		const cacheKey = `${shards.firm.url}:${shards.firm.token}:co`;
 		const c =
 			upstashClientCache.get(cacheKey) ??
-			wrapClientForCacheOnly(new UpstashRedis({ url: url2, token: token2 }));
+			wrapClientForCacheOnly(getOrCreateUpstash(shards.firm.url, shards.firm.token));
 		upstashClientCache.set(cacheKey, c);
 		return c;
 	}
@@ -328,83 +460,76 @@ export function getRedisClientInstance(config: { url: string; token: string }) {
 }
 
 /**
- * Return a read-only Upstash client (or proxied client) that will only execute
- * read methods against DB1/DB2. Writes will be rejected to ensure the caller
- * cannot modify state. This is intended for applications that should only
- * read from the cache (e.g., analytics or reporting services).
+ * Read-only client with the same firm/individual shard routing. Writes reject.
  */
 export function getReadOnlyRedisClientInstance(config?: { url?: string; token?: string }) {
 	const isLocalhost = process.env.USE_LOCAL_REDIS === '1';
 	if (isLocalhost) {
-		// Local proxy still supports read-only usage via the normal Upstash wrapper
 		return new UpstashRedis({ request: executeLocalRequest } as any);
 	}
 
-	const url1 = process.env.UPSTASH_REDIS_REST_URL || config?.url;
-	const token1 = process.env.UPSTASH_REDIS_REST_TOKEN;
-	const url2 = process.env.UPSTASH_REDIS_REST_URL_MIRROR || process.env.UPSTASH_REDIS_REST_URL_2 || config?.url;
-	const token2 = process.env.UPSTASH_REDIS_REST_TOKEN_MIRROR || process.env.UPSTASH_REDIS_REST_TOKEN_2 || process.env.UPSTASH_REDIS_REST_TOKEN__2;
+	const shards = readShardEnvConfig();
+	const disableFirm =
+		process.env.UPSTASH_REDIS_DISABLE_MIRROR === '1' ||
+		process.env.UPSTASH_REDIS_DISABLE_2 === '1' ||
+		process.env.UPSTASH_REDIS_DISABLE_FIRM === '1';
 
-	const hasDb1 = !!(url1 && token1);
-	const hasDb2 = !!(url2 && token2);
-	const disableDb2 = process.env.UPSTASH_REDIS_DISABLE_MIRROR === '1' || process.env.UPSTASH_REDIS_DISABLE_2 === '1';
+	const readMethods = new Set([
+		'get',
+		'mget',
+		'scan',
+		'zrange',
+		'smembers',
+		'hgetall',
+		'exists',
+		'dbsize',
+		'type',
+		'keys',
+		'hget',
+		'zrevrange',
+		'zscore',
+		'zrank',
+		'zincrby',
+		'lrange',
+	]);
 
-	const readMethods = new Set(['get', 'mget', 'scan', 'zrange', 'smembers', 'hgetall', 'exists', 'dbsize', 'type', 'keys', 'hget', 'zrevrange', 'zscore', 'zrank', 'zincrby']);
-
-	const checkMaxxed = (err: any, dbIndex: 1 | 2) => {
-		const msg = String(err?.message || '').toLowerCase();
-		if (msg.includes('max') || msg.includes('limit') || msg.includes('exceeded') || msg.includes('daily')) {
-			// noop for read-only: log only
-			console.warn(`[Redis RO] DB${dbIndex} marked as maxxed out (read)!`);
-		}
-	};
-
-	if (hasDb1 && hasDb2 && !disableDb2) {
-		const client1 = new UpstashRedis({ url: url1, token: token1 });
-		const client2 = new UpstashRedis({ url: url2, token: token2 });
-
-		return new Proxy(client2, {
+	if (shards.individual && shards.firm && !disableFirm) {
+		const proxy = createShardProxy(
+			getOrCreateUpstash(shards.individual.url, shards.individual.token),
+			getOrCreateUpstash(shards.firm.url, shards.firm.token),
+		);
+		return new Proxy(proxy, {
 			get(target, prop) {
 				const val = (target as any)[prop];
-				if (typeof val === 'function') {
-					return function (...args: any[]) {
-						const propStr = prop as string;
-						if (!readMethods.has(propStr)) {
-							return Promise.reject(new Error('Redis client is read-only: write methods are not allowed'));
-						}
-						return (async () => {
-							// choose between DB1/DB2 for reads (same strategy as main client)
-							let primary = client2;
-							let secondary = client1;
-							if (Math.random() < 0.5) {
-								primary = client1;
-								secondary = client2;
-							}
-							try {
-								let res = await (primary as any)[propStr](...args);
-								if (res === null || res === undefined) {
-									res = await (secondary as any)[propStr](...args);
-								}
-								return res;
-							} catch (err: any) {
-								checkMaxxed(err, 1);
-								try {
-									return await (secondary as any)[propStr](...args);
-								} catch (err2: any) {
-									checkMaxxed(err2, 2);
-									return null;
-								}
-							}
-						})();
-					};
-				}
-				return val;
+				if (typeof val !== 'function') return val;
+				return function (...args: any[]) {
+					const propStr = String(prop);
+					if (!readMethods.has(propStr)) {
+						return Promise.reject(new Error('Redis client is read-only: write methods are not allowed'));
+					}
+					return (proxy as any)[propStr](...args);
+				};
 			},
 		});
 	}
 
-	if (hasDb1) return new UpstashRedis({ url: url1, token: token1 });
-	if (hasDb2) return new UpstashRedis({ url: url2, token: token2 });
+	if (shards.individual) return getOrCreateUpstash(shards.individual.url, shards.individual.token);
+	if (shards.firm) return getOrCreateUpstash(shards.firm.url, shards.firm.token);
 
 	return new UpstashRedis({ url: config?.url || '', token: config?.token || '' });
+}
+
+/** Direct shard clients for migration scripts (no proxy). */
+export function getShardRedisClients(): { individual: UpstashRedis | null; firm: UpstashRedis | null } {
+	if (process.env.USE_LOCAL_REDIS === '1') {
+		const local = new UpstashRedis({ request: executeLocalRequest } as any);
+		return { individual: local, firm: local };
+	}
+	const shards = readShardEnvConfig();
+	return {
+		individual: shards.individual
+			? getOrCreateUpstash(shards.individual.url, shards.individual.token)
+			: null,
+		firm: shards.firm ? getOrCreateUpstash(shards.firm.url, shards.firm.token) : null,
+	};
 }

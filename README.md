@@ -195,7 +195,7 @@ If you want full E2E visual/functional coverage, run the Playwright suite inside
 
 Before deploying, ensure you:
 
-- Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in your environment if you want shared Redis caching.
+- Production Redis is firm/individual sharded: `UPSTASH_REDIS_REST_URL` (individuals) + `UPSTASH_REDIS_REST_URL_MIRROR` (firms). Localhost uses a single Redis via `USE_LOCAL_REDIS=1`.
 - Warm the primed cache bundle if you rely on deployment-time hydration: `node .local/scripts/build_primed_cache_bundle.js` (run automatically in `pnpm build`).
 - Increase Node heap if building very large graphs:
 

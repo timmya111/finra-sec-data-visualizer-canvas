@@ -5,7 +5,7 @@ Applies to: data crawler scripts, API cache helpers, build pipelines, and any co
 Summary
 
 - **Updated policy (supersedes the original "Upstash-only" rule below)**: When running on `localhost`, this app always works against the **local Redis instance** (`redis://127.0.0.1:6379`, `USE_LOCAL_REDIS=1` in `.env.local`) as the primary read/write target. Local Redis reads are also used to compare against cloud data. Deploying/pushing updates from local to the two Upstash cloud databases (production) is a deliberate, user-directed action — never an automatic side effect of local development or routine agent tasks.
-- There are **two Upstash cloud Redis databases** kept in sync as mirrors of each other (see "Dual cloud DB" section below). Both must be kept reconciled with each other and with local Redis's canonical dataset.
+- There are **two Upstash cloud Redis databases** sharded by entity type (see "Firm/individual cloud shards" below): individuals on DB1 (`UPSTASH_REDIS_REST_URL`), firms on DB2 (`UPSTASH_REDIS_REST_URL_MIRROR`). They are **not** mirrors — do not dual-write the same key to both.
 - When a task or script needs to "check for new CRDs" or look for updated CRDs, it MUST search for the highest CRD numbers first and proceed descending. This preference applies to both discovering new CRDs and detecting updates to existing CRDs.
 
 ## Local-first policy (current)
@@ -14,19 +14,25 @@ Summary
 - Local Redis reads are safe at any time for comparing/validating against cloud data (read-only diagnostics).
 - Only push local → cloud (or flush/replace cloud data) when the user explicitly asks for a deploy/sync/migration step. Always confirm before any destructive operation (`FLUSHALL`, bulk overwrite) on a cloud DB.
 
-## Dual cloud DB reconciliation (two Upstash databases)
+## Firm/individual cloud shards (two Upstash databases)
 
-This app (and the sibling `dashboard-crds` app — see cross-app note below) writes to **two separate Upstash Redis databases** treated as mirrors:
-- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` — primary (DB1)
-- `UPSTASH_REDIS_REST_URL_MIRROR` / `UPSTASH_REDIS_REST_TOKEN_MIRROR` — mirror (DB2)
+This app (and the sibling `dashboard-crds` app — see cross-app note below) uses **two separate Upstash Redis databases** sharded by entity type — **not mirrors**:
+- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` — **individuals** shard (aliases: `UPSTASH_REDIS_INDIVIDUAL_*`)
+- `UPSTASH_REDIS_REST_URL_MIRROR` / `UPSTASH_REDIS_REST_TOKEN_MIRROR` — **firms** shard (aliases: `UPSTASH_REDIS_FIRM_*`)
 
-These two databases can silently drift apart over time (e.g. a dual-write path fails on one side, or a serverless read auto-caches into only one DB). When reconciling:
-- Never assume one side is authoritative by default — compare key sets (`SCAN`) across local, DB1, and DB2 first.
-- **Merge, don't overwrite blindly.** Keys present only on one cloud DB (e.g. freshly fetched `finra:firm:<CRD>`, `firm-connections:firm:<CRD>` rosters) are real data, not garbage — pull them into local and the other cloud DB rather than deleting them. Never do that merge unless the user asked for a Redis sync.
-- Keys present only in local (e.g. manually-added `non-live-crds:*` keys) should be pushed to both cloud DBs so all three stay consistent. Legacy `owner-ref:*` is retired — delete it; do not sync or rewrite it.
-- **Batching and performance**: When explicitly pushing local Redis keys to production Upstash servers (e.g., via `push_all_to_prod.mjs` or similar syncs), group keys into chunks of ~100 and use `MSET` (multiple set) over the REST API instead of individual `SET` commands. This dramatically reduces the number of API calls, speeds up the sync, and minimizes Upstash command charges.
-- After reconciliation, verify with an exact key-count match across all three stores (local, DB1, DB2) plus spot-checks of specific keys (byte-for-byte value comparison, not just presence).
-- Chunk large single-command payloads (e.g. big hash `HSET`s with thousands of fields) into sub-batches of ~500 fields before writing to Upstash — a single oversized command can exceed Upstash's 10MB REST request-size limit even with pipeline-level batching.
+Routing (`src/lib/redisShard.ts`):
+- **Individuals DB:** `finra:individual:*`, `sec:individual:*`, `non-live-crds:individual:*`, `dashboard:highest-crds:individual`, `finra:selection-refresh:checked:individual:*`
+- **Firms DB:** `finra:firm:*`, `sec:firm:*`, `firm-connections:*`, `non-live-crds:firm:*`, `dashboard:highest-crds:firm`, `finra:selection-refresh:checked:firm:*`, broker-id `*_brokers:*` keys, plus shared control keys (`dashboard:cached-crd-count`, selection-refresh backoff, cron cursors)
+- FINRA + SEC for the **same** entity type stay on the **same** shard (detail merges stay single-DB)
+- Runtime writes go to **one** shard only — never dual-write the same key
+- Localhost (`USE_LOCAL_REDIS=1`) remains a single Redis holding both namespaces
+
+When syncing local → cloud (only when the user explicitly asks):
+- Route each key to its shard via `push_delta_to_prod.mjs` (shard-aware). Do not MSET the same payload to both DBs.
+- **Batching**: chunks of ~50–100 with `MSET`; sleep between batches to respect Upstash quotas.
+- After a purge+reseed, verify individuals keys exist only on the individuals DB and firm keys only on the firms DB (spot-check `EXISTS`, not mirror equality).
+- Chunk large single-command payloads (e.g. big hash `HSET`s) into sub-batches of ~500 fields — Upstash REST has a ~10MB request limit.
+- Legacy `owner-ref:*` is retired — delete it; do not sync or rewrite it.
 
 1. Upstash-only Redis (legacy rule — production/CI paths only)
    - Production (Vercel) and CI data-sync flows must use Upstash REST endpoints only — this still applies to the deployed app itself, which has no access to the developer's local Redis.
@@ -84,7 +90,7 @@ Notes
 
 ## Cross-app note: shared Redis with `dashboard-crds`
 
-The sibling app at `../dashboard-crds` reads and writes the **exact same local Redis instance** (`redis://127.0.0.1:6379`) and the **exact same two Upstash cloud databases** (same `UPSTASH_REDIS_REST_URL`/`_MIRROR` credentials) as this repo. Any local-Redis-first policy change, cloud DB reconciliation, or new/removed key pattern documented here also applies to and affects that app. See `../dashboard-crds/GEMINI.md` for that app's own Redis/cache documentation, which should be kept in sync with this file when shared conventions change.
+The sibling app at `../dashboard-crds` reads and writes the **exact same local Redis instance** (`redis://127.0.0.1:6379`) and the **exact same two Upstash cloud databases** (same `UPSTASH_REDIS_REST_URL`/`_MIRROR` credentials) as this repo. After the firm/individual shard split, that sibling must route keys the same way (individuals on REST_URL, firms on MIRROR) — do not keep treating the pair as mirrors. See `../dashboard-crds/GEMINI.md` for that app's own Redis/cache documentation, which should be kept in sync with this file when shared conventions change.
 
 Contact
 

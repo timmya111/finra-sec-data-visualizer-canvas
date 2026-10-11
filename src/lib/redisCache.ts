@@ -10,9 +10,10 @@ let client: Redis | null = null;
 export function getRedisClient(): Redis | null {
 	if (isRedisCacheOnly()) return null;
 	if (client) return client;
-	// prefer MIRROR env var but allow legacy _2 names
-	const url = process.env.UPSTASH_REDIS_REST_URL_MIRROR || process.env.UPSTASH_REDIS_REST_URL_2 || process.env.UPSTASH_REDIS_REST_URL;
-	const token = process.env.UPSTASH_REDIS_REST_TOKEN_MIRROR || process.env.UPSTASH_REDIS_REST_TOKEN_2 || process.env.UPSTASH_REDIS_REST_TOKEN;
+	// Seed config for getRedisClientInstance; when both shard envs exist the client
+	// routes by key (individuals = REST_URL, firms = MIRROR / FIRM_*).
+	const url = process.env.UPSTASH_REDIS_REST_URL || process.env.UPSTASH_REDIS_INDIVIDUAL_URL || '';
+	const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.UPSTASH_REDIS_INDIVIDUAL_TOKEN || '';
 	if (!url || !token) return null;
 	client = getRedisClientInstance({ url, token });
 	return client;
