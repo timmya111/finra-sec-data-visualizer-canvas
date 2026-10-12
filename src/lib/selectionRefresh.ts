@@ -151,31 +151,66 @@ async function fetchLivePayload(source: 'finra' | 'sec', kind: SelectionRefreshK
 	return { payload, status: res.status };
 }
 
-function extractDetail(kind: SelectionRefreshKind, finra: unknown, sec: unknown): Record<string, unknown> | null {
-	const pick = (payload: unknown, contentKey: string) => {
-		if (!payload || typeof payload !== 'object') return null;
-		const hits = (payload as any)?.hits?.hits;
-		if (Array.isArray(hits) && hits[0]?._source) {
-			const source = hits[0]._source;
-			const raw = source?.[contentKey] ?? source?.content ?? source?.iacontent;
-			if (typeof raw === 'string') {
-				try {
-					return JSON.parse(raw);
-				} catch {
-					return null;
-				}
+function pickSourceDetail(payload: unknown, contentKey: string): Record<string, unknown> | null {
+	if (!payload || typeof payload !== 'object') return null;
+	const hits = (payload as any)?.hits?.hits;
+	if (Array.isArray(hits) && hits[0]?._source) {
+		const source = hits[0]._source;
+		const raw = source?.[contentKey] ?? source?.content ?? source?.iacontent;
+		if (typeof raw === 'string') {
+			try {
+				const parsed = JSON.parse(raw);
+				return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+			} catch {
+				return null;
 			}
-			if (raw && typeof raw === 'object') return raw;
-			return source;
 		}
-		return payload as Record<string, unknown>;
-	};
+		if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+		return source as Record<string, unknown>;
+	}
+	return payload as Record<string, unknown>;
+}
 
-	const finraDetail = pick(finra, kind === 'individual' ? 'content' : 'content');
-	const secDetail = pick(sec, kind === 'individual' ? 'iacontent' : 'content');
+function mergeUniqueEmploymentArrays(primary: unknown, secondary: unknown): unknown[] {
+	const a = Array.isArray(primary) ? primary : [];
+	const b = Array.isArray(secondary) ? secondary : [];
+	if (!a.length) return b.slice();
+	if (!b.length) return a.slice();
+	const seen = new Set<string>();
+	const out: unknown[] = [];
+	for (const entry of [...a, ...b]) {
+		const rec = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+		const firmId = String(rec?.firmId ?? rec?.firm_id ?? '').trim();
+		const firmName = String(rec?.firmName ?? rec?.firm_name ?? '').trim().toLowerCase();
+		const start = String(rec?.registrationBeginDate ?? rec?.startDate ?? rec?.start ?? '').trim();
+		const end = String(rec?.registrationEndDate ?? rec?.endDate ?? rec?.end ?? '').trim();
+		const key = `${firmId}|${firmName}|${start}|${end}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(entry);
+	}
+	return out;
+}
+
+/** Merge FINRA + SEC details without letting empty FINRA IA arrays wipe SEC history. */
+export function extractDetail(kind: SelectionRefreshKind, finra: unknown, sec: unknown): Record<string, unknown> | null {
+	const finraDetail = pickSourceDetail(finra, 'content');
+	const secDetail = pickSourceDetail(sec, kind === 'individual' ? 'iacontent' : 'content');
 	if (!finraDetail && !secDetail) return null;
-	if (finraDetail && secDetail && typeof finraDetail === 'object' && typeof secDetail === 'object') {
-		return { ...(secDetail as object), ...(finraDetail as object), hasFinraData: true, hasSecData: true };
+	if (finraDetail && secDetail) {
+		const merged: Record<string, unknown> = { ...secDetail, ...finraDetail };
+		if (kind === 'individual') {
+			merged.currentEmployments = mergeUniqueEmploymentArrays(finraDetail.currentEmployments, secDetail.currentEmployments);
+			merged.previousEmployments = mergeUniqueEmploymentArrays(finraDetail.previousEmployments, secDetail.previousEmployments);
+			// Prefer SEC IA arrays; keep FINRA IA rows if present.
+			merged.currentIAEmployments = mergeUniqueEmploymentArrays(secDetail.currentIAEmployments, finraDetail.currentIAEmployments);
+			merged.previousIAEmployments = mergeUniqueEmploymentArrays(secDetail.previousIAEmployments, finraDetail.previousIAEmployments);
+			merged.disclosures = mergeUniqueEmploymentArrays(finraDetail.disclosures, secDetail.disclosures);
+			merged.iaDisclosures = mergeUniqueEmploymentArrays(secDetail.iaDisclosures, finraDetail.iaDisclosures);
+		}
+		merged.hasFinraData = true;
+		merged.hasSecData = true;
+		return merged;
 	}
 	const only = (finraDetail || secDetail) as Record<string, unknown>;
 	return {
@@ -241,21 +276,30 @@ export async function runSelectionRefresh(
 		};
 	}
 
-	const cooldownKey = checkedKey(kind, id);
-	try {
-		const already = await redis.get(cooldownKey).catch(() => null);
-		if (already) {
-			return { ok: true, skipped: 'cooldown', kind, id };
-		}
-	} catch {
-		/* ignore */
-	}
-
 	const finraKey = makeRedisKey('finra', kind, id);
 	const secKey = makeRedisKey('sec', kind, id);
 	const [finraCachedRaw, secCachedRaw] = await Promise.all([redis.get(finraKey).catch(() => null), redis.get(secKey).catch(() => null)]);
 	const finraCached = decodeRedisValue(finraCachedRaw);
 	const secCached = decodeRedisValue(secCachedRaw);
+
+	const cooldownKey = checkedKey(kind, id);
+	try {
+		const already = await redis.get(cooldownKey).catch(() => null);
+		if (already) {
+			// Still return Redis-merged detail so the sidebar can hydrate without another external hit.
+			return {
+				ok: true,
+				skipped: 'cooldown',
+				kind,
+				id,
+				unchanged: true,
+				detail: extractDetail(kind, finraCached, secCached),
+				sources: { finraUpdated: false, secUpdated: false },
+			};
+		}
+	} catch {
+		/* ignore */
+	}
 
 	let finraLive: unknown = null;
 	let secLive: unknown = null;

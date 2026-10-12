@@ -175,7 +175,9 @@ export function scheduleSelectionExternalRefresh(options: {
 				setSelectionRefreshClientBackoffUntil(Number(result.resumeAt));
 				return;
 			}
-			if (!result.updated || !result.detail) return;
+			// Apply whenever detail is present — including cooldown Redis hydrates and
+			// unchanged external checks — so SEC/FINRA merge fixes reach the sidebar.
+			if (!result.detail) return;
 
 			const stillSelected = options.getSelectedId?.();
 			if (stillSelected != null && String(stillSelected) !== selectedNodeId) return;

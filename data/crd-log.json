@@ -1,6 +1,54 @@
 {
   "firms": [
     {
+      "id": 119241,
+      "name": "HERITAGE ADVISORY SERVICES, INC."
+    },
+    {
+      "id": 7691,
+      "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
+    },
+    {
+      "id": 7471,
+      "name": "PRUDENTIAL-BACHE SECURITIES INC."
+    },
+    {
+      "id": 5249,
+      "name": "MANEQUITY, INC."
+    },
+    {
+      "id": 8174,
+      "name": "UBS PAINEWEBBER INC."
+    },
+    {
+      "id": 6321,
+      "name": "IDS LIFE INSURANCE COMPANY"
+    },
+    {
+      "id": 18272,
+      "name": "ALLSTATE FINANCIAL SERVICES, LLC"
+    },
+    {
+      "id": 6363,
+      "name": "AMERIPRISE FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 45915,
+      "name": "SUMMITALLIANCE SECURITIES, L.L.C."
+    },
+    {
+      "id": 133019,
+      "name": "HERITAGE FINANCIAL SYSTEMS, INC."
+    },
+    {
+      "id": 11469,
+      "name": "WESTMORELAND CAPITAL CORPORATION"
+    },
+    {
+      "id": 103863,
+      "name": "FARMERS FINANCIAL SOLUTIONS, LLC"
+    },
+    {
       "id": 13572,
       "name": "CETERA ADVISOR NETWORKS LLC"
     },
@@ -37,10 +85,6 @@
       "name": "AMERICAN ENTERPRISE INVESTMENT SERVICES INC."
     },
     {
-      "id": 6363,
-      "name": "AMERIPRISE FINANCIAL SERVICES, LLC"
-    },
-    {
       "id": 840,
       "name": "COLUMBIA MANAGEMENT INVESTMENT DISTRIBUTORS, INC."
     },
@@ -71,50 +115,6 @@
     {
       "id": 16986,
       "name": "THE HUNTINGTON INVESTMENT COMPANY"
-    },
-    {
-      "id": 7691,
-      "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
-    },
-    {
-      "id": 119241,
-      "name": "HERITAGE ADVISORY SERVICES, INC."
-    },
-    {
-      "id": 7471,
-      "name": "PRUDENTIAL-BACHE SECURITIES INC."
-    },
-    {
-      "id": 5249,
-      "name": "MANEQUITY, INC."
-    },
-    {
-      "id": 8174,
-      "name": "UBS PAINEWEBBER INC."
-    },
-    {
-      "id": 6321,
-      "name": "IDS LIFE INSURANCE COMPANY"
-    },
-    {
-      "id": 18272,
-      "name": "ALLSTATE FINANCIAL SERVICES, LLC"
-    },
-    {
-      "id": 45915,
-      "name": "SUMMITALLIANCE SECURITIES, L.L.C."
-    },
-    {
-      "id": 133019,
-      "name": "HERITAGE FINANCIAL SYSTEMS, INC."
-    },
-    {
-      "id": 11469,
-      "name": "WESTMORELAND CAPITAL CORPORATION"
-    },
-    {
-      "id": 103863,
-      "name": "FARMERS FINANCIAL SOLUTIONS, LLC"
     },
     {
       "id": 19415,
@@ -20003,6 +20003,10 @@
   ],
   "individuals": [
     {
+      "id": 1085996,
+      "name": "Timothy Dale Register"
+    },
+    {
       "id": 3257001,
       "name": "Theodore Robert Horwith"
     },
@@ -20029,10 +20033,6 @@
     {
       "id": 6888757,
       "name": "PAUL SCOTT TAVA"
-    },
-    {
-      "id": 1085996,
-      "name": "Timothy Dale Register"
     },
     {
       "id": 1725356,

@@ -13378,15 +13378,17 @@ function hasIndividualSecPresence(node: any) {
 		.replace(/^node[:_]/, '')
 		.trim();
 	if (rawId && SUPPRESSED_SEC_INDIV_IDS.has(rawId)) return false;
-	if (isNotInScopeValue(node?.iaScope) || isNotInScopeValue(node?.basicInformation?.iaScope)) return false;
+	// Historical IA evidence can exist while iaScope is NotInScope — check that before scope gating.
 	if (node.hasSecData === true) return true;
 	if (hasPublicSecIndividualPage(node, node.basicInformation || {})) return true;
 	if (hasSecActivityEvidence(node)) return true;
 	if (Number(node?.registrationCount?.approvedIAStateRegistrationCount || 0) > 0) return true;
+	if (hasAnyItems(node?.currentIAEmployments)) return true;
 	if (hasAnyItems(node?.previousIAEmployments)) return true;
 	if (hasAnyItems(node?.disclosures)) return true;
 	if (hasAnyItems(node?.iaDisclosures)) return true;
 	if (hasActiveRegisteredStates(node?.registeredStates, ['ia'])) return true;
+	if (isNotInScopeValue(node?.iaScope) || isNotInScopeValue(node?.basicInformation?.iaScope)) return false;
 	const iaScopeFlags = collectNodeActivityFlags([node?.iaScope, node?.basicInformation?.iaScope]);
 	if (iaScopeFlags.hasActive || iaScopeFlags.hasInactive) return true;
 	return false;
@@ -13495,6 +13497,7 @@ function hasSecActivityEvidence(node) {
 	if (iaActivityFlags.hasActive) return true;
 	if (Number(node?.registrationCount?.approvedIAStateRegistrationCount || 0) > 0) return true;
 	if (Array.isArray(node?.currentIAEmployments) && node.currentIAEmployments.length > 0) return true;
+	if (Array.isArray(node?.previousIAEmployments) && node.previousIAEmployments.length > 0) return true;
 	if (Array.isArray(node?.disclosures) && node.disclosures.length > 0) return true;
 	if (Array.isArray(node?.iaDisclosures) && node.iaDisclosures.length > 0) return true;
 	if (hasActiveRegisteredStates(node?.registeredStates, ['ia'])) return true;
@@ -20387,6 +20390,8 @@ function hasPublicSecIndividualPage(detail, basicInformation: Record<string, any
 		return true;
 	}
 	if (hasAnyItems(detail?.currentIAEmployments)) return true;
+	// Inactive / NotInScope people often retain previous IA firm history on AdviserInfo.
+	if (hasAnyItems(detail?.previousIAEmployments)) return true;
 	if (hasAnyItems(detail?.disclosures)) return true;
 	if (hasAnyItems(detail?.iaDisclosures)) return true;
 	if (

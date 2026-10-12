@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
 	decreaseBackoffMs,
+	extractDetail,
 	fingerprintPayload,
 	increaseBackoffMs,
 	initialBackoffMs,
@@ -126,5 +127,75 @@ describe('selectionRefreshClient scheduler', () => {
 		await new Promise((r) => setTimeout(r, 350));
 		expect(fetcher).toHaveBeenCalledTimes(1);
 		expect(onUpdated).toHaveBeenCalledTimes(1);
+	});
+
+	it('scheduleSelectionExternalRefresh applies cooldown detail without updated=true', async () => {
+		const fetcher = vi.fn(async () =>
+			new Response(
+				JSON.stringify({
+					ok: true,
+					skipped: 'cooldown',
+					unchanged: true,
+					detail: { previousIAEmployments: [{ firmId: 119241 }], hasSecData: true },
+				}),
+				{ status: 200 },
+			),
+		);
+		const onUpdated = vi.fn();
+		setSelectionRefreshClientBackoffUntil(0);
+		scheduleSelectionExternalRefresh({
+			node: { id: 'person:1085996', group: 'individual', crd: '1085996' },
+			afterPromise: Promise.resolve(),
+			getSelectedId: () => 'person:1085996',
+			getAlpha: () => 0,
+			isSimStopped: () => true,
+			onUpdated,
+			fetcher: fetcher as any,
+			maxWaitMs: 100,
+		});
+		await new Promise((r) => setTimeout(r, 350));
+		expect(onUpdated).toHaveBeenCalledTimes(1);
+		expect(onUpdated.mock.calls[0][0].detail.previousIAEmployments).toHaveLength(1);
+	});
+});
+
+describe('selectionRefresh extractDetail merge', () => {
+	it('keeps SEC previousIAEmployments when FINRA overwrites with empty arrays', () => {
+		const finra = {
+			hits: {
+				hits: [
+					{
+						_source: {
+							content: JSON.stringify({
+								basicInformation: { firstName: 'Timothy', iaScope: 'NotInScope', bcScope: 'InActive' },
+								previousEmployments: [{ firmId: 1, firmName: 'BD FIRM' }],
+								previousIAEmployments: [],
+							}),
+						},
+					},
+				],
+			},
+		};
+		const sec = {
+			hits: {
+				hits: [
+					{
+						_source: {
+							iacontent: JSON.stringify({
+								basicInformation: { firstName: 'Timothy', iaScope: 'NotInScope' },
+								previousIAEmployments: [{ firmId: 119241, firmName: 'HERITAGE ADVISORY SERVICES, INC.' }],
+							}),
+						},
+					},
+				],
+			},
+		};
+		const detail = extractDetail('individual', finra, sec);
+		expect(detail?.hasSecData).toBe(true);
+		expect(detail?.hasFinraData).toBe(true);
+		expect(detail?.previousIAEmployments).toEqual([
+			{ firmId: 119241, firmName: 'HERITAGE ADVISORY SERVICES, INC.' },
+		]);
+		expect(detail?.previousEmployments).toEqual([{ firmId: 1, firmName: 'BD FIRM' }]);
 	});
 });

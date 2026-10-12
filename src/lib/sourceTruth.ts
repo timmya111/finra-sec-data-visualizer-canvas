@@ -125,11 +125,12 @@ export function hasIndividualSourceCoverage(detail: unknown, source: SourceDomai
 	if (!isPlainObject(detail)) return false;
 	const basic = isPlainObject(detail.basicInformation) ? detail.basicInformation : {};
 	const scope = source === 'finra' ? (detail.bcScope ?? basic.bcScope) : (detail.iaScope ?? basic.iaScope);
-	if (isNotInScopeValue(scope)) return false;
-	if (isInScopeValue(scope)) return true;
 
 	const registrationCount = isPlainObject(detail.registrationCount) ? detail.registrationCount : {};
 	if (source === 'finra') {
+		// Explicit FINRA NotInScope means no BrokerCheck page/coverage.
+		if (isNotInScopeValue(scope)) return false;
+		if (isInScopeValue(scope)) return true;
 		if (Number(registrationCount.approvedFinraRegistrationCount || 0) > 0) return true;
 		if (Number(registrationCount.approvedSRORegistrationCount || 0) > 0) return true;
 		if (Array.isArray(detail.currentEmployments) && detail.currentEmployments.length > 0) return true;
@@ -141,11 +142,14 @@ export function hasIndividualSourceCoverage(detail: unknown, source: SourceDomai
 		return false;
 	}
 
+	if (isInScopeValue(scope)) return true;
 	if (Number(registrationCount.approvedIAStateRegistrationCount || 0) > 0) return true;
 	if (Array.isArray(detail.currentIAEmployments) && detail.currentIAEmployments.length > 0) return true;
+	// Historical IA employment still counts when iaScope is NotInScope (common for inactive people).
 	if (Array.isArray(detail.previousIAEmployments) && detail.previousIAEmployments.length > 0) return true;
 	if (Array.isArray(detail.iaDisclosures) && detail.iaDisclosures.length > 0) return true;
 	if (Array.isArray(detail.registeredStates) && detail.registeredStates.some((s: any) => s?.regScope === 'IA')) return true;
+	if (isNotInScopeValue(scope)) return false;
 	return false;
 }
 

@@ -118,4 +118,19 @@ describe('hasIndividualSourceCoverage', () => {
 		expect(hasIndividualSourceCoverage(detail, 'finra')).toBe(false);
 		expect(hasIndividualSourceCoverage(detail, 'sec')).toBe(true);
 	});
+
+	it('treats previous IA employment as SEC coverage even when iaScope is NotInScope', () => {
+		const detail = {
+			bcScope: 'InActive',
+			iaScope: 'NotInScope',
+			previousIAEmployments: [{ firmId: 119241, firmName: 'HERITAGE ADVISORY SERVICES, INC.' }],
+			registrationCount: {
+				approvedFinraRegistrationCount: 0,
+				approvedIAStateRegistrationCount: 0,
+			},
+		};
+
+		expect(hasIndividualSourceCoverage(detail, 'sec')).toBe(true);
+		expect(hasIndividualSourceCoverage({ ...detail, previousIAEmployments: [] }, 'sec')).toBe(false);
+	});
 });
