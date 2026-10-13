@@ -6,6 +6,8 @@ import { searchDirectRedisFallback } from '@/lib/searchDirectFallback';
 import { searchExternalFallback } from '@/lib/searchExternalFallback';
 
 export const dynamic = 'force-dynamic';
+/** Cold index load can exceed the default 30s API budget on Vercel. */
+export const maxDuration = 60;
 export const revalidate = 0;
 
 function jsonNoStore(data: unknown, init: Parameters<typeof NextResponse.json>[1] = {}) {

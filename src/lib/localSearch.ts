@@ -319,25 +319,35 @@ export function hasMinimumSearchQuery(query: string) {
 	return SHORT_QUERY_ALLOWLIST.has(compactQuery) || compactQuery.length >= MIN_SEARCH_QUERY_CHARS;
 }
 
+/** Parse JSON from a Buffer/Uint8Array without building a second UTF-8 string copy. */
+function parseJsonBytes(bytes: Buffer | Uint8Array) {
+	// Node accepts Buffer here; the UTF-8 string path peaked ~1.9GB RSS on the FINRA individual sidecar.
+	return JSON.parse(bytes as unknown as string) as { generatedAt?: string; bucket?: string; docs?: LocalSearchDoc[] };
+}
+
+async function gunzipIfNeeded(raw: Buffer): Promise<Buffer> {
+	const isGzip = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+	if (!isGzip) return raw;
+	const zlib = await import('node:zlib');
+	const { promisify } = await import('node:util');
+	return (await promisify(zlib.gunzip)(raw)) as Buffer;
+}
+
 async function loadIndex(bucket: LocalSearchBucket, baseUrl?: string, seedRoots: Array<string | null | undefined> = []): Promise<LocalSearchIndex | null> {
 	const cacheKey = [bucket, baseUrl || '', ...seedRoots.map((root) => String(root || ''))].join('|');
 
 	async function readIndexPayload(filePath: string) {
 		const raw = await readFile(filePath);
-		const util = await import('node:util');
-		const isGzip = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
-		const jsonText = isGzip ? (await util.promisify(require('node:zlib').gunzip)(raw)).toString('utf-8') : raw.toString('utf-8');
-		return JSON.parse(jsonText) as { generatedAt?: string; bucket?: string; docs?: LocalSearchDoc[] };
+		const payload = await gunzipIfNeeded(raw);
+		return parseJsonBytes(payload);
 	}
 
 	async function readIndexPayloadFromUrl(url: string) {
 		const response = await fetch(url);
 		if (!response.ok) return null;
 		const raw = Buffer.from(await response.arrayBuffer());
-		const util = await import('node:util');
-		const isGzip = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
-		const jsonText = isGzip ? (await util.promisify(require('node:zlib').gunzip)(raw)).toString('utf-8') : raw.toString('utf-8');
-		return JSON.parse(jsonText) as { generatedAt?: string; bucket?: string; docs?: LocalSearchDoc[] };
+		const payload = await gunzipIfNeeded(raw);
+		return parseJsonBytes(payload);
 	}
 
 	function getDeployedStaticIndexUrl(fileName: string, baseUrl?: string) {
@@ -361,60 +371,60 @@ async function loadIndex(bucket: LocalSearchBucket, baseUrl?: string, seedRoots:
 	}
 
 	if (!indexPromiseCache.has(cacheKey)) {
-		indexPromiseCache.set(
-			cacheKey,
-			(async () => {
-				const filePaths = getSearchIndexFilePaths(bucket, seedRoots);
-				let index: LocalSearchIndex | null = null;
-				if (filePaths.length > 0) {
+		const pending = (async () => {
+			const filePaths = getSearchIndexFilePaths(bucket, seedRoots);
+			let index: LocalSearchIndex | null = null;
+			if (filePaths.length > 0) {
+				try {
+					const allDocs: LocalSearchDoc[] = [];
+					let generatedAt: string | undefined;
+					let bucketName: string | undefined;
+
+					const results = await Promise.all(filePaths.map((fp) => readIndexPayload(fp)));
+					for (const parsed of results) {
+						if (parsed?.generatedAt) generatedAt = generatedAt || parsed.generatedAt;
+						bucketName = bucketName || parsed?.bucket;
+						if (Array.isArray(parsed?.docs)) allDocs.push(...parsed.docs);
+					}
+
+					index = {
+						generatedAt: generatedAt ?? null,
+						bucket: bucketName ?? bucket,
+						docs: allDocs.map(prepareDoc),
+					};
+				} catch (err: any) {
+					console.warn(`[localSearch] Failed to load gzip search sidecar for ${bucket}:`, err?.message || err);
+				}
+			}
+
+			if (!index) {
+				const remoteUrl = getDeployedStaticIndexUrl(getRemoteSearchIndexFileName(bucket), baseUrl);
+				if (remoteUrl) {
 					try {
-						const allDocs: LocalSearchDoc[] = [];
-						let generatedAt: string | undefined;
-						let bucketName: string | undefined;
-
-						const results = await Promise.all(filePaths.map((fp) => readIndexPayload(fp)));
-						for (const parsed of results) {
-							if (parsed?.generatedAt) generatedAt = generatedAt || parsed.generatedAt;
-							bucketName = bucketName || parsed?.bucket;
-							if (Array.isArray(parsed?.docs)) allDocs.push(...parsed.docs);
+						const parsed = await readIndexPayloadFromUrl(remoteUrl);
+						if (parsed) {
+							index = {
+								generatedAt: parsed.generatedAt ?? null,
+								bucket: parsed.bucket ?? bucket,
+								docs: Array.isArray(parsed.docs) ? parsed.docs.map(prepareDoc) : [],
+							};
 						}
-
-						index = {
-							generatedAt: generatedAt ?? null,
-							bucket: bucketName ?? bucket,
-							docs: allDocs.map(prepareDoc),
-						};
 					} catch (err: any) {
-						console.warn(`[localSearch] Failed to load gzip search sidecar for ${bucket}:`, err?.message || err);
+						console.warn(`[localSearch] Failed to fetch gzip search sidecar for ${bucket} from ${remoteUrl}:`, err?.message || err);
 					}
 				}
+			}
 
-				if (!index) {
-					const remoteUrl = getDeployedStaticIndexUrl(getRemoteSearchIndexFileName(bucket), baseUrl);
-					if (remoteUrl) {
-						try {
-							const parsed = await readIndexPayloadFromUrl(remoteUrl);
-							if (parsed) {
-								index = {
-									generatedAt: parsed.generatedAt ?? null,
-									bucket: parsed.bucket ?? bucket,
-									docs: Array.isArray(parsed.docs) ? parsed.docs.map(prepareDoc) : [],
-								};
-							}
-						} catch (err: any) {
-							console.warn(`[localSearch] Failed to fetch gzip search sidecar for ${bucket} from ${remoteUrl}:`, err?.message || err);
-						}
-					}
-				}
+			if (index) {
+				return applyValidatedExtensions(bucket, index);
+			}
 
-				if (index) {
-					return applyValidatedExtensions(bucket, index);
-				}
-
-				console.error(`[localSearch] Failed to load index for bucket ${bucket}.`);
-				return null;
-			})(),
-		);
+			// Do not cache a permanent miss — cold filesystem/CDN blips should retry.
+			indexPromiseCache.delete(cacheKey);
+			console.error(`[localSearch] Failed to load index for bucket ${bucket}.`);
+			return null;
+		})();
+		indexPromiseCache.set(cacheKey, pending);
 	}
 	return (await indexPromiseCache.get(cacheKey)) ?? null;
 }

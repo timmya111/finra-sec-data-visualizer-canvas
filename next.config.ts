@@ -12,6 +12,16 @@ const nextConfig: NextConfig = {
 	outputFileTracingExcludes: {
 		[allRoutes]: ['./data/national/**', './data/raw/**', './data/primed-cache/**', './data/cache-binary/**', './data/build_manifest.json', './data/locations.json'],
 	},
+	// Keep gzip search sidecars inside serverless traces so /api/finra/search can
+	// read them from disk instead of re-fetching ~76MB over HTTP on every cold start.
+	outputFileTracingIncludes: {
+		'/api/finra/search': ['./public/search-indexes/**/*.json.gz'],
+		'/api/finra/sec-search': ['./public/search-indexes/**/*.json.gz'],
+		'/api/finra/individual/[crd]': ['./public/search-indexes/**/*.json.gz'],
+		'/api/finra/firm/[id]': ['./public/search-indexes/**/*.json.gz'],
+		'/api/finra/expand/[nodeId]': ['./public/search-indexes/**/*.json.gz'],
+		'/api/finra/connection-counts': ['./public/search-indexes/**/*.json.gz'],
+	},
 	experimental: {
 		// Allow huge graph JSON to be serialised through getServerSideProps / route handlers
 		largePageDataBytes: 128 * 1024 * 1024, // 128 MB
