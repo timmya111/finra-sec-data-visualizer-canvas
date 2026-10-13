@@ -44,6 +44,7 @@ import {
 	visitSnapshotKey,
 	type CachedFirmConnectionsPayload,
 } from '@/lib/clientVisitCache';
+import { requestSelectionRefresh } from '@/lib/selectionRefreshClient';
 import styles from './dashboard.module.css';
 
 type DashboardAction = 'fetch-crds' | 'list-new-crds';
@@ -3864,6 +3865,39 @@ function DashboardPageInner() {
 		}
 	}
 
+	/** Deferred Redis-vs-live freshness after a card opens (mirrors graph selection-refresh). */
+	function scheduleCardSelectionRefresh(card: QueueCard, loadGen: number, preferredSource: SearchResultSource) {
+		void (async () => {
+			try {
+				const result = await requestSelectionRefresh(card.entity, card.id);
+				if (recordLoadGenRef.current !== loadGen) return;
+				if (!result?.detail) return;
+				const cacheKey = `${card.entity}:${card.id}`;
+				mergedDetailCacheRef.current.set(cacheKey, result.detail);
+				rememberVisited(visitDetailKey(card.entity, card.id), result.detail);
+				if (!result.updated) return;
+				const ordered: SearchResultSource[] = [preferredSource, 'finra', 'sec'].filter(
+					(value, index, list) => list.indexOf(value) === index,
+				) as SearchResultSource[];
+				let payload: any = null;
+				for (const candidate of ordered) {
+					payload = extractPayloadFromDetail(result.detail, candidate);
+					if (payload) {
+						payload = overlayMergedEmploymentHistory(payload, result.detail);
+						break;
+					}
+				}
+				if (!payload) return;
+				if (recordLoadGenRef.current !== loadGen) return;
+				const normalizedPayload = normalizePayloadForCleanView(payload) as Record<string, any>;
+				setMainJson(normalizedPayload);
+				markRecordUpdatedAt(new Date().toISOString());
+			} catch {
+				/* non-critical background freshness */
+			}
+		})();
+	}
+
 	async function loadQueueSourceJson(card: QueueCard, source: SearchResultSource) {
 		const sourceKey = `${card.entity}:${card.id}:${source}`;
 		const loadGen = ++recordLoadGenRef.current;
@@ -3928,6 +3962,7 @@ function DashboardPageInner() {
 				source: snapshot.source,
 				availableSources: snapshot.detectedSources.length > 0 ? snapshot.detectedSources : card.sources.map((entry) => entry.source),
 			});
+			scheduleCardSelectionRefresh(card, loadGen, snapshot.source);
 			return;
 		}
 
@@ -4130,6 +4165,7 @@ function DashboardPageInner() {
 				source: resolvedSource,
 				availableSources: detectedSources.length > 0 ? detectedSources : card.sources.map((entry) => entry.source),
 			});
+			scheduleCardSelectionRefresh(card, loadGen, resolvedSource);
 		} catch (error: any) {
 			if (!stillCurrent()) return;
 			setResult({ ok: false, error: error?.message || String(error) });

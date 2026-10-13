@@ -1,10 +1,11 @@
 import type { Redis } from '@upstash/redis';
 import axios from 'axios';
+import { makeRedisKey } from '@/lib/crd';
 import { getRedisClientInstance } from '@/lib/redisClient';
 import { saveGraph, getFullGraph } from '@/lib/graphStore';
 import { getSeedBankFromStore } from '@/lib/graphStore';
 import { DEFAULT_HEADERS } from '@/lib/requestConstants';
-import { flushCrdInventorySidecar, rememberInventoryEntitiesDurable } from '@/lib/crdInventorySidecar';
+import { flushCrdInventorySidecar, loadCrdInventorySync, rememberInventoryEntitiesDurable } from '@/lib/crdInventorySidecar';
 import { randomUUID } from 'crypto';
 
 const STATE_KEY = 'finra:cron:external-validity:state';
@@ -20,6 +21,8 @@ const PENDING_PREFIX = 'finra:pending';
 const DEFAULT_RETRY_SECONDS = Math.max(60, Number(process.env.FINRA_EXTERNAL_VALIDITY_RETRY_SECONDS || 300));
 const INDIVIDUAL_QUERY = new URLSearchParams({ hl: 'true', includePrevious: 'true', wt: 'json' }).toString();
 const FIRM_QUERY = new URLSearchParams({ hl: 'true', wt: 'json' }).toString();
+/** Firm CRDs above this are treated as pollution (individual IDs leaked into firm lists). */
+export const MAX_VALID_FIRM_CRD = 999_999;
 
 const DEFAULT_DISCOVERY_BATCH = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_DISCOVERY_BATCH || 3));
 /** Backward gap-scan batch (unknown CRDs only). Kept under the old UPDATE_BATCH env name. */
@@ -147,6 +150,65 @@ export function buildNameQueryCandidates(seedBank: {
 function maxNumericId(values: string[]) {
 	if (!values.length) return 0;
 	return Math.max(...values.map((v) => Number(v)).filter((n) => Number.isFinite(n)));
+}
+
+function isValidFirmCrdNumber(n: number) {
+	return Number.isFinite(n) && n > 0 && n <= MAX_VALID_FIRM_CRD;
+}
+
+/** Drop polluted firm IDs (>= 1e6) that are usually individual CRDs. */
+export function filterValidFirmIds(values: string[]) {
+	return values.filter((id) => isValidFirmCrdNumber(Number(id)));
+}
+
+/**
+ * Discovery high-water: max of seed bank, Redis zset, and inventory sidecar.
+ * Firm values above MAX_VALID_FIRM_CRD are ignored so polluted seed banks cannot
+ * push firmNext into the individual CRD range.
+ */
+export function resolveDiscoveryHighWater(options: {
+	seedIndividualMax?: number;
+	seedFirmMax?: number;
+	zsetIndividualMax?: number;
+	zsetFirmMax?: number;
+	inventoryIndividualMax?: number;
+	inventoryFirmMax?: number;
+}): { individual: number; firm: number } {
+	const pickInd = (...vals: Array<number | undefined>) =>
+		Math.max(0, ...vals.map((v) => Number(v) || 0).filter((n) => Number.isFinite(n) && n > 0));
+	const pickFirm = (...vals: Array<number | undefined>) =>
+		Math.max(0, ...vals.map((v) => Number(v) || 0).filter((n) => isValidFirmCrdNumber(n)));
+	return {
+		individual: pickInd(options.seedIndividualMax, options.zsetIndividualMax, options.inventoryIndividualMax),
+		firm: pickFirm(options.seedFirmMax, options.zsetFirmMax, options.inventoryFirmMax),
+	};
+}
+
+function inventoryHighWaterMarks(): { individual: number; firm: number } {
+	try {
+		const inv = loadCrdInventorySync();
+		const individuals = Array.isArray(inv?.individuals) ? inv.individuals : [];
+		const firms = Array.isArray(inv?.firms) ? inv.firms : [];
+		return {
+			individual: individuals.length ? Math.max(...individuals.map(Number).filter((n) => Number.isFinite(n) && n > 0)) : 0,
+			firm: firms.length ? Math.max(...firms.map(Number).filter((n) => isValidFirmCrdNumber(n))) : 0,
+		};
+	} catch {
+		return { individual: 0, firm: 0 };
+	}
+}
+
+async function readZsetHighWater(redis: Redis, kind: 'individual' | 'firm'): Promise<number> {
+	try {
+		const key = `dashboard:highest-crds:${kind}`;
+		const rows = (await (redis as any).zrange?.(key, 0, 0, { rev: true })) as string[] | null;
+		const top = Array.isArray(rows) && rows.length ? rows[0] : null;
+		const n = Number(top);
+		if (kind === 'firm') return isValidFirmCrdNumber(n) ? n : 0;
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	} catch {
+		return 0;
+	}
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -724,15 +786,11 @@ async function processCandidate(
 		// best effort — graph/Redis detail keys above are the source of truth for the CRD itself
 	}
 
-	// refresh direct cache keys so the app reads the newest payloads on the next lookup
+	// Bare detail keys match makeRedisKey / selection-refresh / firm|individual routes.
 	try {
-		const searchParams = kind === 'individual' ? INDIVIDUAL_QUERY : FIRM_QUERY;
-		await redis.set(`${kind === 'individual' ? 'finra:individual' : 'finra:firm'}:${normalizeId(id)}:${searchParams}`, JSON.stringify(finra || sec), { ex: 60 * 60 * 24 });
-		await redis.set(
-			`${kind === 'individual' ? 'sec:individual' : 'sec:firm'}:${normalizeId(id)}:${kind === 'individual' ? INDIVIDUAL_QUERY : FIRM_QUERY}`,
-			JSON.stringify(sec || finra),
-			{ ex: 60 * 60 * 24 },
-		);
+		const crd = normalizeId(id);
+		await redis.set(makeRedisKey('finra', kind, crd), JSON.stringify(finra || sec), { ex: 60 * 60 * 24 });
+		await redis.set(makeRedisKey('sec', kind, crd), JSON.stringify(sec || finra), { ex: 60 * 60 * 24 });
 	} catch {
 		// best effort cache refresh only
 	}
@@ -763,7 +821,7 @@ export async function runExternalValidityCron() {
 		const graph = await getFullGraph();
 		const seedBank = await getSeedBankFromStore();
 		const individualIds = uniqueSortedNumericIds(seedBank?.individualIds || []);
-		const firmIds = uniqueSortedNumericIds(seedBank?.firmIds || []);
+		const firmIds = filterValidFirmIds(uniqueSortedNumericIds(seedBank?.firmIds || []));
 		const discoveryTerms = buildNameQueryCandidates(seedBank);
 		const discoveredNameIds = new Set<string>();
 
@@ -777,9 +835,19 @@ export async function runExternalValidityCron() {
 		}
 
 		const enrichedIndividuals = uniqueSortedNumericIds([...individualIds, ...discoveredNameIds]);
-		const enrichedFirms = uniqueSortedNumericIds([...firmIds, ...discoveredNameIds]);
-		const maxIndividual = maxNumericId(enrichedIndividuals);
-		const maxFirm = maxNumericId(enrichedFirms);
+		const enrichedFirms = filterValidFirmIds(uniqueSortedNumericIds([...firmIds, ...discoveredNameIds]));
+		const inventoryMarks = inventoryHighWaterMarks();
+		const [zsetIndividualMax, zsetFirmMax] = await Promise.all([readZsetHighWater(redis, 'individual'), readZsetHighWater(redis, 'firm')]);
+		const highWater = resolveDiscoveryHighWater({
+			seedIndividualMax: maxNumericId(enrichedIndividuals),
+			seedFirmMax: maxNumericId(enrichedFirms),
+			zsetIndividualMax,
+			zsetFirmMax,
+			inventoryIndividualMax: inventoryMarks.individual,
+			inventoryFirmMax: inventoryMarks.firm,
+		});
+		const maxIndividual = highWater.individual;
+		const maxFirm = highWater.firm;
 		const state = await loadState(redis, maxIndividual, maxFirm);
 		const now = Date.now();
 		if (shouldSkipCronRun(state.lastRunAt, now)) {
@@ -906,6 +974,17 @@ export async function runExternalValidityCron() {
 
 		const knownIndividuals = new Set(enrichedIndividuals);
 		const knownFirms = new Set(enrichedFirms);
+		try {
+			const inventory = loadCrdInventorySync();
+			for (const id of inventory.individuals || []) {
+				if (Number.isFinite(Number(id)) && Number(id) > 0) knownIndividuals.add(String(id));
+			}
+			for (const id of inventory.firms || []) {
+				if (isValidFirmCrdNumber(Number(id))) knownFirms.add(String(id));
+			}
+		} catch {
+			/* inventory optional for known-set */
+		}
 
 		// 1) Discover higher-number CRDs first (past high-water).
 		const discoveryIndividuals = buildDiscoveryCandidates(Math.max(state.discovery.individualNext, maxIndividual + 1), discoveryBatch);
@@ -967,7 +1046,7 @@ export async function runExternalValidityCron() {
 			// ignore monitoring errors
 		}
 
-		return { ok: true, ...summary, state: nextState };
+		return { ok: true, ...summary, state: nextState, highWater: { individual: maxIndividual, firm: maxFirm } };
 	} finally {
 		try {
 			await releaseLock(redis, lockToken);
@@ -975,4 +1054,57 @@ export async function runExternalValidityCron() {
 			// ignore
 		}
 	}
+}
+
+/** Read-only cron status — no lock, no discovery. */
+export async function getExternalValidityCronStatus() {
+	const redis = getRedisClient();
+	if (!redis) {
+		return { ok: false, error: 'Missing Upstash Redis configuration' };
+	}
+
+	let locked = false;
+	let lockTtl: number | null = null;
+	try {
+		locked = Boolean(await redis.get(LOCK_KEY));
+		const ttl = await (redis as any).ttl?.(LOCK_KEY);
+		lockTtl = Number.isFinite(Number(ttl)) ? Number(ttl) : null;
+	} catch {
+		/* ignore */
+	}
+
+	const inventoryMarks = inventoryHighWaterMarks();
+	const [zsetIndividualMax, zsetFirmMax] = await Promise.all([readZsetHighWater(redis, 'individual'), readZsetHighWater(redis, 'firm')]);
+	let seedIndividualMax = 0;
+	let seedFirmMax = 0;
+	try {
+		const seedBank = await getSeedBankFromStore();
+		seedIndividualMax = maxNumericId(uniqueSortedNumericIds(seedBank?.individualIds || []));
+		seedFirmMax = maxNumericId(filterValidFirmIds(uniqueSortedNumericIds(seedBank?.firmIds || [])));
+	} catch {
+		/* ignore */
+	}
+	const highWater = resolveDiscoveryHighWater({
+		seedIndividualMax,
+		seedFirmMax,
+		zsetIndividualMax,
+		zsetFirmMax,
+		inventoryIndividualMax: inventoryMarks.individual,
+		inventoryFirmMax: inventoryMarks.firm,
+	});
+	const state = await loadState(redis, highWater.individual, highWater.firm);
+
+	return {
+		ok: true,
+		status: true,
+		locked,
+		lockTtl,
+		state,
+		highWater,
+		sources: {
+			seed: { individual: seedIndividualMax, firm: seedFirmMax },
+			zset: { individual: zsetIndividualMax, firm: zsetFirmMax },
+			inventory: inventoryMarks,
+		},
+	};
 }

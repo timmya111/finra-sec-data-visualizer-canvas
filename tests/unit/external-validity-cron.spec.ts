@@ -5,8 +5,12 @@ import {
 	buildGapCandidates,
 	buildNameQueryCandidates,
 	extractCandidateIdsFromSearchPayload,
+	filterValidFirmIds,
+	resolveDiscoveryHighWater,
 	shouldSkipCronRun,
 } from '@/lib/externalValidityCron';
+import { canCallExternalApis, setExternalApiContext } from '@/lib/externalApiGate';
+import { makeRedisKey } from '@/lib/crd';
 
 describe('externalValidityCron candidate discovery', () => {
 	it('generates 3-10 character name terms from seed bank names', () => {
@@ -67,6 +71,44 @@ describe('externalValidityCron candidate discovery', () => {
 		const { candidates, nextCursor } = buildGapCandidates(5, new Set(['5', '4', '3']), 5, 3);
 		expect(candidates).toEqual([]);
 		expect(nextCursor).toBe(2);
+	});
+
+	it('resolveDiscoveryHighWater floors from zset/inventory and ignores polluted firm IDs', () => {
+		expect(
+			resolveDiscoveryHighWater({
+				seedIndividualMax: 100,
+				seedFirmMax: 1_000_010,
+				zsetIndividualMax: 8_354_489,
+				zsetFirmMax: 344_829,
+				inventoryIndividualMax: 8_335_647,
+				inventoryFirmMax: 340_000,
+			}),
+		).toEqual({ individual: 8_354_489, firm: 344_829 });
+		expect(filterValidFirmIds(['344829', '1000010', '12'])).toEqual(['344829', '12']);
+	});
+
+	it('cron detail keys stay bare (no query suffix)', () => {
+		expect(makeRedisKey('finra', 'individual', '1085996')).toBe('finra:individual:1085996');
+		expect(makeRedisKey('sec', 'firm', '8209')).toBe('sec:firm:8209');
+	});
+
+	it('ambient EXTERNAL_API_CONTEXT env does not bypass DISABLED; runtime context does', () => {
+		const prevDisabled = process.env.EXTERNAL_API_DISABLED;
+		const prevContext = process.env.EXTERNAL_API_CONTEXT;
+		process.env.EXTERNAL_API_DISABLED = '1';
+		process.env.EXTERNAL_API_CONTEXT = 'cronjob';
+		setExternalApiContext(null);
+		expect(canCallExternalApis()).toBe(false);
+		setExternalApiContext('cronjob');
+		expect(canCallExternalApis()).toBe(true);
+		setExternalApiContext('selection-refresh');
+		expect(canCallExternalApis()).toBe(true);
+		setExternalApiContext(null);
+		expect(canCallExternalApis()).toBe(false);
+		if (prevDisabled == null) delete process.env.EXTERNAL_API_DISABLED;
+		else process.env.EXTERNAL_API_DISABLED = prevDisabled;
+		if (prevContext == null) delete process.env.EXTERNAL_API_CONTEXT;
+		else process.env.EXTERNAL_API_CONTEXT = prevContext;
 	});
 
 	it('rememberInventoryEntitiesDurable bumps Redis when new CRDs are added', async () => {

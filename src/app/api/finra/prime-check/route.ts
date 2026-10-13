@@ -222,7 +222,6 @@ async function fetchLocalJson(origin: string, path: string) {
 
 export async function GET(request: NextRequest) {
 	const { setExternalApiContext } = await import('@/lib/externalApiGate');
-	const previousContext = process.env.EXTERNAL_API_CONTEXT;
 	setExternalApiContext('cronjob');
 
 	try {
@@ -574,6 +573,6 @@ export async function GET(request: NextRequest) {
 			{ status: 500, headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' } },
 		);
 	} finally {
-		setExternalApiContext(previousContext || null);
+		setExternalApiContext(null);
 	}
 }

@@ -54,7 +54,6 @@ export async function POST(request: NextRequest) {
 		return NextResponse.json({ ok: false, skipped: 'invalid', error: 'Expected { kind, id }' }, { status: 400 });
 	}
 
-	const previousContext = process.env.EXTERNAL_API_CONTEXT;
 	setExternalApiContext('selection-refresh');
 	try {
 		const result = await runSelectionRefresh(parsed.kind, parsed.id);
@@ -69,6 +68,6 @@ export async function POST(request: NextRequest) {
 			{ status: 500, headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' } },
 		);
 	} finally {
-		setExternalApiContext(previousContext || null);
+		setExternalApiContext(null);
 	}
 }

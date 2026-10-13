@@ -1,5 +1,7 @@
 const truthy = new Set(['1', 'true', 'yes', 'on']);
-const falsey = new Set(['0', 'false', 'no', 'off']);
+
+/** Request-scoped override set by cron / selection-refresh / build handlers. Not read from .env. */
+let runtimeExternalApiContext: string | null = null;
 
 function getFlagValue(...names: string[]) {
 	for (const name of names) {
@@ -17,23 +19,14 @@ function isExplicitlyDisabled() {
 	return raw !== '' && truthy.has(raw);
 }
 
-function isExplicitlyEnabled() {
-	const raw = getFlagValue('EXTERNAL_API_DISABLED', 'DISABLE_EXTERNAL_API_FETCH');
-	if (raw !== '' && falsey.has(raw)) return true;
-	const allowRaw = getFlagValue('EXTERNAL_API_ENABLED', 'ALLOW_EXTERNAL_API_FETCH');
-	return allowRaw !== '' && truthy.has(allowRaw);
-}
-
-function getExternalApiContext() {
-	return String(process.env.EXTERNAL_API_CONTEXT || '')
-		.trim()
-		.toLowerCase();
+export function getExternalApiContext() {
+	return runtimeExternalApiContext || '';
 }
 
 export function canCallExternalApis() {
 	const context = getExternalApiContext();
 	// Deliberate server jobs may run even when ambient UI fetches are disabled.
-	// cronjob/build: scheduled discovery. selection-refresh: deferred post-click freshness checks.
+	// Only runtime setExternalApiContext counts — ambient EXTERNAL_API_CONTEXT in .env does not.
 	if (context === 'cronjob' || context === 'build' || context === 'selection-refresh') {
 		return true;
 	}
@@ -44,8 +37,8 @@ export function canCallExternalApis() {
 
 export function setExternalApiContext(context: string | null | undefined) {
 	if (context == null || String(context).trim() === '') {
-		delete process.env.EXTERNAL_API_CONTEXT;
+		runtimeExternalApiContext = null;
 		return;
 	}
-	process.env.EXTERNAL_API_CONTEXT = String(context).trim().toLowerCase();
+	runtimeExternalApiContext = String(context).trim().toLowerCase();
 }
