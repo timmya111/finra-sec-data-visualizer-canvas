@@ -513,13 +513,52 @@ function isInactiveNode(node: Node) {
 	if (node.inactive === true || node.isInactive === true) return true;
 	const bc = classifyScopeActivity(node.bcScope || node.basicInformation?.bcScope);
 	const ia = classifyScopeActivity(node.iaScope || node.basicInformation?.iaScope);
-	const firm = classifyScopeActivity(node.status || node.firmStatus || node.basicInformation?.firmStatus);
+	const firm = classifyScopeActivity(
+		node.status || node.firmStatus || node.basicInformation?.firmStatus || node.orphan?.firmStatus || node.orphan?.status,
+	);
 	// Real Active scope always wins over a stale queue stub `_vizInactive: true`
 	// (previous-at-firm used to force that flag even for Active brokers).
+	// Non-live / Form BD orphans inherit Active from orphan.firmStatus the same way.
 	if (bc === 'active' || ia === 'active' || firm === 'active') return false;
 	if (bc === 'inactive' || firm === 'inactive') return true;
 	if (node._vizInactive === true) return true;
 	if (node._vizInactive === false) return false;
+
+	// Firm stubs without their own scope inherit status from non-previous links to
+	// active neighbors — same rule as SVG isNodeInactive — so non-live firm children
+	// match parent/link colors before a click hydrates detail.
+	const isFirmStub =
+		node.group === 'firm' &&
+		(Boolean(node.stub) ||
+			(!node.basicInformation && !node.bcScope && !node.firmStatus && !node.iaScope && !node.bdSecNumber && !node.iaSecNumber));
+	if (isFirmStub) {
+		const nodeId = String(node.id || '');
+		const connected = (currentLinks || []).filter((link) => {
+			const sourceId = String((link?.source as any)?.id ?? link?.source ?? '');
+			const targetId = String((link?.target as any)?.id ?? link?.target ?? '');
+			return sourceId === nodeId || targetId === nodeId;
+		});
+		if (!connected.length) return true;
+		const hasActiveLink = connected.some((link) => {
+			if (isPreviousLink(link)) return false;
+			const sourceId = String((link?.source as any)?.id ?? link?.source ?? '');
+			const targetId = String((link?.target as any)?.id ?? link?.target ?? '');
+			const otherId = sourceId === nodeId ? targetId : sourceId;
+			const other = (currentNodes || []).find((entry) => String(entry?.id || '') === otherId);
+			if (!other) return true;
+			if (other.inactive === true || other.isInactive === true || other._vizInactive === true) return false;
+			const otherBc = classifyScopeActivity(other.bcScope || other.basicInformation?.bcScope);
+			const otherIa = classifyScopeActivity(other.iaScope || other.basicInformation?.iaScope);
+			const otherFirm = classifyScopeActivity(
+				other.status || other.firmStatus || other.basicInformation?.firmStatus || other.orphan?.firmStatus || other.orphan?.status,
+			);
+			if (otherBc === 'inactive' || otherFirm === 'inactive') return false;
+			if (otherBc === 'active' || otherIa === 'active' || otherFirm === 'active') return true;
+			return other._vizInactive !== true;
+		});
+		return !hasActiveLink;
+	}
+
 	// Missing scope/detail alone must not mark people inactive — Queue graph stubs
 	// often lack those fields until enrich runs, and treating them inactive painted
 	// current employment as invisible gray ghosts under the firm.

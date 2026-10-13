@@ -1033,6 +1033,33 @@ if (typeof window !== 'undefined') {
 	};
 	(window as any).getRuntimeHopDefaults = getRuntimeHopDefaults;
 	(window as any).exportConnectedRenderedGraphSnapshot = exportConnectedRenderedGraphSnapshot;
+	(window as any).__fgDebugNode = (crdOrId: string) => {
+		const raw = String(crdOrId || '').trim();
+		const asPerson = raw.startsWith('person:') || raw.startsWith('firm:') ? raw : `person:${raw.replace(/^\D+/, '')}`;
+		const asFirm = raw.startsWith('person:') || raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const node =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id) === asPerson || String(entry?.id) === asFirm || String(entry?.id) === raw) ||
+			(globalState.graphData?.nodes || []).find((entry) => String(entry?.id) === asPerson || String(entry?.id) === asFirm || String(entry?.id) === raw) ||
+			null;
+		if (!node) return { ok: false, reason: 'node-missing', tried: [asPerson, asFirm, raw] };
+		return {
+			ok: true,
+			id: node.id,
+			label: node.label,
+			group: node.group,
+			stub: node.stub,
+			orphan: node.orphan,
+			bcScope: node.bcScope,
+			firmStatus: node.firmStatus,
+			inactive: node.inactive,
+			_vizInactive: node._vizInactive,
+			hasFinraData: node.hasFinraData,
+			hasSecData: node.hasSecData,
+			orphanPosition: node.orphanPosition || node.orphan?.position || null,
+			controlPositions: node.controlPositions,
+			isNodeInactive: isNodeInactive(node),
+		};
+	};
 	(window as any).__fgForceInjectPersonEmployment = async (crdOrId: string) => {
 		const raw = String(crdOrId || '').trim();
 		const id = raw.startsWith('person:') ? raw : `person:${raw.replace(/^\D+/, '')}`;
@@ -10841,28 +10868,39 @@ async function fetchIndividualBatch(crd, queryLabel = null, options: { includePr
 
 	// Orphan-only records (owner/control person without a BrokerCheck/IAPD individual hit)
 	// still deserve a canvas node + parent-firm link when we have that sidecar evidence.
+	// Apply the same inherited Active/Inactive scope as ensureIndividualDetail so route
+	// opens paint control/active colors immediately (not gray until click).
 	if (orphan && !detail?.basicInformation && !raw?.bccontent && !raw?.iacontent) {
-		nodes.push({
-			id: personId,
-			label: personLabel,
-			group: 'individual',
-			crd: String(crd),
-			orphan: true,
-		});
+		const personNode = applyIndividualDetail(
+			{
+				id: personId,
+				label: personLabel,
+				group: 'individual',
+				crd: String(crd),
+			},
+			raw?.orphan ? raw : { found: true, orphan },
+			crd,
+		);
+		nodes.push(personNode);
 		const parentCrd = String(orphan.parentCrd || orphan.firmId || '').trim();
 		if (parentCrd) {
 			const firmNodeId = `firm:${parentCrd}`;
+			const parentStatus = String(orphan.firmStatus || orphan.status || orphan.registrationStatus || 'ACTIVE').trim();
+			const parentInactive = /inactive|terminated|revoked|suspended|notinscope/i.test(parentStatus.replace(/\s+/g, ''));
 			nodes.push({
 				id: firmNodeId,
 				label: String(orphan.firmName || `Firm ${parentCrd}`),
 				group: 'firm',
 				firmId: parentCrd,
+				firmStatus: orphan.firmStatus || orphan.status || orphan.registrationStatus || null,
 			});
 			links.push({
 				source: personId,
 				target: firmNodeId,
-				relationship: 'controls',
-				isCurrent: String(orphan.firmStatus || '').toUpperCase() === 'ACTIVE',
+				// Form BD owners/officers use control styling; match syncIndividualConnectionsFromDetail.
+				relationship: isControlPositionText(orphan.position) || String(orphan.parentType || 'firm').trim().toLowerCase() === 'firm' ? 'controls' : 'employed_by',
+				position: orphan.position || null,
+				isCurrent: !parentInactive,
 			});
 		}
 		return { nodes, links };
@@ -16535,8 +16573,14 @@ async function ensureIndividualDetail(
 				console.warn('Failed to merge individual detail:', e);
 			}
 			logDetailLoadDebug(`Detail loaded for CRD ${crd}: ${personNode.disclosures?.length || 0} BC disclosures, ${personNode.iaDisclosures?.length || 0} IA disclosures`);
-			rerenderGraphNodesByIds([personNode.id]);
-			if (typeof refreshGraphColors === 'function') refreshGraphColors();
+			// Canvas mode has no SVG nodeSel — rerender/refreshGraphColors no-op there.
+			// Schedule a canvas paint so inherited Active/control colors show without a re-click.
+			if (globalState.canvasModeActive) {
+				scheduleGraphTickPositions(null, null, null);
+			} else {
+				rerenderGraphNodesByIds([personNode.id]);
+				if (typeof refreshGraphColors === 'function') refreshGraphColors();
+			}
 		} catch (err) {
 			console.error(`Error fetching individual detail for ${crd}:`, err);
 		}
@@ -17191,9 +17235,24 @@ async function ensureFirmDetail(firmNode) {
 					firmNode.label = preferredFirmName;
 					firmNode.firmName = preferredFirmName;
 				}
+				// Non-live firm refs inherit scraped firmStatus so child nodes match parent/link
+				// colors immediately (Active → live colors; inactive → gray).
+				const orphanFirmStatus = String(orphan.firmStatus || orphan.status || orphan.registrationStatus || '').trim();
+				if (orphanFirmStatus) {
+					firmNode.firmStatus = orphanFirmStatus;
+					const inactive = /inactive|terminated|revoked|suspended|notinscope/i.test(orphanFirmStatus.replace(/\s+/g, ''));
+					firmNode.inactive = inactive;
+					firmNode._vizInactive = inactive;
+				}
 				syncFirmConnectionsFromDetail(firmNode, detail);
 				firmNode._detailLoaded = true;
 				firmNode._detailValidated = true;
+				if (globalState.canvasModeActive) {
+					scheduleGraphTickPositions(null, null, null);
+				} else {
+					rerenderGraphNodesByIds([firmNode.id]);
+					if (typeof refreshGraphColors === 'function') refreshGraphColors();
+				}
 				return;
 			}
 

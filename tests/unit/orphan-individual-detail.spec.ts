@@ -24,6 +24,9 @@ describe('non-live / orphan individual detail', () => {
 		expect(node.stub).toBe(true);
 		expect(node.orphanParentCrd).toBe('6321');
 		expect(node.orphanPosition).toMatch(/CHIEF COMPLIANCE OFFICER/i);
+		expect(node.bcScope).toBe('Active');
+		expect(node._vizInactive).toBe(false);
+		expect(node.inactive).toBe(false);
 		expect(node.currentEmployments).toEqual([
 			expect.objectContaining({
 				firmId: '6321',
@@ -33,6 +36,59 @@ describe('non-live / orphan individual detail', () => {
 			}),
 		]);
 		expect(String(node.label)).toMatch(/Julie|RUETHER/i);
+	});
+
+	it('inherits Active firmStatus onto Emtemark-style MEMBER orphans and clears viz inactive', () => {
+		const node: any = { id: 'person:6378495', group: 'individual', label: 'Person 6378495', _vizInactive: true };
+		applyIndividualDetail(
+			node,
+			{
+				found: true,
+				orphan: {
+					crd: '6378495',
+					name: 'EMTEMARK, PHILIP RAYMOND',
+					position: 'MEMBER',
+					firmName: 'BERKSHIRE GLOBAL ADVISORS LP',
+					parentCrd: '124180',
+					parentType: 'firm',
+					firmStatus: 'ACTIVE',
+				},
+			},
+			'6378495',
+		);
+
+		expect(node.stub).toBe(true);
+		expect(node.bcScope).toBe('Active');
+		expect(node.firmStatus).toBe('ACTIVE');
+		expect(node.inactive).toBe(false);
+		expect(node._vizInactive).toBe(false);
+		expect(node.controlPositions).toEqual([
+			expect.objectContaining({ firmId: '124180', position: 'MEMBER' }),
+		]);
+	});
+
+	it('marks non-live orphans inactive when the parent firm status is inactive', () => {
+		const node: any = { id: 'person:1', group: 'individual', label: 'Person 1' };
+		applyIndividualDetail(
+			node,
+			{
+				found: true,
+				orphan: {
+					crd: '1',
+					name: 'INACTIVE OWNER',
+					position: 'MEMBER',
+					firmName: 'DEAD FIRM',
+					parentCrd: '99',
+					parentType: 'firm',
+					firmStatus: 'Inactive',
+				},
+			},
+			'1',
+		);
+
+		expect(node.bcScope).toBe('Inactive');
+		expect(node.inactive).toBe(true);
+		expect(node._vizInactive).toBe(true);
 	});
 
 	it('keeps parent-firm employment card fields for Schwarzmann-style CEO/COB orphans', () => {

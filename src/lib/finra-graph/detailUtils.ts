@@ -98,14 +98,18 @@ export function applyIndividualDetail(targetNode, detail, fallbackCrd = null) {
 			targetNode.firmStatus = orphan.firmStatus || orphan.status;
 		}
 		// Parent firm active → person node active; inactive parent → inactive person node.
+		// Keep _vizInactive aligned so canvas paint (which reads that flag) matches SVG.
 		const parentStatus = String(orphan.firmStatus || orphan.status || orphan.registrationStatus || '').trim();
 		if (parentStatus) {
 			const inactive = /inactive|terminated|revoked|suspended|notinscope/i.test(parentStatus.replace(/\s+/g, ''));
 			targetNode.bcScope = inactive ? 'Inactive' : 'Active';
 			targetNode.inactive = inactive;
+			targetNode._vizInactive = inactive;
 		} else {
 			// Default Form BD control persons to Active when parent status is unknown.
 			targetNode.bcScope = targetNode.bcScope || 'Active';
+			targetNode.inactive = false;
+			targetNode._vizInactive = false;
 		}
 		// Synthesize an employment/affiliation card so the sidebar shows the parent firm
 		// (Form BD owners are non-live and have no individual employment history payload).
