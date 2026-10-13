@@ -23,7 +23,6 @@ let canvasCssHeight = 1;
 /** id → node for link endpoint resolution without O(n) find per link. */
 let currentNodeById = new Map<string, Node>();
 let canvasTooltip: HTMLDivElement | null = null;
-let canvasLabelVisibleIds = new Set<string>();
 /** Screen-space label hit boxes from the last draw — avoids measureText on every pointer event. */
 let canvasLabelHitBounds: Array<{ node: Node; x0: number; y0: number; x1: number; y1: number }> = [];
 let activeCanvasDrag: { node: Node; offsetX: number; offsetY: number; pointerId: number; moved: boolean } | null = null;
@@ -60,11 +59,6 @@ function getCanvasLabelScreenPx(isBoldLabel: boolean, zoomScale: number) {
 // 	const forcedLabelIds = new Set((currentOpts.logLabelNodeIds || []).map((id: string | number) => String(id)));
 // 	return forcedLabelIds.has(nodeId) || scale >= 0.45;
 // }
-
-function isCanvasNodeLabelPainted(node: Node | null | undefined) {
-	if (!node) return false;
-	return canvasLabelVisibleIds.has(String(node.id));
-}
 
 function extractCanvasNodeCrd(node: Node | null | undefined) {
 	if (!node) return '';
@@ -135,8 +129,8 @@ function updateCanvasTooltip(node: Node | null, clientX?: number, clientY?: numb
 		hideCanvasTooltip();
 		return;
 	}
-	// Label already painted on the canvas — no tooltip needed.
-	if (isCanvasNodeLabelPainted(node)) {
+	// Default labels fill the canvas when zoomed in — CRD tooltips are redundant then.
+	if (areDefaultCanvasLabelsVisible()) {
 		hideCanvasTooltip();
 		return;
 	}
@@ -151,9 +145,13 @@ function updateCanvasTooltip(node: Node | null, clientX?: number, clientY?: numb
 	placeCanvasTooltip(node, screenX, screenY);
 }
 
-/** Show the CRD tooltip for the arrow-key focused node when its on-canvas label is hidden. */
+/** Show the CRD tooltip for the arrow-key focused node while default labels are LOD-hidden. */
 export function syncCanvasFocusTooltip() {
 	if (!parentEl) {
+		hideCanvasTooltip();
+		return;
+	}
+	if (areDefaultCanvasLabelsVisible()) {
 		hideCanvasTooltip();
 		return;
 	}
@@ -168,11 +166,7 @@ export function syncCanvasFocusTooltip() {
 		if (!hoverNodeId) hideCanvasTooltip();
 		return;
 	}
-	if (isCanvasNodeLabelPainted(node)) {
-		if (!hoverNodeId || hoverNodeId === focusedId) hideCanvasTooltip();
-		return;
-	}
-	// Keep hover tooltip if the pointer is over a different unlabeled node.
+	// Keep hover tooltip if the pointer is over a different node.
 	if (hoverNodeId && hoverNodeId !== focusedId) return;
 
 	const p = worldToScreen(node.x, node.y, currentTransform);
@@ -217,6 +211,8 @@ function getHitNode(clientX: number, clientY: number) {
 	// Only probe nodes near the pointer — full-graph scans + measureText on every
 	// mousemove locked the main thread once graphs passed ~1000 nodes.
 	const probeRadius = 24 + 48 * invK;
+	// Keep a usable screen-space hit pad when zoomed out (node dots are ~1–3px).
+	const hitPadWorld = 14 * invK;
 
 	let bestNode = null;
 	let bestDist = Infinity;
@@ -229,7 +225,7 @@ function getHitNode(clientX: number, clientY: number) {
 		const dist = Math.sqrt(dx * dx + dy * dy);
 		const size = getCanvasNodeSize(n);
 
-		if (dist <= size + 4 * invK) {
+		if (dist <= size + hitPadWorld) {
 			if (dist < bestDist) {
 				bestDist = dist;
 				bestNode = n;
@@ -419,7 +415,6 @@ export function destroyCanvas() {
 	suppressNextCanvasClick = false;
 	currentNodes = [];
 	currentLinks = [];
-	canvasLabelVisibleIds = new Set();
 	canvasLabelHitBounds = [];
 	if (hoverMoveRaf != null) {
 		cancelAnimationFrame(hoverMoveRaf);
@@ -845,7 +840,6 @@ export function drawCanvasFrame(
 		.map((node) => node.id);
 	const labelCandidateIds = new Set(labelCandidates);
 	let renderedLabelCount = 0;
-	canvasLabelVisibleIds = new Set();
 	canvasLabelHitBounds = [];
 
 	type PendingLabel = {
@@ -943,7 +937,6 @@ export function drawCanvasFrame(
 		// Zoomed-out: only Log Bold / priority / hover / focus (selected). Neighbors need zoom-in.
 		if (shouldShowLabel && (isForcedLabel || isPriorityForcedLabel || isPriorityLabel || scale >= selectedCanvasLabelZoomThreshold)) {
 			renderedLabelCount += 1;
-			canvasLabelVisibleIds.add(String(n.id));
 			const pending = { n, isBoldLabel, inactive, size };
 			if (isBoldLabel) pendingBoldLabels.push(pending);
 			else pendingNormalLabels.push(pending);
@@ -990,7 +983,7 @@ export function drawCanvasFrame(
 	ctx.textAlign = 'start';
 	ctx.textBaseline = 'alphabetic';
 
-	// Arrow-key focus: show CRD tooltip when the focused node's label was not painted.
+	// Arrow-key focus: show CRD tooltip while default labels are LOD-hidden.
 	syncCanvasFocusTooltip();
 }
 
