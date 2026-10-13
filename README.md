@@ -219,7 +219,7 @@ Vercel runs a **daily** cron (`0 10 * * *` UTC) against `/api/finra/external-val
 
 **Selection refresh:** after a node is selected and the expand/pulse animation settles, the client POSTs `/api/finra/selection-refresh`. The server reads Redis, compares against live FINRA/SEC, and writes Redis + returns detail when newer. Click handling stays local-first. On HTTP 429 the server pauses 7–9 minutes (shared Redis backoff) and shortens that pause after later successes (floor 3 minutes). Per-node cooldown avoids re-checking the same CRD on every click.
 
-Search and roster reads stay local-first (gzip sidecars / Redis). The cron discovers new/gap CRDs; selection refresh keeps selected known CRDs fresh without local pushes.
+Search and roster reads stay local-first (gzip sidecars / Redis). The cron discovers new/gap CRDs; selection refresh keeps selected known CRDs fresh without local pushes. After local Redis gains new CRDs, refresh shipped search sidecars with `pnpm run sidecars:status` / `pnpm run sidecars:rebuild`, then commit `public/search-indexes/*` and deploy (see `docs/search-sidecar.md`).
 
 ## CONTRIBUTING & TESTS
 

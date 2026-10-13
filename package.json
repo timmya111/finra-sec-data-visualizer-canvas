@@ -16,6 +16,8 @@
 		"test:e2e:headed": "playwright test --headed",
 		"test:smoke": "playwright test tests/e2e/smoke.spec.ts tests/e2e/firm-connection-bidirectional.spec.ts",
 		"ci:install-browsers": "npx playwright install --with-deps || npx playwright install chromium",
+		"sidecars:status": "node .local/scripts/rebuild_search_sidecars.mjs --status",
+		"sidecars:rebuild": "NODE_OPTIONS=--max-old-space-size=8192 node .local/scripts/rebuild_search_sidecars.mjs --apply",
 		"vercel-build": "pnpm run build"
 	},
 	"dependencies": {

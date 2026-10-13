@@ -25,6 +25,7 @@ Specialized (keep; do not duplicate):
 - `prebuild.js` — Next prebuild hook
 - `build_workers.js` — pure JS `d3-force` worker bundle
 - `build_search_indexes.js`, `copy-search-indexes.js` — search sidecars → `public/search-indexes/`
+- `rebuild_search_sidecars.mjs` — **preferred offline refresh**: status / build+copy for commit+deploy (`pnpm run sidecars:status`, `pnpm run sidecars:rebuild`). See `docs/search-sidecar.md`.
 - `build_primed_cache_bundle.js` — primed cache (prebuild when raw caches exist)
 - `build_graph_from_cache.js` — local graph artifact when needed
 - `fetch_graph_from_server.js` — optional remote graph sync from prebuild
