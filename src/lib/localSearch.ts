@@ -30,12 +30,90 @@ type PreparedLocalSearchDoc = LocalSearchDoc & {
 	nameTokens: string[];
 	surnameCandidates: string[];
 	surnameCompactCandidates: string[];
+	/** Firm IDs extracted once at load — avoids scanning employment arrays on every query. */
+	employmentFirmIds: string[];
+	/** Normalized state/street values extracted once at load. */
+	stateStreetValues: string[];
 };
+
+const HEAVY_SEARCH_HIT_KEYS = [
+	'ind_current_employments',
+	'ind_ia_current_employments',
+	'ind_previous_employments',
+	'ind_ia_previous_employments',
+	'currentEmployments',
+	'currentIAEmployments',
+	'previousEmployments',
+	'previousIAEmployments',
+] as const;
+
+function listEmploymentCollections(hit: LocalSearchHit | null | undefined) {
+	if (!hit || typeof hit !== 'object') return [] as any[][];
+	return [
+		hit.ind_current_employments,
+		hit.ind_ia_current_employments,
+		hit.ind_previous_employments,
+		hit.ind_ia_previous_employments,
+		hit.currentEmployments,
+		hit.currentIAEmployments,
+		hit.previousEmployments,
+		hit.previousIAEmployments,
+	].filter(Array.isArray) as any[][];
+}
+
+function collectEmploymentFirmIds(hit: LocalSearchHit | null | undefined): string[] {
+	const firmIds = new Set<string>();
+	for (const collection of listEmploymentCollections(hit)) {
+		for (const entry of collection) {
+			const firmId = employmentFirmId(entry);
+			if (firmId) firmIds.add(firmId);
+		}
+	}
+	return Array.from(firmIds);
+}
+
+function collectStateStreetValues(hit: LocalSearchHit | null | undefined): string[] {
+	const values = new Set<string>();
+	const push = (...items: unknown[]) => {
+		for (const item of items) {
+			if (item == null) continue;
+			const text = normalizeText(item);
+			if (text) values.add(text);
+		}
+	};
+	if (!hit || typeof hit !== 'object') return [];
+	push(hit.state, hit.street1, hit.street2);
+	for (const collection of listEmploymentCollections(hit)) {
+		for (const job of collection) {
+			push(job?.state, job?.street1, job?.street2);
+		}
+	}
+	return Array.from(values);
+}
+
+/** Drop bulky employment arrays from the in-memory hit after extracting match fields. */
+function slimSearchHit(hit: LocalSearchHit, connectionCount: number): LocalSearchHit {
+	const slim: LocalSearchHit = { ...hit };
+	for (const key of HEAVY_SEARCH_HIT_KEYS) {
+		if (key in slim) delete slim[key];
+	}
+	if (connectionCount > 0) {
+		const existing = Number(slim.ind_connection_count ?? slim.knownConnectionCount);
+		if (!Number.isFinite(existing) || existing <= 0) {
+			slim.ind_connection_count = connectionCount;
+		}
+	}
+	return slim;
+}
 
 export type LocalSearchIndex = {
 	generatedAt?: string;
 	bucket: string;
 	docs: PreparedLocalSearchDoc[];
+	/** Exact name/surname/id token → doc indexes for candidate narrowing. */
+	nameTokenIndex?: Map<string, number[]>;
+	/** Employment firm id → individual doc indexes. */
+	employmentFirmIdIndex?: Map<string, number[]>;
 };
 
 export type LocalSearchOptions = {
@@ -283,6 +361,10 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 	const primaryIndividualName = [hit.ind_firstname, hit.ind_middlename, hit.ind_lastname].filter(Boolean).join(' ');
 	const primaryFirmName = hit.firm_name || hit.firmName || hit.organizationName || hit.organization_name || hit.companyName || hit.legalName || hit.name;
 	const primaryNameCandidates = uniqueNormalized([primaryIndividualName, primaryFirmName, hit.name, hit.fullName, hit.full_name, hit.displayName, hit.label, hit.personName]);
+	// Collect match fields from full employment payloads before they are stripped from memory.
+	const employmentFirmIds = collectEmploymentFirmIds(hit);
+	const stateStreetValues = collectStateStreetValues(hit);
+	const connectionCount = countIndividualConnectionsFromSearchHit(hit) || employmentFirmIds.length;
 	const nameCandidates = collectNameCandidates(doc);
 	const surnameCandidates = collectSurnameCandidates(doc);
 	const normalizedNameSearchText = simplifyName(doc.nameSearchText || primaryNameCandidates.join(' '));
@@ -291,6 +373,10 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 	const nameTokens = Array.from(new Set(nameCandidates.flatMap((candidate) => tokenizeQuery(candidate))));
 	return {
 		...doc,
+		// Drop bulky raw blobs once normalized copies exist — keeps warm RSS closer to match fields only.
+		searchText: '',
+		strictSearchText: '',
+		hit: slimSearchHit(hit, connectionCount),
 		primaryNameSearchText: normalizedNameSearchText,
 		normalizedNameSearchText,
 		normalizedStrictSearchText,
@@ -301,7 +387,84 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 		nameTokens,
 		surnameCandidates,
 		surnameCompactCandidates: Array.from(new Set(surnameCandidates.map((candidate) => compactNormalizeText(candidate)).filter(Boolean))),
+		employmentFirmIds,
+		stateStreetValues,
 	};
+}
+
+function buildSearchIndexes(docs: PreparedLocalSearchDoc[]) {
+	const nameTokenIndex = new Map<string, number[]>();
+	const employmentFirmIdIndex = new Map<string, number[]>();
+	const addToken = (token: string, docIndex: number) => {
+		const key = String(token || '')
+			.trim()
+			.toLowerCase();
+		if (!key) return;
+		const list = nameTokenIndex.get(key);
+		if (list) list.push(docIndex);
+		else nameTokenIndex.set(key, [docIndex]);
+	};
+	for (let docIndex = 0; docIndex < docs.length; docIndex += 1) {
+		const doc = docs[docIndex];
+		for (const token of doc.nameTokens || []) addToken(token, docIndex);
+		for (const token of doc.primaryNameTokens || []) addToken(token, docIndex);
+		for (const token of doc.surnameCandidates || []) addToken(token, docIndex);
+		for (const token of doc.surnameCompactCandidates || []) addToken(token, docIndex);
+		const idTail = String(doc.id || '')
+			.split(':')
+			.pop();
+		if (idTail) addToken(idTail, docIndex);
+		for (const firmId of doc.employmentFirmIds || []) {
+			const key = String(firmId || '').trim();
+			if (!key) continue;
+			const list = employmentFirmIdIndex.get(key);
+			if (list) list.push(docIndex);
+			else employmentFirmIdIndex.set(key, [docIndex]);
+		}
+	}
+	return { nameTokenIndex, employmentFirmIdIndex };
+}
+
+function collectCandidateDocs(
+	docs: PreparedLocalSearchDoc[],
+	index: LocalSearchIndex,
+	normalizedQuery: string,
+	tokens: string[],
+): PreparedLocalSearchDoc[] {
+	if (!docs.length) return docs;
+	const numericQuery = /^\d{1,10}$/.test(normalizedQuery);
+	if (numericQuery) {
+		const byFirm = index.employmentFirmIdIndex?.get(normalizedQuery) || [];
+		const byToken = index.nameTokenIndex?.get(normalizedQuery) || [];
+		if (byFirm.length || byToken.length) {
+			const seen = new Set<number>();
+			const out: PreparedLocalSearchDoc[] = [];
+			for (const docIndex of [...byToken, ...byFirm]) {
+				if (seen.has(docIndex)) continue;
+				seen.add(docIndex);
+				const doc = docs[docIndex];
+				if (doc) out.push(doc);
+			}
+			return out;
+		}
+	}
+
+	const tokenIndex = index.nameTokenIndex;
+	if (!tokenIndex || !tokens.length) return docs;
+
+	// Prefer the rarest exact token so fuzzy/scored matching runs on a small candidate set.
+	let rarest: number[] | null = null;
+	for (const token of tokens) {
+		const list = tokenIndex.get(token);
+		if (!list) {
+			rarest = null;
+			break;
+		}
+		if (!rarest || list.length < rarest.length) rarest = list;
+	}
+	if (!rarest) return docs; // exact token miss → keep full scan for fuzzy paths
+	if (rarest.length >= docs.length * 0.45) return docs; // not selective enough
+	return rarest.map((docIndex) => docs[docIndex]).filter(Boolean);
 }
 
 function tokenizeQuery(query: string) {
@@ -387,10 +550,13 @@ async function loadIndex(bucket: LocalSearchBucket, baseUrl?: string, seedRoots:
 						if (Array.isArray(parsed?.docs)) allDocs.push(...parsed.docs);
 					}
 
+					const preparedDocs = allDocs.map(prepareDoc);
+					allDocs.length = 0;
 					index = {
 						generatedAt: generatedAt ?? null,
 						bucket: bucketName ?? bucket,
-						docs: allDocs.map(prepareDoc),
+						docs: preparedDocs,
+						...buildSearchIndexes(preparedDocs),
 					};
 				} catch (err: any) {
 					console.warn(`[localSearch] Failed to load gzip search sidecar for ${bucket}:`, err?.message || err);
@@ -403,10 +569,12 @@ async function loadIndex(bucket: LocalSearchBucket, baseUrl?: string, seedRoots:
 					try {
 						const parsed = await readIndexPayloadFromUrl(remoteUrl);
 						if (parsed) {
+							const preparedDocs = Array.isArray(parsed.docs) ? parsed.docs.map(prepareDoc) : [];
 							index = {
 								generatedAt: parsed.generatedAt ?? null,
 								bucket: parsed.bucket ?? bucket,
-								docs: Array.isArray(parsed.docs) ? parsed.docs.map(prepareDoc) : [],
+								docs: preparedDocs,
+								...buildSearchIndexes(preparedDocs),
 							};
 						}
 					} catch (err: any) {
@@ -1001,18 +1169,10 @@ function getAddressFieldMatchScore(text: string, normalizedQuery: string, tokens
 }
 
 function hasEmploymentFirmIdMatch(doc: PreparedLocalSearchDoc, normalizedQuery: string): boolean {
-	if (doc.type !== 'individual' || !doc.hit) return false;
-	const emps = [
-		...(doc.hit.ind_current_employments || []),
-		...(doc.hit.ind_ia_current_employments || []),
-		...(doc.hit.ind_previous_employments || []),
-		...(doc.hit.ind_ia_previous_employments || []),
-	];
-	for (const e of emps) {
-		const fid = String(e?.firmId || e?.firm_id || '').trim();
-		if (fid && fid === normalizedQuery) return true;
-	}
-	return false;
+	if (doc.type !== 'individual') return false;
+	const ids = doc.employmentFirmIds || [];
+	if (!ids.length || !normalizedQuery) return false;
+	return ids.includes(normalizedQuery);
 }
 
 function getAddressMatchScore(doc: PreparedLocalSearchDoc, normalizedQuery: string, tokens: string[]) {
@@ -1046,25 +1206,10 @@ function getStrictDocumentMatchScore(doc: PreparedLocalSearchDoc, normalizedQuer
 // whether a document matches at all. It requires the whole phrase or ALL query tokens to
 // be present in the strict blob — a single incidental token match is not sufficient.
 function getStateStreetExactValues(doc: PreparedLocalSearchDoc): string[] {
-	const hit = doc.hit || {};
-	const values: string[] = [];
-	const push = (...items: unknown[]) => {
-		for (const item of items) {
-			if (item == null) continue;
-			const text = normalizeText(item);
-			if (text) values.push(text);
-		}
-	};
-	push(
-		hit.state,
-		hit.street1,
-		hit.street2,
-		...(Array.isArray(hit.ind_current_employments) ? hit.ind_current_employments.flatMap((job: any) => [job?.state, job?.street1, job?.street2]) : []),
-		...(Array.isArray(hit.ind_previous_employments) ? hit.ind_previous_employments.flatMap((job: any) => [job?.state, job?.street1, job?.street2]) : []),
-		...(Array.isArray(hit.ind_ia_current_employments) ? hit.ind_ia_current_employments.flatMap((job: any) => [job?.state, job?.street1, job?.street2]) : []),
-		...(Array.isArray(hit.ind_ia_previous_employments) ? hit.ind_ia_previous_employments.flatMap((job: any) => [job?.state, job?.street1, job?.street2]) : []),
-	); 
-	return Array.from(new Set(values));
+	if (Array.isArray(doc.stateStreetValues) && doc.stateStreetValues.length) {
+		return doc.stateStreetValues;
+	}
+	return collectStateStreetValues(doc.hit || {});
 }
 
 function hasPartialStateStreetMatch(doc: PreparedLocalSearchDoc, normalizedQuery: string) {
@@ -1201,8 +1346,10 @@ export async function searchLocalIndex(source: LocalSearchSource, type: LocalSea
 
 	const docs = Array.isArray(index?.docs) ? index.docs : [];
 	const hasMinimumQuery = hasMinimumSearchQuery(query);
+	const candidates =
+		!normalizedQuery || !hasMinimumQuery ? [] : collectCandidateDocs(docs, index, normalizedQuery, tokens);
 	const matches =
-		!normalizedQuery || !hasMinimumQuery ? [] : await buildQueryMatchesAsync(docs, query, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
+		!normalizedQuery || !hasMinimumQuery ? [] : await buildQueryMatchesAsync(candidates, query, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
 	const pageDocs = limit > 0 ? matches.slice(offset, offset + limit) : [];
 	const resultDocs = pageDocs.map((doc) => doc.hit || {});
 	return {
@@ -1307,7 +1454,8 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 		const normalizedQuery = simplifyName(searchQuery);
 		const tokens = tokenizeQuery(searchQuery);
 		if (!normalizedQuery || !tokens.length || !hasMinimumSearchQuery(searchQuery)) continue;
-		const matches = await buildQueryMatchesAsync(docs, searchQuery, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
+		const candidates = collectCandidateDocs(docs, index, normalizedQuery, tokens);
+		const matches = await buildQueryMatchesAsync(candidates, searchQuery, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
 		if (!matches.length) continue;
 		for (const match of matches) {
 			const docId = String(match?.hit?.id || match?.id || match?.hit?.ind_source_id || match?.hit?.firm_source_id || '').trim();
