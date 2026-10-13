@@ -63,6 +63,8 @@ import {
 	filterSelectionLogLabelNodeIdsByScope,
 	generateGraphTemplateName,
 	isSelectionLogPeopleEntry,
+	isSelectionLogFirmEntry,
+	resolveSelectionLogEntryGroupClass,
 	resolveLinkEndpoints,
 	rebindLinksToNodes,
 	handleNodeKeyboardActivation,
@@ -243,6 +245,15 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(filterSelectionLogLabelNodeIdsByScope(allIds, selectionLog, 'people')).toEqual(['person:3102054', 'person:999']);
 		expect(isSelectionLogPeopleEntry({ id: 'person:1', group: 'firm' })).toBe(false);
 		expect(isSelectionLogPeopleEntry({ id: 'person:1' })).toBe(true);
+	});
+
+	it('resolveSelectionLogEntryGroupClass keeps firm/individual type classes for log borders', () => {
+		expect(resolveSelectionLogEntryGroupClass({ id: 'firm:143571', group: 'firm' })).toBe('firm');
+		expect(resolveSelectionLogEntryGroupClass({ id: 'firm:143571' })).toBe('firm');
+		expect(resolveSelectionLogEntryGroupClass({ id: 'person:1', group: 'individual' })).toBe('individual');
+		expect(resolveSelectionLogEntryGroupClass({ id: 'person:1' })).toBe('individual');
+		expect(isSelectionLogFirmEntry({ id: 'firm:9', group: '' })).toBe(true);
+		expect(isSelectionLogFirmEntry({ id: 'person:9', group: 'firm' })).toBe(true);
 	});
 
 	it('generateGraphTemplateName falls back when the graph snapshot is empty', () => {
@@ -547,6 +558,27 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(html).not.toContain('Should Not Render In Panel');
 		expect(html).not.toContain('Also Should Not Render');
 		expect(html).not.toContain('Current Connections - Core');
+	});
+
+	it('renderFirmDetail hides the dashboard connections link when the firm has no connections', () => {
+		const html = renderFirmDetail({
+			id: 'firm:999001',
+			firmId: '999001',
+			label: 'EMPTY ROSTER FIRM',
+			group: 'firm',
+			hasFinraData: true,
+			bcScope: 'Active',
+			knownConnectionCount: 0,
+			directOwners: [{ crdNumber: '900001', legalName: 'Owner Control Person', position: 'CEO' }],
+			currentConnections: [],
+			previousConnections: [],
+			basicInformation: {},
+		} as any);
+
+		expect(html).toContain('Direct Owners');
+		expect(html).toContain('Owner Control Person');
+		expect(html).not.toContain('Open Dashboard to view &amp; select connections');
+		expect(html).not.toContain('Current &amp; Previous Connections');
 	});
 
 	it('renderFirmDetail shows parent FINRA profile link for scraped/orphan firms', () => {

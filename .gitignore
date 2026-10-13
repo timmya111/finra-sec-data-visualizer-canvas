@@ -39,10 +39,25 @@ test-results/
 # Ad-hoc root test/scrape scripts — use .local/scripts/scrape.mjs + .local/test-scripts/
 /test-*.js
 /test_*.js
+/test-*.mjs
+/test_*.ts
 /test.json
+/test-svg.html
 /unwrap.js
 /scrape*.js
 /crawl*.js
+/check_*.mjs
+/update-*.mjs
+/remove-*.mjs
+/force_*.mjs
+/fix-*.mjs
+/fix-*.js
+/generate-icons.mjs
+/count_hopper*.py
+/patch.py
+/patch[0-9]*.py
+/patch[0-9]*.js
+/isAutoExpansionLink.ts
 /*-verified.png
 /red-over-blue-links.png
 /clear-non-log*.png
@@ -96,7 +111,3 @@ patch_**
 next-env.d.ts
 .local/scripts/generate_search**.js
 rust-force-layout/target/
-
-/test-*.mjs
-/fix-*.mjs
-/fix-*.js

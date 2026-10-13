@@ -1565,6 +1565,14 @@ export function renderFirmDetail(d: any) {
 	const businessPhone = String(d.businessPhone || '').trim();
 	const SIDEBAR_CONNECTIONS_PREVIEW_LIMIT = 24;
 	// Employment current/previous rosters are dashboard-only. Side panel keeps Form BD owners.
+	const knownConnectionCount = Math.max(
+		0,
+		Math.floor(Number(d.knownConnectionCount || d.firm_connection_count || d.firmCount) || 0),
+	);
+	const rosterConnectionCount =
+		(Array.isArray(d.currentConnections) ? d.currentConnections.length : 0) +
+		(Array.isArray(d.previousConnections) ? d.previousConnections.length : 0);
+	const showDashboardConnectionsLink = Boolean(firmId) && (knownConnectionCount > 0 || rosterConnectionCount > 0);
 
 	return `
 		<div class='fg-sb-header firm'>
@@ -1645,7 +1653,7 @@ export function renderFirmDetail(d: any) {
       ${row('Fiscal Year End', esc(d.fiscalYearEnd || '–'))}
       ${d.otherNames?.length ? row('Other names', esc(d.otherNames.join('; '))) : ''}
       ${
-				firmId ?
+				showDashboardConnectionsLink ?
 					`
       <div class='fg-section-title fg-section-title--sticky'>Current &amp; Previous Connections</div>
       <a href="/dashboard/firm/${encodeURIComponent(String(firmId))}" class="fg-tl-entry fg-card-clickable" style="display:block;text-decoration:none;text-align:center;margin-top:8px;padding:12px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-secondary);">

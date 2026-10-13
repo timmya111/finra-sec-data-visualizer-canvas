@@ -5204,22 +5204,33 @@ html[data-theme='dark'] .fg-crd-paste-import {
 
 .fg-log-entry:hover {
 	background: #fff;
-	border-color: var(--accent);
+	/* Do not use border-color shorthand — it wipes the firm/individual left accent. */
+	border-top-color: var(--accent);
+	border-right-color: var(--accent);
+	border-bottom-color: var(--accent);
 }
 
 .fg-log-entry.individual {
-	border-left-width: 4px;
-	border-left-color: var(--color-highlight-individual);
+	border-left-width: 4px !important;
+	border-left-color: var(--color-highlight-individual) !important;
 }
 
 .fg-log-entry.firm {
-	border-left-width: 4px;
-	border-left-color: var(--color-highlight-firm);
+	border-left-width: 4px !important;
+	border-left-color: var(--color-highlight-firm) !important;
 }
 
-.fg-log-entry.is-child-node.is-child-line-muted {
-	border-left-width: 1px;
+/* People-only: de-emphasize non-bold child rows. Firm type color must stay visible. */
+.fg-log-entry.individual.is-child-node.is-child-line-muted {
+	border-left-width: 1px !important;
 	border-left-color: transparent !important;
+}
+
+.fg-log-entry.firm.is-child-node.is-child-line-muted,
+.fg-log-entry.firm.is-child-node,
+.fg-log-entry.firm.is-child-line-muted {
+	border-left-width: 4px !important;
+	border-left-color: var(--color-highlight-firm) !important;
 }
 
 .fg-log-text {
@@ -5309,7 +5320,10 @@ html[data-theme='dark'] .fg-crd-paste-import {
 }
 
 .fg-log-entry.is-editing {
-	border-color: rgba(220, 38, 38, 0.28);
+	/* Preserve firm/individual left accent while editing. */
+	border-top-color: rgba(220, 38, 38, 0.28);
+	border-right-color: rgba(220, 38, 38, 0.28);
+	border-bottom-color: rgba(220, 38, 38, 0.28);
 	box-shadow: none;
 }
 

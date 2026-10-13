@@ -1710,11 +1710,19 @@ function sanitizeSelectionLogEntries(entries: unknown): Array<{ id: string; labe
 			if (!entry || typeof entry !== 'object') return null;
 			const id = String((entry as any).id || '').trim();
 			if (!id) return null;
+			const rawGroup = String((entry as any).group || '');
+			const normalizedGroup = normalizeSelectionLogGroup(rawGroup);
+			let group = normalizedGroup === 'unknown' ? '' : normalizedGroup;
+			if (!group) {
+				const idLower = id.toLowerCase();
+				if (idLower.startsWith('firm:') || idLower.startsWith('firm_')) group = 'firm';
+				else if (idLower.startsWith('person:') || idLower.startsWith('person_')) group = 'individual';
+			}
 			return {
 				id,
 				label: String((entry as any).label || id),
 				secondaryId: String((entry as any).secondaryId || ''),
-				group: String((entry as any).group || ''),
+				group,
 			};
 		})
 		.filter(Boolean) as Array<{ id: string; label: string; secondaryId: string; group: string }>;
@@ -3623,6 +3631,14 @@ export function isSelectionLogFirmEntry(entry: { id?: string; group?: string } |
 	return id.startsWith('firm:') || id.startsWith('firm_');
 }
 
+/** CSS class for the log-row type border (`firm` orange / `individual` blue). */
+export function resolveSelectionLogEntryGroupClass(entry: { id?: string; group?: string } | null | undefined): 'firm' | 'individual' | '' {
+	if (isSelectionLogFirmEntry(entry)) return 'firm';
+	if (isSelectionLogPeopleEntry(entry)) return 'individual';
+	const raw = String(entry?.group || '').trim();
+	return raw === 'firm' || raw === 'individual' ? raw : '';
+}
+
 export function filterSelectionLogLabelNodeIdsByScope(
 	nodeIds: Array<string | null | undefined> = [],
 	selectionLog: Array<{ id?: string; group?: string }> = [],
@@ -3940,6 +3956,10 @@ function setSidebarViewMode(mode: SidebarViewMode, options: { expandMobile?: boo
 		renderSidebar(sidebarSelectedNode, { reveal: true });
 	}
 	updateSelectionLogChrome();
+	if (mode === 'log') {
+		// Rebuild so firm/people type borders are correct after toggles or stale bumped rows.
+		scheduleSelectionLogUI();
+	}
 }
 
 function getTraceModeNodeIds() {
@@ -5620,6 +5640,14 @@ function bumpSelectionLogEntryInDom(entryId: string): boolean {
 		const group = entry.closest('.fg-selection-log-group');
 		if (!group) return false;
 		const header = group.querySelector('.fg-selection-log-group__header');
+		const headerText = String(header?.textContent || '').trim().toLowerCase();
+		const inFirmsGroup = headerText === 'firms' || entry.classList.contains('firm');
+		// Keep type border classes correct even when bumping pre-fix DOM rows.
+		entry.classList.toggle('firm', inFirmsGroup);
+		entry.classList.toggle('individual', !inFirmsGroup);
+		if (inFirmsGroup) {
+			entry.classList.remove('is-child-node', 'is-child-line-muted');
+		}
 		const insertBeforeNode = header ? header.nextSibling : group.firstChild;
 		if (insertBeforeNode === entry) {
 			moved = true;
@@ -5724,7 +5752,10 @@ function updateSelectionLogUI() {
 				const entryId = String(entry.id || '').trim();
 				const isBoldChoice = rememberedSelectionLogBoldNodeIds.has(entryId) || isSelectionLogEntryBold(entryId);
 				const isLabelShown = isSelectionLogEntryBold(entryId);
-				div.className = `fg-log-entry ${entry.group}${isSelectionLogEditMode ? ' is-editing' : ''}${isBoldChoice ? ' is-bold-entry' : ''}${isLabelShown ? ' is-label-bold' : ''}`;
+				// Section membership is the source of truth for the type border. The Firms
+				// bucket includes non-people leftovers, so always paint those rows orange.
+				const entryGroupClass = groupKey === 'firms' ? 'firm' : 'individual';
+				div.className = `fg-log-entry ${entryGroupClass}${isSelectionLogEditMode ? ' is-editing' : ''}${isBoldChoice ? ' is-bold-entry' : ''}${isLabelShown ? ' is-label-bold' : ''}`;
 				div.dataset.logId = entryId;
 				const text = `${entry.label} :: ${entry.secondaryId}`;
 				const entryTextTitle = isSelectionLogEditMode ? 'Edit mode enabled' : 'Click to copy';
@@ -5734,7 +5765,9 @@ function updateSelectionLogUI() {
 					isSelectionLogEditMode ?
 						'<svg viewBox="0 0 16 16" fill="none" width="18" height="18" aria-hidden="true"><path d="M4 4L12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M12 4L4 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
 					:	'<svg viewBox="0 0 16 16" fill="currentColor" width="18" height="18" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>';
-				const childNode = isSelectionLogChildNode(entry.id);
+				// Child-mute is for people rows only. Firms that are employment-link
+				// targets would otherwise lose the orange type border via is-child-line-muted.
+				const childNode = groupKey === 'people' && isSelectionLogChildNode(entry.id);
 				const secondaryLineHidden = childNode && clearedSelectionLogLabelNodeIds.has(entryId);
 				const labelToggleTitle =
 					!isSelectionLogBold ? 'Turn Log Bold On, then choose Bold for this CRD'
@@ -12275,6 +12308,24 @@ function readSidecarKnownConnectionCount(node) {
 	return 0;
 }
 
+/** True when the firm has a people roster worth opening on the dashboard. */
+export function firmHasDashboardConnectionRoster(
+	firmNode: any,
+	graphDerivedEntries: Array<{ group?: string; relationshipLabels?: Iterable<string> | null }> = [],
+) {
+	if (readSidecarKnownConnectionCount(firmNode) > 0) return true;
+	const current = Array.isArray(firmNode?.currentConnections) ? firmNode.currentConnections.length : 0;
+	const previous = Array.isArray(firmNode?.previousConnections) ? firmNode.previousConnections.length : 0;
+	if (current + previous > 0) return true;
+	for (const entry of graphDerivedEntries) {
+		if (String(entry?.group || '') !== 'individual') continue;
+		const labels = Array.from(entry.relationshipLabels || []).map((label) => String(label || '').toLowerCase());
+		// Form BD control-only neighbors stay in the side panel; dashboard link is for employment rosters.
+		if (!labels.length || labels.some((label) => !label.includes('control'))) return true;
+	}
+	return false;
+}
+
 function getKnownNodeConnectionFloor(node) {
 	const counts = { total: 0, controls: 0, employed: 0 };
 	if (!node || typeof node !== 'object') return counts;
@@ -14764,6 +14815,15 @@ function scheduleFirmConnectionCountHydration(nodes) {
 			if (Array.isArray(globalState.layoutNodes) && Array.isArray(globalState.layoutLinks)) {
 				applyGraphDerivedNodeMetrics(globalState.layoutNodes, globalState.layoutLinks);
 				rerenderGraphNodesByIds(changedIds);
+			}
+			const selectedId = String(sidebarSelectedNode?.id || globalState.selectedId || '').trim();
+			if (selectedId && changedIds.includes(selectedId) && sidebarViewMode === 'info') {
+				const selectedNode =
+					sidebarSelectedNode ||
+					globalState.layoutNodes?.find((entry) => String(entry?.id || '').trim() === selectedId) ||
+					globalState.graphData?.nodes?.find((entry) => String(entry?.id || '').trim() === selectedId) ||
+					null;
+				if (selectedNode) renderSidebar(selectedNode, { reveal: true });
 			}
 			try {
 				saveSession();
@@ -20343,6 +20403,9 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 	try {
 		getKnownNodeConnectionFloor(d);
 	} catch {}
+	if (d?.group === 'firm') {
+		scheduleFirmConnectionCountHydration([d]);
+	}
 	if (previousDisplayedId !== (d?.id || '')) {
 		sidebarSourceToggle = 'finra';
 	}
@@ -22316,7 +22379,7 @@ function renderFirmDetail(d: any) {
 			}
 
 			${
-				firmId ?
+				firmId && firmHasDashboardConnectionRoster(d, graphDerivedConnections) ?
 					`
 			<div class="fg-section-title fg-section-title--sticky">Current &amp; Previous Connections</div>
 			<a href="/dashboard/firm/${encodeURIComponent(firmId)}" class="fg-tl-entry fg-card-clickable" style="display: block; text-decoration: none; text-align: center; margin-top: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-secondary);">
