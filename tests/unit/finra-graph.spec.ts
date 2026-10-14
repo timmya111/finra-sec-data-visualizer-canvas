@@ -1414,8 +1414,6 @@ describe('FinraGraph DOM helpers (unit)', () => {
 				highlightRootIds: new Set<string>(),
 				persistentSelectedIds: new Set<string>(),
 				visitedNodeIds: new Set(['person:4624219']),
-				isFetchedLeafNode: () => false,
-				isFetchedExhaustedConnectedNode: () => false,
 			}),
 		).toBe(false);
 	});
@@ -1429,8 +1427,6 @@ describe('FinraGraph DOM helpers (unit)', () => {
 				highlightRootIds: new Set(['person:4624219']),
 				persistentSelectedIds: new Set(['person:4624219']),
 				visitedNodeIds: new Set(['person:4624219', 'person:4624220']),
-				isFetchedLeafNode: () => false,
-				isFetchedExhaustedConnectedNode: () => false,
 			}),
 		).toBe(false);
 	});
@@ -1443,23 +1439,28 @@ describe('FinraGraph DOM helpers (unit)', () => {
 				selectedId: 'person:222',
 				highlightRootIds: new Set<string>(), // hop roots cleared
 				persistentSelectedIds: new Set(['person:111', 'person:222']),
-				isFetchedLeafNode: () => false,
-				isFetchedExhaustedConnectedNode: () => false,
 			}),
 		).toBe(true);
 	});
 
-	it('shouldRenderNodeSelected still marks exhausted fetched nodes as selected', () => {
-		const node = { id: 'person:4240769', label: 'Example Person' } as any;
+	it('shouldRenderNodeSelected does not auto-select fetched leaf or exhausted nodes', () => {
+		const leaf = { id: 'person:999111', label: 'Leaf Fetch' } as any;
+		const exhausted = { id: 'person:4240769', label: 'Example Person' } as any;
 
 		expect(
-			shouldRenderNodeSelected(node, {
+			shouldRenderNodeSelected(leaf, {
 				selectedId: null,
 				highlightRootIds: new Set<string>(),
-				isFetchedLeafNode: () => false,
-				isFetchedExhaustedConnectedNode: () => true,
+				persistentSelectedIds: new Set<string>(),
 			}),
-		).toBe(true);
+		).toBe(false);
+		expect(
+			shouldRenderNodeSelected(exhausted, {
+				selectedId: null,
+				highlightRootIds: new Set<string>(),
+				persistentSelectedIds: new Set<string>(),
+			}),
+		).toBe(false);
 	});
 
 	it('shouldAutoRevealNodeConnections reveals firm and individual connections', () => {

@@ -1244,34 +1244,6 @@ function getKnownCurrentFirmConnectionIds(node) {
 	return currentConnectionIds;
 }
 
-function isFetchedLeafNode(node) {
-	if (!node?.id) return false;
-	if (node._leafPredGen === globalState.selectionPredicateCacheGen && typeof node._leafPredCached === 'boolean') {
-		return node._leafPredCached;
-	}
-	let result = false;
-	if (globalState.initialServerNodeIds instanceof Set && globalState.initialServerNodeIds.has(node.id)) {
-		result = false;
-	} else if (!hasTrustedCurrentRelationshipData(node)) {
-		result = false;
-	} else if (!hasKnownRevealableChildCount(node)) {
-		result = false;
-	} else if (getExpectedRevealableNeighborIds(node).size > 0) {
-		result = false;
-	} else {
-		const neighborCount = globalState.neighborMap?.get(node.id)?.size;
-		if (typeof neighborCount === 'number') {
-			result = neighborCount === 0;
-		} else {
-			ensureLayoutLinkIndexes();
-			result = (globalState.layoutLinksByNodeId.get(String(node.id)) || []).length === 0;
-		}
-	}
-	node._leafPredGen = globalState.selectionPredicateCacheGen;
-	node._leafPredCached = result;
-	return result;
-}
-
 function getVisibleRevealableNeighborIds(nodeId) {
 	const visibleNeighborIds = new Set<string>();
 	if (!nodeId) return visibleNeighborIds;
@@ -1365,48 +1337,6 @@ export function isRevealableChainExhausted(
 	}
 
 	return true;
-}
-
-function isFetchedExhaustedConnectedNode(node) {
-	if (!node?.id) return false;
-	if (node._exhaustedPredGen === globalState.selectionPredicateCacheGen && typeof node._exhaustedPredCached === 'boolean') {
-		return node._exhaustedPredCached;
-	}
-	let result = false;
-	if (globalState.initialServerNodeIds instanceof Set && globalState.initialServerNodeIds.has(node.id)) {
-		result = false;
-	} else if (!hasTrustedCurrentRelationshipData(node)) {
-		result = false;
-	} else if (!hasKnownRevealableChildCount(node)) {
-		result = false;
-	} else {
-		const neighborCount = globalState.neighborMap?.get(node.id)?.size;
-		const hasNeighbors = typeof neighborCount === 'number' ? neighborCount > 0 : getNeighborIds(node.id).size > 0;
-		if (!hasNeighbors) {
-			result = false;
-		} else {
-			const expectedNeighborIds = getExpectedRevealableNeighborIds(node);
-			if (!expectedNeighborIds.size) {
-				result = false;
-			} else {
-				const visibleNeighborIds = getVisibleRevealableNeighborIds(node.id);
-				if (!visibleNeighborIds.size) {
-					result = false;
-				} else {
-					result = isRevealableChainExhausted(
-						node.id,
-						(nodeId) => globalState.layoutNodes?.find((entry) => entry.id === nodeId) || globalState.graphData?.nodes?.find((entry) => entry.id === nodeId) || null,
-						getExpectedRevealableNeighborIds,
-						getVisibleRevealableNeighborIds,
-						(candidateNode) => hasTrustedCurrentRelationshipData(candidateNode) && hasKnownRevealableChildCount(candidateNode),
-					);
-				}
-			}
-		}
-	}
-	node._exhaustedPredGen = globalState.selectionPredicateCacheGen;
-	node._exhaustedPredCached = result;
-	return result;
 }
 
 function markUserInitiatedGraphExpansion() {
@@ -14547,22 +14477,6 @@ function reapplySelectionState() {
 		}
 	}
 
-	// Only evaluate leaf/exhausted flags for hop/highlight candidates — scanning every
-	// layout node on click dominated main-thread time on large graphs.
-	const fetchedLeafOrExhaustedIds = new Set<string>();
-	const leafCandidates = highlightState.hopNodeIds.size ? highlightState.hopNodeIds : highlightState.nodeIds;
-	const nodeById = ensureLayoutNodeByIdMap();
-	for (const rawId of leafCandidates) {
-		const id = String(rawId || '');
-		if (!id) continue;
-		if (id === String(globalState.selectedId || '') || highlightState.rootIds.has(id)) continue;
-		const node = nodeById.get(id);
-		if (!node || !hasTrustedCurrentRelationshipData(node)) continue;
-		if (isFetchedLeafNode(node) || isFetchedExhaustedConnectedNode(node)) {
-			fetchedLeafOrExhaustedIds.add(id);
-		}
-	}
-
 	globalState.nodeSel
 		.classed('selected', (node) =>
 			shouldRenderNodeSelected(node, {
@@ -14570,14 +14484,12 @@ function reapplySelectionState() {
 				highlightRootIds: highlightState.rootIds,
 				persistentSelectedIds: globalState.persistentSelectedIds,
 				visitedNodeIds: globalState.visitedNodeIds,
-				isFetchedLeafNode: (candidateNode) => fetchedLeafOrExhaustedIds.has(String(candidateNode?.id || '')),
-				isFetchedExhaustedConnectedNode: () => false,
 			}),
 		)
 		// Hop emphasis (neighbor glow) is line-highlight companion state — cleared with Clear Highlight.
 		.classed(
 			'highlighted-hop',
-			(node) => node.id !== globalState.selectedId && !highlightState.rootIds.has(node.id) && !fetchedLeafOrExhaustedIds.has(node.id) && highlightState.hopNodeIds.has(node.id),
+			(node) => node.id !== globalState.selectedId && !highlightState.rootIds.has(node.id) && highlightState.hopNodeIds.has(node.id),
 		);
 
 	globalState.nodeSel
@@ -14623,8 +14535,6 @@ export function shouldRenderNodeSelected(
 		highlightRootIds?: Set<any>;
 		persistentSelectedIds?: Set<any> | Iterable<any>;
 		visitedNodeIds?: Set<any>;
-		isFetchedLeafNode?: (node: any) => boolean;
-		isFetchedExhaustedConnectedNode?: (node: any) => boolean;
 	} = {},
 ) {
 	if (!node?.id) return false;
@@ -14635,8 +14545,6 @@ export function shouldRenderNodeSelected(
 		// visitedNodeIds intentionally unused for selected chrome — visiting during expand
 		// must not paint every walked node as "selected" (that looked like multi-hop selection).
 		visitedNodeIds: _visitedIds = new Set<any>(),
-		isFetchedLeafNode: isFetchedLeafNodeFn = () => false,
-		isFetchedExhaustedConnectedNode: isFetchedExhaustedConnectedNodeFn = () => false,
 	} = options;
 
 	const durableSet =
@@ -14652,10 +14560,9 @@ export function shouldRenderNodeSelected(
 	const isDurableSelection = Boolean(nodeId && durableSet.has(nodeId));
 	const normalizedSelectedId = candidateSelectedId != null ? String(candidateSelectedId).trim() : '';
 
-	// Active selection + every node the user has already selected/expanded stays selected.
-	// Clear Highlight does not remove durableSelectedIds — only hop/line emphasis.
-	// Hop neighbors use `highlighted-hop`; exhausted leaves keep the fetched-leaf markers.
-	return nodeId === normalizedSelectedId || isDurableSelection || highlightRootIds.has(node.id) || isFetchedLeafNodeFn(node) || isFetchedExhaustedConnectedNodeFn(node);
+	// Active selection + durable prior selections/expansions. Clear Highlight clears hop/line
+	// emphasis only. Newly fetched nodes are never auto-selected — user click / route only.
+	return nodeId === normalizedSelectedId || isDurableSelection || highlightRootIds.has(node.id);
 }
 
 function markNodeSelected(node, options: { persist?: boolean } = {}) {

@@ -101,7 +101,7 @@ test('Selecting a node also marks visible hop-connected neighbors as selected', 
 	await expect(connectedNode).toHaveClass(/highlighted-hop/);
 });
 
-test('Fetched nodes with zero child links render as selected automatically', async ({ page }) => {
+test('Fetched nodes with zero child links do not auto-select', async ({ page }) => {
 	await page.route('**/api/finra/graph**', async (route) => {
 		await route.fulfill({
 			status: 200,
@@ -156,11 +156,11 @@ test('Fetched nodes with zero child links render as selected automatically', asy
 	await expect
 		.poll(async () => page.locator('.fg-node').count(), {
 			timeout: 10_000,
-			message: 'expected the seeded fetched leaf node to render before asserting auto-selection',
+			message: 'expected the seeded fetched leaf node to render before asserting no auto-selection',
 		})
 		.toBe(1);
 	await expect(fetchedLeafNode).toHaveCount(1);
-	await expect(fetchedLeafNode).toHaveClass(/selected/);
+	await expect(fetchedLeafNode).not.toHaveClass(/selected/);
 	await expect(page.locator('.fg-link')).toHaveCount(0);
 });
 
@@ -230,7 +230,7 @@ test('Fetched inactive nodes with hidden previous relationships do not auto-sele
 	await expect(page.locator('.fg-link')).toHaveCount(0);
 });
 
-test('Fetched connected nodes render as selected when all trusted current relationships are already visible', async ({ page }) => {
+test('Fetched connected nodes do not auto-select when all trusted current relationships are already visible', async ({ page }) => {
 	await page.route('**/api/finra/graph**', async (route) => {
 		await route.fulfill({
 			status: 200,
@@ -297,13 +297,13 @@ test('Fetched connected nodes render as selected when all trusted current relati
 	await expect
 		.poll(async () => page.locator('.fg-node').count(), {
 			timeout: 10_000,
-			message: 'expected the seeded connected fetched graph to render before asserting trusted exhaustion selection',
+			message: 'expected the seeded connected fetched graph to render before asserting no auto-selection',
 		})
 		.toBe(2);
 
 	const connectedFetchedNode = page.locator('.fg-node').filter({ hasText: 'Trusted Connected Fetch' });
 	await expect(connectedFetchedNode).toHaveCount(1);
-	await expect(connectedFetchedNode).toHaveClass(/selected/);
+	await expect(connectedFetchedNode).not.toHaveClass(/selected/);
 	await expect(page.locator('.fg-link')).toHaveCount(1);
 });
 
