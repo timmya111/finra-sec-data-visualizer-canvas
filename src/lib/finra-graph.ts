@@ -5392,7 +5392,11 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	});
 	stripPreviousEmploymentLinksAndUnreachable(logIds);
 	if (pruneGenerationAtStart !== clearNonLogPruneGeneration) return;
-	const afterStripIds = new Set((globalState.graphData.nodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
+	const afterStripIds = new Set<string>(
+		(globalState.graphData.nodes || [])
+			.map((node) => String(node?.id || '').trim())
+			.filter((id): id is string => Boolean(id)),
+	);
 	armClearNonLogKeepGate(afterStripIds);
 	pruneGraphDataToKeepIds(afterStripIds);
 

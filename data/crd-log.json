@@ -1,6 +1,30 @@
 {
   "firms": [
     {
+      "id": 5979,
+      "name": "OLDE DISCOUNT CORPORATION"
+    },
+    {
+      "id": 4161,
+      "name": "MORGAN KEEGAN & COMPANY, INC."
+    },
+    {
+      "id": 17609,
+      "name": "GUNNALLEN FINANCIAL, INC"
+    },
+    {
+      "id": 22081,
+      "name": "VANGUARD CAPITAL"
+    },
+    {
+      "id": 12984,
+      "name": "INVEST FINANCIAL CORPORATION"
+    },
+    {
+      "id": 107342,
+      "name": "FISHER INVESTMENTS"
+    },
+    {
       "id": 13609,
       "name": "BERTHEL, FISHER & COMPANY FINANCIAL SERVICES, INC."
     },
@@ -409,10 +433,6 @@
       "name": "HAMILTON INVESTMENTS, INC."
     },
     {
-      "id": 12984,
-      "name": "INVEST FINANCIAL CORPORATION"
-    },
-    {
       "id": 3600,
       "name": "TRANSAMERICA FINANCIAL RESOURCES, INC."
     },
@@ -647,10 +667,6 @@
     {
       "id": 5475,
       "name": "USAA INVESTMENT SERVICES COMPANY"
-    },
-    {
-      "id": 107342,
-      "name": "FISHER INVESTMENTS"
     },
     {
       "id": 16999,
@@ -1177,10 +1193,6 @@
       "name": "MASON & ASSOCIATES, LLC"
     },
     {
-      "id": 17609,
-      "name": "GUNNALLEN FINANCIAL, INC"
-    },
-    {
       "id": 6578,
       "name": "CBG FINANCIAL GROUP, INC."
     },
@@ -1383,10 +1395,6 @@
     {
       "id": 13158,
       "name": "AIG CAPITAL SERVICES, INC."
-    },
-    {
-      "id": 5979,
-      "name": "OLDE DISCOUNT CORPORATION"
     },
     {
       "id": 3870,
@@ -1931,10 +1939,6 @@
     {
       "id": 15692,
       "name": "AMSOUTH INVESTMENT SERVICES, INC."
-    },
-    {
-      "id": 4161,
-      "name": "MORGAN KEEGAN & COMPANY, INC."
     },
     {
       "id": 10105,
@@ -8214,6 +8218,10 @@
     }
   ],
   "individuals": [
+    {
+      "id": 2508417,
+      "name": "JEFFREY LEE RICHARDSON"
+    },
     {
       "id": 6721718,
       "name": "Brian Michael Rupp"
