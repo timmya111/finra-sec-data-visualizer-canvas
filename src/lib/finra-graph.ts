@@ -75,6 +75,12 @@ import {
 	searchTypeIncludesFirms,
 	searchTypeIncludesPeople,
 } from './searchHitActivity';
+import {
+	FIRM_SEC_ONLY_FILL,
+	FIRM_SEC_ONLY_STROKE,
+	getFirmSourceCoverage,
+	getFirmSourcePaintStyle,
+} from './firmSourcePaint';
 
 // API base. When VITE_API_URL is not set, use relative paths so the dev
 // server proxy (`/api`) is used and we don't hardcode a backend port.
@@ -2592,6 +2598,18 @@ async function applyPendingRouteNodeSelection() {
 						revealPersonEmploymentNeighbors(liveNode);
 					} catch (error) {
 						console.warn('Failed to inject employment graph for already-selected route person:', error);
+					}
+				})();
+			} else if (liveNode.group === 'firm') {
+				employmentPromise = (async () => {
+					try {
+						await ensureFirmDetail(liveNode);
+						if (getFirmSourceCoverage(liveNode) === 'sec_only' && !liveNode._secOnlyCurrentConnectionsExpanded) {
+							await expandSecOnlyFirmCurrentConnections(liveNode);
+							revealIncidentRenderedLinks(liveNode, isAutoExpansionLink);
+						}
+					} catch (error) {
+						console.warn('Failed to expand SEC-only firm current connections for route firm:', error);
 					}
 				})();
 			}
@@ -13925,12 +13943,16 @@ export function renderNodeContents(selection) {
 			/^(active|approved|current)$/i.test(String(d.firmStatus || d.status || d.orphan?.firmStatus || d.orphan?.status || '').trim());
 		// Stub paint only for unresolved placeholders — Active parent-firm Form BD people use active colors.
 		const isStubPaint = Boolean(d.stub) && !d.hasFinraData && !d.hasSecData && !hasActiveInheritedScope;
+		const firmSourcePaint = d.group === 'firm' && !inactive ? getFirmSourcePaintStyle(d) : null;
 		g.classed('fg-node--inactive', inactive)
 			.classed('fg-node--individual', d.group === 'individual')
 			.classed('fg-node--firm', d.group === 'firm')
 			.classed('fg-node--entity', d.group === 'entity')
 			.classed('fg-node--stub', d.group === 'individual' && isStubPaint)
-			.classed('fg-node--control-position', isControlNode);
+			.classed('fg-node--control-position', isControlNode)
+			.classed('fg-node--sec-only', firmSourcePaint?.coverage === 'sec_only')
+			.classed('fg-node--finra-only', firmSourcePaint?.coverage === 'finra_only')
+			.classed('fg-node--finra-sec', firmSourcePaint?.coverage === 'both');
 		// Use lighter blue for stub individuals to match the legend
 		let color = inactive ? GRAPH_COLORS.nodeInactive : NODE_COLOR[d.group] || GRAPH_COLORS.nodeDefault;
 		let nodeOpacity: number | string = inactive ? 0.82 : 1;
@@ -14708,12 +14730,17 @@ function updateNodeVisuals(
 			/^(active|approved|current)$/i.test(String(d.firmStatus || d.status || d.orphan?.firmStatus || d.orphan?.status || '').trim());
 		const isStubPaint = Boolean(d.stub) && !d.hasFinraData && !d.hasSecData && !hasActiveInheritedScope;
 
+		const firmSourcePaint = d.group === 'firm' && !inactive ? getFirmSourcePaintStyle(d, { selected: isSelectedNode }) : null;
+
 		g.classed('fg-node--inactive', inactive)
 			.classed('fg-node--individual', d.group === 'individual')
 			.classed('fg-node--firm', d.group === 'firm')
 			.classed('fg-node--entity', d.group === 'entity')
 			.classed('fg-node--stub', d.group === 'individual' && isStubPaint)
-			.classed('fg-node--control-position', isControlNodeResolved);
+			.classed('fg-node--control-position', isControlNodeResolved)
+			.classed('fg-node--sec-only', firmSourcePaint?.coverage === 'sec_only')
+			.classed('fg-node--finra-only', firmSourcePaint?.coverage === 'finra_only')
+			.classed('fg-node--finra-sec', firmSourcePaint?.coverage === 'both');
 
 		let color = inactive ? GRAPH_COLORS.nodeInactive : NODE_COLOR[d.group] || GRAPH_COLORS.nodeDefault;
 
@@ -14740,14 +14767,18 @@ function updateNodeVisuals(
 				: deg.controls > deg.employed ? GRAPH_COLORS.nodeFirmControlsStroke
 				: deg.employed > deg.controls ? GRAPH_COLORS.nodeFirmEmployedStroke
 				: GRAPH_COLORS.nodeBorder;
+			const firmFill = firmSourcePaint?.fill || (hasCurrentConnections ? FIRM_SEC_ONLY_FILL : color);
+			const firmStroke =
+				firmSourcePaint?.stroke || (hasCurrentConnections ? FIRM_SEC_ONLY_STROKE : dominantStroke);
+			const firmStrokeWidth =
+				firmSourcePaint?.coverage === 'both' || hasCurrentConnections || Boolean(firmSourcePaint?.stroke) ? 3.5 : null;
 
 			const firmShape = g.select('.fg-node-shape--firm');
 			if (!firmShape.empty()) {
 				firmShape
-					.attr('fill', color)
-					.attr('fill', hasCurrentConnections ? '#14c2bb' : color)
-					.attr('stroke', hasCurrentConnections ? '#00f5ff' : dominantStroke)
-					.attr('stroke-width', hasCurrentConnections ? 3.5 : null)
+					.attr('fill', firmFill)
+					.attr('stroke', firmStroke)
+					.attr('stroke-width', firmStrokeWidth)
 					.attr('opacity', nodeOpacity === 1 ? 0.9 : nodeOpacity)
 					.classed('fg-node-shape--firm-connected', hasConnections)
 					.classed('fg-node-shape--firm-employed', deg.employed > deg.controls)
@@ -17227,6 +17258,105 @@ async function ensureFirmConnections(firmNode: any) {
 	}
 }
 
+/** Build person stubs + current employment links for a firm roster (graph expand). */
+export function buildFirmCurrentConnectionGraphBatch(
+	firmNode: any,
+	currentConnections: any[] = [],
+	options: { existingNodeIds?: Iterable<string> | null } = {},
+) {
+	const firmNodeId = String(firmNode?.id || '').trim();
+	if (!firmNodeId.startsWith('firm:')) return { nodes: [] as any[], links: [] as any[], skippedExisting: 0 };
+
+	const existing = new Set<string>();
+	for (const id of options.existingNodeIds || []) {
+		const normalized = String(id || '').trim();
+		if (normalized) existing.add(normalized);
+	}
+	const nodes: any[] = [];
+	const links: any[] = [];
+	const pendingPersonIds = new Set<string>();
+	let skippedExisting = 0;
+
+	for (const person of Array.isArray(currentConnections) ? currentConnections : []) {
+		const crd = String(person?.individualId || person?.crd || person?.crdNumber || person?.personId || '').trim();
+		if (!/^\d+$/.test(crd)) continue;
+		const personId = `person:${crd}`;
+		const alreadyOnCanvas = existing.has(personId) || pendingPersonIds.has(personId);
+		if (alreadyOnCanvas) {
+			skippedExisting += 1;
+		} else {
+			pendingPersonIds.add(personId);
+			const bcScope = String(person?.bcScope || '').trim() || null;
+			const iaScope = String(person?.iaScope || '').trim() || null;
+			const scopeLooksActive = classifyActivityText(bcScope) === 'active' || classifyActivityText(iaScope) === 'active';
+			const scopeLooksInactive = classifyActivityText(bcScope) === 'inactive' || classifyActivityText(iaScope) === 'inactive';
+			nodes.push({
+				id: personId,
+				label: normalizePersonLabel(person?.name || person?.legalName || `CRD ${crd}`),
+				group: 'individual',
+				crd,
+				stub: true,
+				bcScope,
+				iaScope,
+				_vizInactive: scopeLooksInactive && !scopeLooksActive,
+			});
+		}
+		links.push({
+			source: personId,
+			target: firmNodeId,
+			relationship: 'employed_by',
+			isCurrent: true,
+		});
+	}
+
+	return { nodes, links, skippedExisting };
+}
+
+/**
+ * SEC-only (green) firm click: fetch /connections and add every current person onto the graph.
+ * FINRA / dual firms keep Form BD control-only expand.
+ */
+async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
+	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0 };
+	if (getFirmSourceCoverage(firmNode) !== 'sec_only') return { added: 0, linked: 0 };
+
+	const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
+	updateFetchStatus(`Loading current connections for ${firmLabel}…`, true);
+	await ensureFirmConnections(firmNode);
+
+	const current = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
+	if (!current.length) {
+		updateFetchStatus(`No current connections for ${firmLabel}`);
+		firmNode._secOnlyCurrentConnectionsExpanded = true;
+		return { added: 0, linked: 0 };
+	}
+
+	const existingIds = (globalState.layoutNodes || []).map((node) => String(node?.id || ''));
+	const batch = buildFirmCurrentConnectionGraphBatch(firmNode, current, { existingNodeIds: existingIds });
+	if (!batch.nodes.length && !batch.links.length) {
+		updateFetchStatus(
+			batch.skippedExisting ?
+				`All ${batch.skippedExisting} current connections already on canvas`
+			:	`No current connections for ${firmLabel}`,
+		);
+		firmNode._secOnlyCurrentConnectionsExpanded = true;
+		return { added: 0, linked: 0 };
+	}
+
+	if (typeof globalState.appendFetched === 'function') {
+		globalState.appendFetched(batch.nodes, batch.links, { skipPersist: true, skipFindRefresh: true });
+	}
+	mergeIntoGraphData(batch.nodes, batch.links);
+	firmNode._secOnlyCurrentConnectionsExpanded = true;
+	const added = batch.nodes.length;
+	updateFetchStatus(
+		added ?
+			`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}`
+		:	`Linked current connections for ${firmLabel}`,
+	);
+	return { added, linked: batch.links.length };
+}
+
 // Fetch firm detail from the server (which checks local cache first, then FINRA API).
 // Merges the response into the firm node so renderFirmDetail can display rich data.
 async function ensureFirmDetail(firmNode) {
@@ -18016,6 +18146,17 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 		}
 		didRevealOrMerge = didRevealOrMerge || (globalState.layoutNodes?.length || 0) > beforeCount;
 		didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, expansionLinkFilter) > 0 || didRevealOrMerge;
+
+		// Green SEC-only firms: also open the full current employment roster onto the canvas.
+		// FINRA-only / dual firms stay Form BD control-only on click (dashboard for full roster).
+		if (getFirmSourceCoverage(clickedNode) === 'sec_only') {
+			const beforeSec = globalState.layoutNodes?.length || 0;
+			await expandSecOnlyFirmCurrentConnections(clickedNode);
+			if (runId !== globalState.nonGrayExpandRunId) return;
+			didRevealOrMerge = didRevealOrMerge || (globalState.layoutNodes?.length || 0) > beforeSec;
+			didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, isAutoExpansionLink) > 0 || didRevealOrMerge;
+		}
+
 		try {
 			applyGraphDerivedNodeMetrics(globalState.layoutNodes, globalState.layoutLinks);
 			refreshGraphColors();
@@ -18651,11 +18792,20 @@ async function materializeRouteSelectionNeighborhood(node, hops: number = getDef
 		}
 
 		// Firms only auto-reveal Form BD "controls" connections (see isFirmControlOnlyLink);
-		// employment/registration history is dashboard-only now for performance.
+		// employment/registration history is dashboard-only now for performance —
+		// except green SEC-only firms, which open all current connections on the canvas.
 		revealNeighbors(node, normalizedHops, {
 			linkFilter: isFirmControlOnlyLink,
 			markSelected: true,
 		});
+		if (getFirmSourceCoverage(node) === 'sec_only') {
+			try {
+				await expandSecOnlyFirmCurrentConnections(node);
+				revealIncidentRenderedLinks(node, isAutoExpansionLink);
+			} catch (error) {
+				console.warn('Failed to expand SEC-only firm current connections:', error);
+			}
+		}
 	}
 
 	if (globalState.selectedId === node.id && shouldRevealSidebarPanel()) {

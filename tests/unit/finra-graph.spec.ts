@@ -44,6 +44,7 @@ import {
 	rankFindNodeMatches,
 	scheduleNodeExpansion,
 	selectTextSearchHydrationTargets,
+	buildFirmCurrentConnectionGraphBatch,
 	shouldFetchFirmDetailForOwnerEvidence,
 	shouldHydrateExpansionFrontierNodeDetail,
 	shouldAutoExpandRouteSelection,
@@ -1598,6 +1599,26 @@ describe('FinraGraph DOM helpers (unit)', () => {
 			{ nodeId: 'person:1', group: 'individual' },
 			{ nodeId: 'firm:2', group: 'firm' },
 		]);
+	});
+
+	it('buildFirmCurrentConnectionGraphBatch adds current people with employed_by links', () => {
+		const batch = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:107319', group: 'firm', label: 'Retirement Advisors' },
+			[
+				{ individualId: '111', name: 'Ada Example', bcScope: 'Active', isCurrent: true },
+				{ individualId: '222', name: 'Already Here', bcScope: 'Active', isCurrent: true },
+				{ individualId: '111', name: 'Ada Dup', isCurrent: true },
+			],
+			{ existingNodeIds: ['person:222'] },
+		);
+		expect(batch.nodes.map((node) => node.id)).toEqual(['person:111']);
+		expect(batch.skippedExisting).toBe(2);
+		expect(batch.links).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ source: 'person:111', target: 'firm:107319', relationship: 'employed_by', isCurrent: true }),
+				expect.objectContaining({ source: 'person:222', target: 'firm:107319', relationship: 'employed_by', isCurrent: true }),
+			]),
+		);
 	});
 
 	it('applyGraphDerivedNodeMetrics gives fetched individuals a connection count before links are rendered', () => {

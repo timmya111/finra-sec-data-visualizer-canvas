@@ -10,6 +10,13 @@
 
 	/* Legend: firms */
 	--color-highlight-firm: #d97706;
+	/* Graph firm source paints: SEC green, FINRA purple (matched brightness), dual = purple + green border */
+	--color-firm-sec-only-fill: #14c2bb;
+	--color-firm-sec-only-stroke: #00f5ff;
+	--color-firm-finra-only-fill: #e879f9;
+	--color-firm-finra-only-stroke: #f5d0fe;
+	--color-firm-finra-sec-fill: #e879f9;
+	--color-firm-finra-sec-stroke: #14c2bb;
 	--color-node-firm-employed-stroke: #4a413d;
 	--color-node-firm-controls-stroke: #ef4444;
 	--stroke-width-node-firm-connected: 0.9;
@@ -5724,9 +5731,33 @@ html[data-theme='dark'] .fg-source-toggle-btn.active {
 }
 
 .fg-node.fg-node--active-connected:not(.fg-node--inactive) .fg-node-shape--firm {
-	stroke: #00f5ff !important;
+	stroke: var(--color-firm-sec-only-stroke) !important;
 	stroke-width: 3.5px !important;
-	fill: #14c2bb;
+	fill: var(--color-firm-sec-only-fill);
+}
+
+/* FINRA-only firms: purple fill at SEC-green brightness */
+.fg-node.fg-node--firm.fg-node--finra-only:not(.fg-node--inactive) .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-only:not(.fg-node--inactive) .fg-node-shape--firm {
+	fill: var(--color-firm-finra-only-fill) !important;
+	stroke: var(--color-firm-finra-only-stroke) !important;
+	stroke-width: 3.5px !important;
+}
+
+/* Dual FINRA+SEC: purple fill with green border */
+.fg-node.fg-node--firm.fg-node--finra-sec:not(.fg-node--inactive) .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-sec:not(.fg-node--inactive) .fg-node-shape--firm {
+	fill: var(--color-firm-finra-sec-fill) !important;
+	stroke: var(--color-firm-finra-sec-stroke) !important;
+	stroke-width: 3.5px !important;
+}
+
+/* SEC-only firms keep the green connected look */
+.fg-node.fg-node--firm.fg-node--sec-only:not(.fg-node--inactive) .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--sec-only:not(.fg-node--inactive) .fg-node-shape--firm {
+	fill: var(--color-firm-sec-only-fill) !important;
+	stroke: var(--color-firm-sec-only-stroke) !important;
+	stroke-width: 3.5px !important;
 }
 
 /* Slightly deeper when hovered, focused, or selected */
@@ -5755,6 +5786,30 @@ html[data-theme='dark'] .fg-source-toggle-btn.active {
 .fg-node.fg-node--active-connected:not(.fg-node--inactive).selected .fg-node-shape--firm {
 	fill: #0f766e !important;
 	stroke: #2dd4bf !important;
+}
+
+.fg-node.fg-node--finra-only:not(.fg-node--inactive):hover .fg-node-shape--firm,
+.fg-node.fg-node--finra-only:not(.fg-node--inactive):focus .fg-node-shape--firm,
+.fg-node.fg-node--finra-only:not(.fg-node--inactive):focus-within .fg-node-shape--firm,
+.fg-node.fg-node--finra-only:not(.fg-node--inactive).selected .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-only:not(.fg-node--inactive):hover .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-only:not(.fg-node--inactive):focus .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-only:not(.fg-node--inactive):focus-within .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-only:not(.fg-node--inactive).selected .fg-node-shape--firm {
+	fill: #a21caf !important;
+	stroke: #f0abfc !important;
+}
+
+.fg-node.fg-node--finra-sec:not(.fg-node--inactive):hover .fg-node-shape--firm,
+.fg-node.fg-node--finra-sec:not(.fg-node--inactive):focus .fg-node-shape--firm,
+.fg-node.fg-node--finra-sec:not(.fg-node--inactive):focus-within .fg-node-shape--firm,
+.fg-node.fg-node--finra-sec:not(.fg-node--inactive).selected .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-sec:not(.fg-node--inactive):hover .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-sec:not(.fg-node--inactive):focus .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-sec:not(.fg-node--inactive):focus-within .fg-node-shape--firm,
+.fg-node.fg-node--active-connected.fg-node--finra-sec:not(.fg-node--inactive).selected .fg-node-shape--firm {
+	fill: #a21caf !important;
+	stroke: var(--color-firm-finra-sec-stroke) !important;
 }
 
 .fg-node.fg-node--individual.fg-node--active-connected:not(.fg-node--inactive) .fg-node-overlay,

@@ -1,6 +1,58 @@
 {
   "firms": [
     {
+      "id": 175083,
+      "name": "FOUNDATIONS INVESTMENT ADVISORS LLC"
+    },
+    {
+      "id": 282580,
+      "name": "AE WEALTH MANAGEMENT, LLC"
+    },
+    {
+      "id": 132070,
+      "name": "GLOBAL FINANCIAL PRIVATE CAPITAL, LLC"
+    },
+    {
+      "id": 328573,
+      "name": "J. ALAN CAPITAL MANAGEMENT, LLC"
+    },
+    {
+      "id": 4039,
+      "name": "THE EQUITABLE LIFE ASSURANCE SOCIETY OF THE UNITED STATES"
+    },
+    {
+      "id": 6627,
+      "name": "EQUICO SECURITIES, INC."
+    },
+    {
+      "id": 680,
+      "name": "THE PRUDENTIAL INSURANCE COMPANY OF AMERICA"
+    },
+    {
+      "id": 5685,
+      "name": "PRUCO SECURITIES CORPORATION"
+    },
+    {
+      "id": 3870,
+      "name": "CHUBB SECURITIES CORPORATION"
+    },
+    {
+      "id": 13609,
+      "name": "BERTHEL, FISHER & COMPANY FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 2225,
+      "name": "SII INVESTMENTS, INC."
+    },
+    {
+      "id": 40875,
+      "name": "USALLIANZ SECURITIES, INC."
+    },
+    {
+      "id": 127473,
+      "name": "KCD FINANCIAL, INC."
+    },
+    {
       "id": 7691,
       "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
     },
@@ -121,10 +173,6 @@
       "name": "FIRST INVESTORS CORPORATION"
     },
     {
-      "id": 4039,
-      "name": "THE EQUITABLE LIFE ASSURANCE SOCIETY OF THE UNITED STATES"
-    },
-    {
       "id": 4082,
       "name": "1717 CAPITAL MANAGEMENT COMPANY"
     },
@@ -135,10 +183,6 @@
     {
       "id": 5167,
       "name": "NYLIFE SECURITIES LLC"
-    },
-    {
-      "id": 6627,
-      "name": "AXA ADVISORS, LLC"
     },
     {
       "id": 4031,
@@ -291,10 +335,6 @@
     {
       "id": 7452,
       "name": "VANGUARD MARKETING CORPORATION"
-    },
-    {
-      "id": 5685,
-      "name": "PRUCO SECURITIES, LLC."
     },
     {
       "id": 25574,
@@ -581,10 +621,6 @@
       "name": "DAVID LERNER ASSOCIATES, INC."
     },
     {
-      "id": 680,
-      "name": "THE PRUDENTIAL INSURANCE COMPANY OF AMERICA"
-    },
-    {
       "id": 7839,
       "name": "RICKEL & ASSOCIATES, INC."
     },
@@ -759,10 +795,6 @@
     {
       "id": 7447,
       "name": "COPELAND EQUITIES, INC."
-    },
-    {
-      "id": 40875,
-      "name": "LIFEUSA SECURITIES, INC."
     },
     {
       "id": 103863,
@@ -1654,6 +1686,18 @@
     }
   ],
   "individuals": [
+    {
+      "id": 5692505,
+      "name": "ANDREW JARED HARMON"
+    },
+    {
+      "id": 7615812,
+      "name": "Genesis Marie Hooks"
+    },
+    {
+      "id": 1760572,
+      "name": "JAMES ALAN BEAR"
+    },
     {
       "id": 4072987,
       "name": "Daniel Mark Hall"

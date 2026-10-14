@@ -4,6 +4,11 @@
  */
 
 import { DEFAULT_NODE_LABEL_FONT_WEIGHT, DEFAULT_NODE_LABEL_GAP_PX } from './finra-graph-defaults';
+import {
+	FIRM_SEC_ONLY_FILL,
+	FIRM_SEC_ONLY_STROKE,
+	getFirmSourcePaintStyle,
+} from './firmSourcePaint';
 
 type Node = any;
 type Link = any;
@@ -870,10 +875,13 @@ export function drawCanvasFrame(
 		const isBoldLabel = isForcedLabel;
 		const isControlPosition = isControlPositionNode(n);
 		const hasCurrentFirmConnections = n.group === 'firm' && Number(n?._deg?.total || 0) > 0;
+		const firmSourcePaint =
+			n.group === 'firm' && !inactive ? getFirmSourcePaintStyle(n, { selected: isNodeSelected }) : null;
 		const size = getCanvasNodeSize(n);
 		const col =
 			isNodeSelected ?
 				inactive ? colors.selectedInactive
+				: n.group === 'firm' && firmSourcePaint?.fill ? firmSourcePaint.fill
 				: n.group === 'firm' && hasCurrentFirmConnections ? colors.selectedActiveFirm
 				: isControlPosition ? '#b91c1c'
 				: n.group === 'individual' ?
@@ -883,22 +891,27 @@ export function drawCanvasFrame(
 				: n.group === 'firm' ? colors.selectedFirm
 				: colors.selectedEntity
 			: inactive ? colors.inactive
-			: n.group === 'firm' && hasCurrentFirmConnections ? '#14c2bb'
+			: n.group === 'firm' && firmSourcePaint?.fill ? firmSourcePaint.fill
+			: n.group === 'firm' && hasCurrentFirmConnections ? FIRM_SEC_ONLY_FILL
 			: isControlPosition ? colors.control
 			: n.group === 'individual' && isStubPaint ? colors.stub
 			: getColorForGroup(n.group);
 		const nodeStroke =
 			inactive ? colors.inactiveStroke
+			: n.group === 'firm' && firmSourcePaint?.stroke ? firmSourcePaint.stroke
 			: isNodeSelected && n.group === 'firm' && hasCurrentFirmConnections ? colors.selectedActiveFirmStroke
-			: n.group === 'firm' && hasCurrentFirmConnections ? '#00f5ff'
+			: n.group === 'firm' && hasCurrentFirmConnections ? FIRM_SEC_ONLY_STROKE
 			: isNodeSelected ? colors.selectedStroke
 			: n.group === 'individual' && Number(n?._deg?.total || 0) > 0 ? '#0062ff'
 			: colors.border;
+		const firmNeedsSourceStroke =
+			Boolean(firmSourcePaint?.stroke) && (hasCurrentFirmConnections || firmSourcePaint?.coverage === 'both');
 		const nodeStrokeWidth =
 			isNodeSelected ?
 				isControlPosition ? 3
 				: n.group === 'firm' ? 3.4
 				: 3.2
+			: n.group === 'firm' && firmNeedsSourceStroke ? 3.5
 			: n.group === 'firm' && hasCurrentFirmConnections ? 3.5
 			: n.group === 'firm' ? 0.9
 			: n.group === 'individual' && Number(n?._deg?.total || 0) > 0 ? 1
