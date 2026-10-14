@@ -4834,76 +4834,63 @@ function buildUndirectedAdjacencyList(links: Array<any>): Map<string, string[]> 
 	return adj;
 }
 
-function getBfsDistances(adj: Map<string, string[]>, start: string): Map<string, number> {
-	const distances = new Map<string, number>();
-	distances.set(start, 0);
-	const queue: string[] = [start];
-	while (queue.length > 0) {
-		const current = queue.shift()!;
-		const currentDist = distances.get(current)!;
-		for (const neighbor of adj.get(current) || []) {
-			if (!distances.has(neighbor)) {
-				distances.set(neighbor, currentDist + 1);
-				queue.push(neighbor);
-			}
-		}
-	}
-	return distances;
-}
-
 /**
- * Keep log terminals plus every node that bridges them:
- * 1) any node on a shortest path between some pair of log terminals
- * 2) any node adjacent to 2+ log terminals (direct shared firm/person bridge)
+ * Keep log terminals plus every non-log node that lies on some path between them.
  *
- * Unlike a Steiner tree, this keeps alternate bridges (e.g. Merrill between two
- * logged people) even when another route through Goldman / J.P. Morgan exists.
+ * Iteratively strip non-terminal leaves from the subgraph reachable from the log.
+ * What remains is exactly the union of all firm/person hops that connect log nodes
+ * to each other (including alternate bridges like Merrill). Dangling one-hop
+ * coworkers / employers that never reach another log entry are removed.
  */
 function collectLogBridgeConnectorIds(adj: Map<string, string[]>, terminalIds: Set<string>): Set<string> {
 	const keepIds = new Set<string>(terminalIds);
 	if (terminalIds.size <= 1) return keepIds;
 
-	const terminalArray = Array.from(terminalIds);
-	const distancesFrom = new Map<string, Map<string, number>>();
-	for (const terminalId of terminalArray) {
-		distancesFrom.set(terminalId, getBfsDistances(adj, terminalId));
+	// Only consider the component(s) touching at least one log terminal.
+	const reachable = new Set<string>();
+	const seedQueue: string[] = [];
+	for (const terminalId of terminalIds) {
+		if (!adj.has(terminalId) && !terminalIds.has(terminalId)) continue;
+		if (reachable.has(terminalId)) continue;
+		reachable.add(terminalId);
+		seedQueue.push(terminalId);
 	}
-
-	for (let i = 0; i < terminalArray.length; i++) {
-		for (let j = i + 1; j < terminalArray.length; j++) {
-			const a = terminalArray[i];
-			const b = terminalArray[j];
-			const distA = distancesFrom.get(a)!;
-			const distB = distancesFrom.get(b)!;
-			const ab = distA.get(b);
-			if (ab === undefined) continue;
-
-			for (const [nodeId, da] of distA) {
-				const db = distB.get(nodeId);
-				if (db !== undefined && da + db === ab) {
-					keepIds.add(nodeId);
-				}
-			}
+	while (seedQueue.length > 0) {
+		const current = seedQueue.shift()!;
+		for (const neighborId of adj.get(current) || []) {
+			if (reachable.has(neighborId)) continue;
+			reachable.add(neighborId);
+			seedQueue.push(neighborId);
 		}
 	}
 
-	// Direct multi-homed bridges: a firm/person linked to 2+ log terminals stays
-	// even when those terminals also have a shorter direct edge between them.
-	for (const [nodeId, neighbors] of adj) {
-		if (keepIds.has(nodeId)) continue;
-		let logNeighborCount = 0;
-		const seen = new Set<string>();
-		for (const neighborId of neighbors) {
-			if (!terminalIds.has(neighborId) || seen.has(neighborId)) continue;
-			seen.add(neighborId);
-			logNeighborCount += 1;
-			if (logNeighborCount >= 2) {
-				keepIds.add(nodeId);
-				break;
+	const neighborSets = new Map<string, Set<string>>();
+	for (const nodeId of reachable) {
+		const next = new Set<string>();
+		for (const neighborId of adj.get(nodeId) || []) {
+			if (reachable.has(neighborId) && neighborId !== nodeId) next.add(neighborId);
+		}
+		neighborSets.set(nodeId, next);
+	}
+
+	let pruned = true;
+	while (pruned) {
+		pruned = false;
+		for (const [nodeId, neighbors] of neighborSets) {
+			if (terminalIds.has(nodeId)) continue;
+			if (neighbors.size > 1) continue;
+			// Degree 0/1 non-log leaf: cannot bridge two log terminals.
+			for (const neighborId of neighbors) {
+				neighborSets.get(neighborId)?.delete(nodeId);
 			}
+			neighborSets.delete(nodeId);
+			pruned = true;
 		}
 	}
 
+	for (const nodeId of neighborSets.keys()) {
+		keepIds.add(nodeId);
+	}
 	return keepIds;
 }
 
@@ -5050,9 +5037,10 @@ function pruneSelectionStateToKeptIds(keptNodeIds: Set<string>) {
 	}
 }
 
-/** Fast path: remove exited nodes/links from the live SVG without a full renderGraph wipe. */
+/** Fast path: prune live layout (and SVG when present) without a full renderGraph wipe. */
 function pruneLiveGraphDomToKeepIds(keepIds: Set<string>) {
-	if (!globalState.nodeGroup || !globalState.simulation || !Array.isArray(globalState.layoutNodes) || !Array.isArray(globalState.layoutLinks)) return false;
+	// Canvas mode sets nodeGroup to null — still prune layoutNodes so drawFrame drops ghosts.
+	if (!Array.isArray(globalState.layoutNodes) || !Array.isArray(globalState.layoutLinks)) return false;
 
 	const prevNodeCount = globalState.layoutNodes.length;
 	const prevLinkCount = globalState.layoutLinks.length;
@@ -5069,41 +5057,45 @@ function pruneLiveGraphDomToKeepIds(keepIds: Set<string>) {
 	globalState.neighborMap = buildNeighborMap(globalState.layoutNodes, globalState.layoutLinks);
 	setGraphLabelRenderMode(globalState.layoutNodes.length);
 
-	try {
-		if (removedAnything) {
-			const nodeJoin = globalState.nodeGroup.selectAll('g.fg-node').data(globalState.layoutNodes, (d: any) => String(d?.id || ''));
-			nodeJoin.exit().remove();
-			globalState.nodeSel = globalState.nodeGroup.selectAll('g.fg-node');
+	if (globalState.nodeGroup) {
+		try {
+			if (removedAnything) {
+				const nodeJoin = globalState.nodeGroup.selectAll('g.fg-node').data(globalState.layoutNodes, (d: any) => String(d?.id || ''));
+				nodeJoin.exit().remove();
+				globalState.nodeSel = globalState.nodeGroup.selectAll('g.fg-node');
 
-			// Cheap link/arrow DOM prune — avoid full layer restack/sort on large graphs.
-			const pruneLineSelection = (selection: any) => {
-				if (!selection) return;
-				selection.each(function (d: any) {
-					const sourceId = String(d?.source?.id ?? d?.source ?? '').trim();
-					const targetId = String(d?.target?.id ?? d?.target ?? '').trim();
-					if (!keepIds.has(sourceId) || !keepIds.has(targetId)) {
-						d3.select(this).remove();
-					}
-				});
-			};
-			pruneLineSelection(globalState.linkBottomGroup?.selectAll('line'));
-			pruneLineSelection(globalState.linkMidGroup?.selectAll('line'));
-			pruneLineSelection(globalState.linkTopGroup?.selectAll('line'));
-			pruneLineSelection(globalState.arrowBottomGroup?.selectAll('line'));
-			pruneLineSelection(globalState.arrowMidGroup?.selectAll('line'));
-			pruneLineSelection(globalState.arrowTopGroup?.selectAll('line'));
-			globalState.linkSel = selectRenderedLinkLines();
-			globalState.arrowSel = selectRenderedArrowLines();
+				// Cheap link/arrow DOM prune — avoid full layer restack/sort on large graphs.
+				const pruneLineSelection = (selection: any) => {
+					if (!selection) return;
+					selection.each(function (d: any) {
+						const sourceId = String(d?.source?.id ?? d?.source ?? '').trim();
+						const targetId = String(d?.target?.id ?? d?.target ?? '').trim();
+						if (!keepIds.has(sourceId) || !keepIds.has(targetId)) {
+							d3.select(this).remove();
+						}
+					});
+				};
+				pruneLineSelection(globalState.linkBottomGroup?.selectAll('line'));
+				pruneLineSelection(globalState.linkMidGroup?.selectAll('line'));
+				pruneLineSelection(globalState.linkTopGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowBottomGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowMidGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowTopGroup?.selectAll('line'));
+				globalState.linkSel = selectRenderedLinkLines();
+				globalState.arrowSel = selectRenderedArrowLines();
+			}
+		} catch {
+			return false;
 		}
-	} catch {
-		return false;
 	}
 
 	try {
-		globalState.simulation.nodes(globalState.layoutNodes);
-		globalState.simulation.force('link')?.links(globalState.layoutLinks);
-		globalState.simulation.force('collision')?.radius((d) => getNodeCollisionRadius(d, globalState.layoutNodes.length));
-		globalState.simulation.alpha(0).alphaTarget(0).stop();
+		if (globalState.simulation) {
+			globalState.simulation.nodes(globalState.layoutNodes);
+			globalState.simulation.force('link')?.links(globalState.layoutLinks);
+			globalState.simulation.force('collision')?.radius((d) => getNodeCollisionRadius(d, globalState.layoutNodes.length));
+			globalState.simulation.alpha(0).alphaTarget(0).stop();
+		}
 	} catch {
 		/* ignore */
 	}
@@ -5277,6 +5269,41 @@ function stripPreviousEmploymentLinksAndUnreachable(logIds: Set<string>) {
 
 /** Stage for combined Clear non-log: 1 = clear-non-connected, 2 = full clear-non-log. */
 let clearNonLogClickStage: 1 | 2 = 1;
+/** Bumped on clear-non-log; in-flight expands capture this and skip re-injecting pruned leaves. */
+let clearNonLogPruneGeneration = 0;
+/** Ids retained by the latest clear-non-log prune. In-flight expands may only re-add these until the user intentionally fetches/clicks again. */
+let clearNonLogKeepIdsGate: Set<string> | null = null;
+
+function armClearNonLogKeepGate(keepIds: Set<string>) {
+	clearNonLogPruneGeneration += 1;
+	clearNonLogKeepIdsGate = new Set(Array.from(keepIds).map((id) => String(id || '').trim()).filter(Boolean));
+}
+
+function releaseClearNonLogKeepGate() {
+	clearNonLogKeepIdsGate = null;
+}
+
+function filterIncomingGraphAgainstClearNonLogGate(newNodes: Array<any> | null | undefined, newLinks: Array<any> | null | undefined) {
+	const nodesIn = Array.isArray(newNodes) ? newNodes : [];
+	const linksIn = Array.isArray(newLinks) ? newLinks : [];
+	if (!clearNonLogKeepIdsGate) return { nodes: nodesIn, links: linksIn, blockedAll: false };
+	const nodes = nodesIn.filter((node) => clearNonLogKeepIdsGate!.has(String(node?.id || '').trim()));
+	const nodeIds = new Set(nodes.map((node) => String(node?.id || '').trim()).filter(Boolean));
+	// Links may connect already-kept layout nodes; allow endpoints in the gate or already on the canvas/graph.
+	const presentIds = new Set<string>([
+		...Array.from(clearNonLogKeepIdsGate),
+		...(Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.map((n) => String(n?.id || '').trim()) : []),
+		...(Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes.map((n) => String(n?.id || '').trim()) : []),
+	]);
+	for (const id of nodeIds) presentIds.add(id);
+	const links = linksIn.filter((link) => {
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		return Boolean(sourceId && targetId && presentIds.has(sourceId) && presentIds.has(targetId));
+	});
+	const blockedAll = nodesIn.length > 0 && nodes.length === 0;
+	return { nodes, links, blockedAll };
+}
 
 /** Any new nodes on the canvas cancel a pending purple (stage 2) Clear non-log. */
 function resetClearNonLogStageAfterNodesAdded() {
@@ -5329,6 +5356,7 @@ function clearNonConnectedAction(button?: HTMLButtonElement) {
 		return;
 	}
 	const keepIds = collectSelectionLogClearNonLogKeepIds(globalState.graphData, selectedNodesLog);
+	armClearNonLogKeepGate(keepIds);
 	pruneGraphDataToKeepIds(keepIds);
 	if (button) flashSelectionLogActionButton(button, 'Step 1');
 }
@@ -5354,6 +5382,8 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	// reachability, then render once. The old double-renderGraph wiped zoom and left nodes at 0,0.
 	syncLayoutPositionsIntoGraphDataNodes();
 	const keepIds = collectSelectionLogClearNonLogKeepIds(globalState.graphData, selectedNodesLog);
+	armClearNonLogKeepGate(keepIds);
+	const pruneGenerationAtStart = clearNonLogPruneGeneration;
 	globalState.graphData.nodes = (globalState.graphData.nodes || []).filter((node) => keepIds.has(String(node?.id || '').trim()));
 	globalState.graphData.links = (globalState.graphData.links || []).filter((link) => {
 		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
@@ -5361,7 +5391,10 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 		return Boolean(sourceId && targetId && keepIds.has(sourceId) && keepIds.has(targetId));
 	});
 	stripPreviousEmploymentLinksAndUnreachable(logIds);
-	pruneGraphDataToKeepIds(new Set((globalState.graphData.nodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean)));
+	if (pruneGenerationAtStart !== clearNonLogPruneGeneration) return;
+	const afterStripIds = new Set((globalState.graphData.nodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
+	armClearNonLogKeepGate(afterStripIds);
+	pruneGraphDataToKeepIds(afterStripIds);
 
 	// Selected people who lost any employment-history links should no longer look selected.
 	for (const personId of selectedPeople) {
@@ -9921,6 +9954,8 @@ export function init(
  * Returns true if at least one matching node was found and injected.
  */
 async function fetchAndInjectLocalQuery(q) {
+	// User-initiated search/fetch may add nodes outside the last clear-non-log keep set.
+	releaseClearNonLogKeepGate();
 	try {
 		const url = makeApiUrl(`/api/finra/graph-search?q=${encodeURIComponent(q)}&limit=50`).toString();
 		const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } });
@@ -10592,11 +10627,13 @@ function mergeIntoGraphData(newNodes, newLinks) {
 	if (!globalState.graphData) return;
 	invalidateFullAdjacencyMap();
 	const existingNodes = Array.isArray(globalState.graphData.nodes) ? globalState.graphData.nodes : [];
-	const mergeResult = mergeIncomingNodesIntoExistingNodes(existingNodes, newNodes);
+	const gated = filterIncomingGraphAgainstClearNonLogGate(newNodes, newLinks);
+	if (gated.blockedAll) return;
+	const mergeResult = mergeIncomingNodesIntoExistingNodes(existingNodes, gated.nodes);
 	const mergedNodes = mergeResult.nodes;
 	const addedIds = mergedNodes.filter((node) => !existingNodes.some((entry) => entry.id === node.id)).map((node) => node.id);
 	globalState.graphData.nodes = mergedNodes;
-	const revealableLinks = Array.isArray(newLinks) ? newLinks.filter((link) => isAutoExpansionLink(link) || isPreviousEmploymentLink(link)) : [];
+	const revealableLinks = Array.isArray(gated.links) ? gated.links.filter((link) => isAutoExpansionLink(link) || isPreviousEmploymentLink(link)) : [];
 	const rewrittenLinks = rewriteLinksForNodeIdMap(revealableLinks, mergeResult.idRewriteMap);
 	const gLinkKeys = new Set(globalState.graphData.links.map((l) => getLinkIdentityKey(l)));
 	rewrittenLinks
@@ -15062,6 +15099,10 @@ function appendFetchedImpl(
 	const { skipPersist = false, skipFindRefresh = false, skipSimRestart = false } = options;
 	if (!Array.isArray(newNodes)) newNodes = [];
 	if (!Array.isArray(newLinks)) newLinks = [];
+	const gatedIncoming = filterIncomingGraphAgainstClearNonLogGate(newNodes, newLinks);
+	if (gatedIncoming.blockedAll) return;
+	newNodes = gatedIncoming.nodes;
+	newLinks = gatedIncoming.links;
 	if (!globalState.layoutNodes || !globalState.layoutLinks) {
 		if (globalState.graphData && Array.isArray(newNodes) && Array.isArray(newLinks)) {
 			mergeIntoGraphData(newNodes, newLinks);
@@ -18980,6 +19021,8 @@ function openNodeWithExpansion(
 	} = {},
 ) {
 	if (!d?.id) return;
+	// Click/expand is intentional: allow new neighbors beyond the last clear-non-log prune.
+	releaseClearNonLogKeepGate();
 
 	selectNode(d, {
 		skipAutoExpand: true,

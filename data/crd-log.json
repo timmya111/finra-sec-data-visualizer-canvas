@@ -1,8 +1,136 @@
 {
   "firms": [
     {
+      "id": 13609,
+      "name": "BERTHEL, FISHER & COMPANY FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 759,
+      "name": "SECURITIES MANAGEMENT & RESEARCH, INC."
+    },
+    {
+      "id": 44181,
+      "name": "NATIONS FINANCIAL GROUP, INC."
+    },
+    {
+      "id": 119682,
+      "name": "BFC PLANNING, INC."
+    },
+    {
+      "id": 145323,
+      "name": "HIGHTOWER ADVISORS, LLC"
+    },
+    {
+      "id": 116681,
+      "name": "HIGHTOWER SECURITIES, LLC"
+    },
+    {
+      "id": 164775,
+      "name": "NEW VERNON WEALTH MANAGEMENT LLC"
+    },
+    {
+      "id": 6564,
+      "name": "SF INVESTMENTS, INC."
+    },
+    {
+      "id": 4882,
+      "name": "MUTUAL BENEFIT FINANCIAL SERVICE COMPANY"
+    },
+    {
+      "id": 7291,
+      "name": "LOWRY FINANCIAL SERVICES CORPORATION"
+    },
+    {
       "id": 79,
       "name": "J.P. MORGAN SECURITIES LLC"
+    },
+    {
+      "id": 25025,
+      "name": "E*TRADE CLEARING LLC"
+    },
+    {
+      "id": 29106,
+      "name": "E*TRADE SECURITIES LLC"
+    },
+    {
+      "id": 7691,
+      "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
+    },
+    {
+      "id": 149777,
+      "name": "MORGAN STANLEY"
+    },
+    {
+      "id": 7870,
+      "name": "TD AMERITRADE, INC."
+    },
+    {
+      "id": 41271,
+      "name": "ROBERTSON STEPHENS, INC."
+    },
+    {
+      "id": 6413,
+      "name": "LPL FINANCIAL LLC"
+    },
+    {
+      "id": 7461,
+      "name": "FSC SECURITIES CORPORATION"
+    },
+    {
+      "id": 421,
+      "name": "WOODBURY FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 10205,
+      "name": "SECURITIES AMERICA, INC."
+    },
+    {
+      "id": 25803,
+      "name": "TRIAD ADVISORS LLC"
+    },
+    {
+      "id": 18487,
+      "name": "AMERICAN PORTFOLIOS FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 23131,
+      "name": "OSAIC WEALTH, INC."
+    },
+    {
+      "id": 133763,
+      "name": "OSAIC SERVICES, INC."
+    },
+    {
+      "id": 35371,
+      "name": "OSAIC INSTITUTIONS, INC."
+    },
+    {
+      "id": 111893,
+      "name": "BLOOM WEALTH ADVISORS"
+    },
+    {
+      "id": 13572,
+      "name": "CETERA ADVISOR NETWORKS LLC"
+    },
+    {
+      "id": 155344,
+      "name": "CWM, LLC"
+    },
+    {
+      "id": 42820,
+      "name": "TRIPLETREE, LLC"
+    },
+    {
+      "id": 125968,
+      "name": "DEVENIR, LLC"
+    },
+    {
+      "id": 142940,
+      "name": "TENECA, LLC"
+    },
+    {
+      "id": 103771,
+      "name": "KINGFISHER SECURITIES, LLC"
     },
     {
       "id": 110826,
@@ -27,10 +155,6 @@
     {
       "id": 35350,
       "name": "NYLIFE DISTRIBUTORS LLC"
-    },
-    {
-      "id": 29106,
-      "name": "E*TRADE SECURITIES LLC"
     },
     {
       "id": 2881,
@@ -97,16 +221,8 @@
       "name": "MORGAN STANLEY & CO. INCORPORATED"
     },
     {
-      "id": 149777,
-      "name": "MORGAN STANLEY"
-    },
-    {
       "id": 105360,
       "name": "INVESCO ADVISERS, INC."
-    },
-    {
-      "id": 7691,
-      "name": "MERRILL LYNCH, PIERCE, FENNER & SMITH INCORPORATED"
     },
     {
       "id": 7369,
@@ -151,10 +267,6 @@
     {
       "id": 16360,
       "name": "NEEDHAM & COMPANY, LLC"
-    },
-    {
-      "id": 6413,
-      "name": "LPL FINANCIAL LLC"
     },
     {
       "id": 8032,
@@ -553,14 +665,6 @@
       "name": "USAA FINANCIAL ADVISORS, INC."
     },
     {
-      "id": 145323,
-      "name": "HIGHTOWER ADVISORS, LLC"
-    },
-    {
-      "id": 116681,
-      "name": "HIGHTOWER SECURITIES, LLC"
-    },
-    {
       "id": 288590,
       "name": "FIDELITY PERSONAL AND WORKPLACE ADVISORS"
     },
@@ -737,14 +841,6 @@
       "name": "TD AMERITRADE INVESTMENT MANAGEMENT, LLC"
     },
     {
-      "id": 7870,
-      "name": "TD AMERITRADE, INC."
-    },
-    {
-      "id": 421,
-      "name": "FORTIS INVESTORS, INC."
-    },
-    {
       "id": 332,
       "name": "FRANKLIN/TEMPLETON DISTRIBUTORS, INC."
     },
@@ -865,10 +961,6 @@
       "name": "CETERA INVESTMENT ADVISERS LLC"
     },
     {
-      "id": 13572,
-      "name": "CETERA WEALTH SERVICES, LLC"
-    },
-    {
       "id": 727,
       "name": "ROTAN MOSLE INC."
     },
@@ -975,10 +1067,6 @@
     {
       "id": 15340,
       "name": "CETERA INVESTMENT SERVICES LLC"
-    },
-    {
-      "id": 35371,
-      "name": "INFINEX INVESTMENTS, INC."
     },
     {
       "id": 6998,
@@ -1661,14 +1749,6 @@
       "name": "CBIS FINANCIAL SERVICES, INC."
     },
     {
-      "id": 10205,
-      "name": "SECURITIES AMERICA, INC."
-    },
-    {
-      "id": 23131,
-      "name": "OSAIC WEALTH, INC."
-    },
-    {
       "id": 315846,
       "name": "DISCIPLINE WEALTH SOLUTIONS, INC."
     },
@@ -1859,22 +1939,6 @@
     {
       "id": 10105,
       "name": "OGILVIE SECURITY ADVISORS CORPORATION"
-    },
-    {
-      "id": 133763,
-      "name": "SAGEPOINT FINANCIAL, INC."
-    },
-    {
-      "id": 7461,
-      "name": "FSC SECURITIES CORPORATION"
-    },
-    {
-      "id": 25803,
-      "name": "TRIAD ADVISORS LLC"
-    },
-    {
-      "id": 759,
-      "name": "SECURITIES MANAGEMENT & RESEARCH, INC."
     },
     {
       "id": 158401,
@@ -3079,10 +3143,6 @@
     {
       "id": 108341,
       "name": "A. N. CULBERTSON & COMPANY, INC."
-    },
-    {
-      "id": 155344,
-      "name": "CWM, LLC"
     },
     {
       "id": 19631,
@@ -4303,10 +4363,6 @@
     {
       "id": 112697,
       "name": "AMERICAN PORTFOLIOS ADVISORS, INC"
-    },
-    {
-      "id": 18487,
-      "name": "AMERICAN PORTFOLIOS FINANCIAL SERVICES, INC."
     },
     {
       "id": 341095,
@@ -7285,10 +7341,6 @@
       "name": "BROWN ASSOCIATES, INC."
     },
     {
-      "id": 4882,
-      "name": "GREEN HILL FINANCIAL SERVICE CORPORATION"
-    },
-    {
       "id": 2732,
       "name": "C. S. MCKEE & COMPANY, INCORPORATED"
     },
@@ -7345,14 +7397,6 @@
       "name": "ADIRONDACK TRADING GROUP LLC"
     },
     {
-      "id": 119682,
-      "name": "BFC PLANNING, INC."
-    },
-    {
-      "id": 13609,
-      "name": "BERTHEL, FISHER & COMPANY FINANCIAL SERVICES, INC."
-    },
-    {
       "id": 127236,
       "name": "CAPITAL ONE FINANCIAL ADVISORS LLC"
     },
@@ -7379,10 +7423,6 @@
     {
       "id": 38535,
       "name": "MOLONEY SECURITIES CO., INC."
-    },
-    {
-      "id": 111893,
-      "name": "BLOOM WEALTH ADVISORS"
     },
     {
       "id": 5178,
@@ -7535,10 +7575,6 @@
     {
       "id": 159128,
       "name": "STERLING TRADER EXECUTION SERVICES, INC."
-    },
-    {
-      "id": 25025,
-      "name": "E*TRADE CLEARING LLC"
     },
     {
       "id": 110476,
@@ -8178,6 +8214,54 @@
     }
   ],
   "individuals": [
+    {
+      "id": 6721718,
+      "name": "Brian Michael Rupp"
+    },
+    {
+      "id": 4346998,
+      "name": "RANDY AUSTIN WILCOX"
+    },
+    {
+      "id": 7478061,
+      "name": "Sonam Lama"
+    },
+    {
+      "id": 1989147,
+      "name": "DANIEL MARK SHAPIRO"
+    },
+    {
+      "id": 823289,
+      "name": "THOMAS JOSEPH BERTHEL"
+    },
+    {
+      "id": 7675791,
+      "name": "Carrie McCrum"
+    },
+    {
+      "id": 2212982,
+      "name": "PAUL VIENICK"
+    },
+    {
+      "id": 3132991,
+      "name": "GREGORY ALLEN CORNICK"
+    },
+    {
+      "id": 7122597,
+      "name": "Rachid Alaoui Abdallaoui"
+    },
+    {
+      "id": 2693044,
+      "name": "AMY LOUISE NOEL"
+    },
+    {
+      "id": 7811685,
+      "name": "Landon DeCoursey"
+    },
+    {
+      "id": 2754403,
+      "name": "ANTHONY JOHN PENCE"
+    },
     {
       "id": 6410914,
       "name": "NABEED ZAMAN"
@@ -12901,10 +12985,6 @@
     {
       "id": 3248381,
       "name": "ANDREW JAMES CHRISTOFFERSON"
-    },
-    {
-      "id": 2693044,
-      "name": "AMY LOUISE NOEL"
     },
     {
       "id": 1672884,

@@ -432,6 +432,62 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(keepIds.has('person:leaf')).toBe(false);
 	});
 
+	it('collectSelectionLogClearNonLogKeepIds drops shared-firm coworkers that do not reach another log node', () => {
+		// L1 and L2 share firm F; coworkers C1/C2 only touch F and never another log entry.
+		const graphData = {
+			nodes: [
+				{ id: 'person:L1', group: 'individual' },
+				{ id: 'person:L2', group: 'individual' },
+				{ id: 'person:C1', group: 'individual' },
+				{ id: 'person:C2', group: 'individual' },
+				{ id: 'firm:F', group: 'firm' },
+				{ id: 'firm:solo', group: 'firm' },
+			],
+			links: [
+				{ source: 'person:L1', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:L2', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:C1', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:C2', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:L1', target: 'firm:solo', relationship: 'employed_by' },
+			],
+		} as any;
+
+		const keepIds = collectSelectionLogClearNonLogKeepIds(graphData, [
+			{ id: 'person:L1', label: 'L1', secondaryId: 'CRD# 1', group: 'individual' },
+			{ id: 'person:L2', label: 'L2', secondaryId: 'CRD# 2', group: 'individual' },
+		]);
+
+		expect(Array.from(keepIds).sort()).toEqual(['firm:F', 'person:L1', 'person:L2']);
+		expect(keepIds.has('person:C1')).toBe(false);
+		expect(keepIds.has('person:C2')).toBe(false);
+		expect(keepIds.has('firm:solo')).toBe(false);
+	});
+
+	it('collectSelectionLogClearNonLogKeepIds keeps multi-hop non-log people that bridge two log firms', () => {
+		// firmA (log) -- personX (not log) -- firmB (log)
+		const graphData = {
+			nodes: [
+				{ id: 'firm:A', group: 'firm' },
+				{ id: 'firm:B', group: 'firm' },
+				{ id: 'person:X', group: 'individual' },
+				{ id: 'person:leaf', group: 'individual' },
+			],
+			links: [
+				{ source: 'person:X', target: 'firm:A', relationship: 'employed_by' },
+				{ source: 'person:X', target: 'firm:B', relationship: 'employed_by' },
+				{ source: 'person:leaf', target: 'firm:A', relationship: 'employed_by' },
+			],
+		} as any;
+
+		const keepIds = collectSelectionLogClearNonLogKeepIds(graphData, [
+			{ id: 'firm:A', label: 'A', secondaryId: 'CRD# 1', group: 'firm' },
+			{ id: 'firm:B', label: 'B', secondaryId: 'CRD# 2', group: 'firm' },
+		]);
+
+		expect(Array.from(keepIds).sort()).toEqual(['firm:A', 'firm:B', 'person:X']);
+		expect(keepIds.has('person:leaf')).toBe(false);
+	});
+
 	it('ensureSidebarHintContent adds placeholder when empty', () => {
 		const inner = document.getElementById('fg-sidebar-inner')!;
 		inner.innerHTML = '';
