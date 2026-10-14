@@ -17522,7 +17522,10 @@ async function ensureFirmDetail(firmNode) {
 			if (bi.formedState) firmNode.formedState = bi.formedState;
 			if (bi.formedDate) firmNode.formedDate = bi.formedDate;
 			if (bi.fiscalMonthEndCode) firmNode.fiscalYearEnd = bi.fiscalMonthEndCode;
-			if (bi.iaSECNumber || bi.iaSecNumber || bi.bdSECNumber) firmNode.iaSecNumber = bi.iaSECNumber || bi.iaSecNumber || bi.bdSECNumber;
+			// Never stamp bdSECNumber onto iaSecNumber — BD ids are not AdvisorInfo firm ids
+			// and would flip FINRA-only firms to SEC/both paint + sidebar links (e.g. CRD 8217).
+			if (bi.iaSECNumber || bi.iaSecNumber) firmNode.iaSecNumber = bi.iaSECNumber || bi.iaSecNumber;
+			if (bi.bdSECNumber || bi.bdSecNumber) firmNode.bdSecNumber = bi.bdSECNumber || bi.bdSecNumber;
 			if (bi.isLegacy) firmNode.isLegacy = bi.isLegacy;
 			if (Array.isArray(bi.otherNames) && bi.otherNames.length) firmNode.otherNames = bi.otherNames;
 			applyFirmSourceFieldsToNode(firmNode, detail);
@@ -17549,6 +17552,7 @@ async function ensureFirmDetail(firmNode) {
 				firmNode.secDocumentLinks = detail.secDocumentLinks;
 			}
 			if (detail.hasSecData === false) {
+				firmNode.iaSecNumber = null;
 				firmNode.secSummaryDescription = '';
 				firmNode.secDocumentLinks = [];
 			}
@@ -19217,8 +19221,10 @@ function applySelectionRefreshDetailToNode(node, detail) {
 				node.bcScope = (detail as any).bcScope ?? basic.bcScope ?? node.bcScope;
 				node.iaScope = (detail as any).iaScope ?? basic.iaScope ?? node.iaScope;
 				node.firmStatus = (detail as any).firmStatus ?? basic.firmStatus ?? node.firmStatus;
-				node.hasFinraData = Boolean((detail as any).hasFinraData ?? node.hasFinraData);
-				node.hasSecData = Boolean((detail as any).hasSecData ?? node.hasSecData);
+				applyFirmSourceFieldsToNode(node, detail);
+				if ((detail as any).hasFinraData != null) node.hasFinraData = (detail as any).hasFinraData;
+				if ((detail as any).hasSecData != null) node.hasSecData = (detail as any).hasSecData;
+				if ((detail as any).hasSecData === false) node.iaSecNumber = null;
 			}
 		}
 		node.lastCheckedAt = new Date().toISOString();

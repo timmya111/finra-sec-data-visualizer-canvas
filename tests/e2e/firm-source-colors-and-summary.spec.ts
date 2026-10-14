@@ -14,20 +14,25 @@ type FirmCase = {
 	coverage: FirmCoverage;
 	label: RegExp;
 	name: string;
+	expectInactive: boolean;
 	expectFinraSummary: boolean;
 	expectSecSummary: boolean;
+	/** Extra SEC document links expected when SEC presence is shown. */
+	expectSecDocLinks: boolean;
 	detail: Record<string, unknown>;
 };
 
-/** Transamerica samples from firm-source-paint memory notes. */
+/** Sample CRDs: Transamerica active FINRA/SEC/both + State Farm terminated. */
 const FIRM_CASES: FirmCase[] = [
 	{
 		crd: '8217',
 		coverage: 'finra_only',
 		label: /TRANSAMERICA CAPITAL/i,
 		name: 'TRANSAMERICA CAPITAL, LLC',
+		expectInactive: false,
 		expectFinraSummary: true,
 		expectSecSummary: false,
+		expectSecDocLinks: false,
 		detail: {
 			hasFinraData: true,
 			hasSecData: false,
@@ -45,8 +50,10 @@ const FIRM_CASES: FirmCase[] = [
 		coverage: 'sec_only',
 		label: /TRANSAMERICA RETIREMENT ADVISORS/i,
 		name: 'TRANSAMERICA RETIREMENT ADVISORS, LLC',
+		expectInactive: false,
 		expectFinraSummary: false,
 		expectSecSummary: true,
+		expectSecDocLinks: true,
 		detail: {
 			hasFinraData: false,
 			hasSecData: true,
@@ -63,8 +70,10 @@ const FIRM_CASES: FirmCase[] = [
 		coverage: 'both',
 		label: /TRANSAMERICA FINANCIAL ADVISORS/i,
 		name: 'TRANSAMERICA FINANCIAL ADVISORS, LLC',
+		expectInactive: false,
 		expectFinraSummary: true,
 		expectSecSummary: true,
+		expectSecDocLinks: true,
 		detail: {
 			hasFinraData: true,
 			hasSecData: true,
@@ -73,9 +82,36 @@ const FIRM_CASES: FirmCase[] = [
 				firmName: 'TRANSAMERICA FINANCIAL ADVISORS, LLC',
 				bcScope: 'ACTIVE',
 				iaScope: 'ACTIVE',
+				firmStatus: 'Approved',
 				iaSECNumber: '38618',
 				bdSECNumber: '16164',
 			},
+		},
+	},
+	{
+		crd: '3487',
+		coverage: 'both',
+		label: /STATE FARM INVESTMENT MANAGEMENT/i,
+		name: 'STATE FARM INVESTMENT MANAGEMENT CORP.',
+		expectInactive: true,
+		expectFinraSummary: true,
+		expectSecSummary: true,
+		expectSecDocLinks: true,
+		detail: {
+			hasFinraData: true,
+			hasSecData: true,
+			basicInformation: {
+				firmId: 3487,
+				firmName: 'STATE FARM INVESTMENT MANAGEMENT CORP.',
+				bcScope: 'INACTIVE',
+				iaScope: 'ACTIVE',
+				firmStatus: 'Terminated',
+				firmStatusDate: '06/30/2001',
+				iaSECNumber: '8184',
+				bdSECNumber: '13379',
+				districtName: 'Chicago',
+			},
+			registrationStatus: [{ secJurisdiction: 'SEC', status: 'Approved', effectiveDate: '12/14/1971' }],
 		},
 	},
 ];
@@ -213,6 +249,24 @@ async function readFetchedFirm(page: Page, crd: string) {
 	}, crd);
 }
 
+async function readFirmPaintFlags(page: Page, crd: string) {
+	return page.evaluate((firmCrd) => {
+		const nodes = ((window as any).__FINRA_GRAPH_NODES || []) as any[];
+		const node =
+			nodes.find((entry) => String(entry?.id || '') === `firm:${firmCrd}` || String(entry?.firmId || '') === firmCrd) ||
+			null;
+		const dbg = typeof (window as any).__fgDebugNode === 'function' ? (window as any).__fgDebugNode(firmCrd) : null;
+		return {
+			id: node?.id || null,
+			_vizInactive: node?._vizInactive === true,
+			isNodeInactive: dbg?.isNodeInactive === true,
+			firmStatus: node?.firmStatus || node?.basicInformation?.firmStatus || null,
+			hasFinraData: node?.hasFinraData === true,
+			hasSecData: node?.hasSecData === true,
+		};
+	}, crd);
+}
+
 async function selectFirmOnGraph(page: Page, crd: string) {
 	const svgNode = page.locator('.fg-node').filter({ hasText: new RegExp(crd) }).first();
 	if (await svgNode.count()) {
@@ -244,7 +298,7 @@ function isAppHomeUrl(url: string) {
 	}
 }
 
-async function assertExternalSummaryDoesNotBounceHome(page: Page, href: string, label: string) {
+async function assertExternalLinkDoesNotBounceHome(page: Page, href: string, label: string) {
 	const response = await page.request.get(href, {
 		maxRedirects: 5,
 		failOnStatusCode: false,
@@ -255,18 +309,35 @@ async function assertExternalSummaryDoesNotBounceHome(page: Page, href: string, 
 			`${label} redirected to the app home (${finalUrl}). Recheck the external endpoint: ${href}`,
 		);
 	}
-	// Soft check: external hosts should stay on brokercheck / adviserinfo / reports domains.
 	expect(
-		/brokercheck\.finra\.org|adviserinfo\.sec\.gov|reports\.adviserinfo\.sec\.gov/i.test(finalUrl),
+		/brokercheck\.finra\.org|files\.brokercheck\.finra\.org|adviserinfo\.sec\.gov|reports\.adviserinfo\.sec\.gov/i.test(
+			finalUrl,
+		),
 		`${label} final URL should stay on FINRA/SEC hosts (got ${finalUrl}). Recheck external endpoint: ${href}`,
 	).toBe(true);
 }
 
+async function collectSidebarExternalLinks(page: Page) {
+	return page.evaluate(() => {
+		const root = document.getElementById('fg-sidebar');
+		if (!root) return [] as Array<{ text: string; href: string; className: string }>;
+		return Array.from(root.querySelectorAll<HTMLAnchorElement>('a.fg-ext-link'))
+			.map((anchor) => ({
+				text: String(anchor.textContent || '')
+					.replace(/\s+/g, ' ')
+					.trim(),
+				href: String(anchor.getAttribute('href') || '').trim(),
+				className: String(anchor.className || ''),
+			}))
+			.filter((entry) => entry.href);
+	});
+}
+
 test.describe('Fetched firm source colors and FINRA/SEC summary links', () => {
-	test('newly fetched FINRA-only, SEC-only, and both firms paint correctly and summary links stay external', async ({
+	test('search-fetched FINRA-only, SEC-only, both, and terminated firms paint correctly and sidebar links stay external', async ({
 		page,
 	}) => {
-		test.setTimeout(180_000);
+		test.setTimeout(240_000);
 		await prepareEmptyGraph(page);
 
 		for (const firm of FIRM_CASES) {
@@ -289,6 +360,21 @@ test.describe('Fetched firm source colors and FINRA/SEC summary links', () => {
 			const beforeSelect = await readFetchedFirm(page, firm.crd);
 			expect(beforeSelect, `firm ${firm.crd} should exist before click`).toBeTruthy();
 			expect(String(beforeSelect?.label || '')).toMatch(firm.label);
+
+			if (firm.expectInactive) {
+				await expect
+					.poll(
+						async () => {
+							const flags = await readFirmPaintFlags(page, firm.crd);
+							return flags.isNodeInactive || flags._vizInactive;
+						},
+						{
+							timeout: 20_000,
+							message: `expected terminated firm ${firm.crd} to be inactive/gray before or after hydrate`,
+						},
+					)
+					.toBe(true);
+			}
 		}
 
 		for (const firm of FIRM_CASES) {
@@ -311,15 +397,35 @@ test.describe('Fetched firm source colors and FINRA/SEC summary links', () => {
 				)
 				.toBe(`firm:${firm.crd}`);
 
+			const paintFlags = await readFirmPaintFlags(page, firm.crd);
+			if (firm.expectInactive) {
+				expect(paintFlags.isNodeInactive || paintFlags._vizInactive, `firm ${firm.crd} should stay inactive after select`).toBe(
+					true,
+				);
+			} else {
+				expect(paintFlags.isNodeInactive, `active firm ${firm.crd} should not be inactive`).toBe(false);
+			}
+
+			// Coverage must survive select hydrate (no bdSEC→iaSec flip to both).
+			await expect
+				.poll(async () => coverageFromNode(await readFetchedFirm(page, firm.crd)), {
+					timeout: 15_000,
+					message: `expected firm ${firm.crd} to keep ${firm.coverage} coverage after select`,
+				})
+				.toBe(firm.coverage);
+
 			const finraSummary = page.locator('#fg-sidebar a.fg-ext-link.bc', { hasText: /FINRA Summary/i });
 			const secSummary = page.locator('#fg-sidebar a.fg-ext-link.sec', { hasText: /SEC AdvisorInfo Summary/i });
+			const formAdv = page.locator('#fg-sidebar a.fg-ext-link', { hasText: /Latest Form ADV filed/i });
+			const brochure = page.locator('#fg-sidebar a.fg-ext-link', { hasText: /SEC firm brochure/i });
+			const formCrs = page.locator('#fg-sidebar a.fg-ext-link', { hasText: /SEC Form CRS/i });
 
 			if (firm.expectFinraSummary) {
 				await expect(finraSummary).toHaveCount(1);
 				const href = await finraSummary.getAttribute('href');
 				expect(href, `FINRA Summary href for ${firm.crd}`).toBeTruthy();
 				expect(href!).toContain(`brokercheck.finra.org/firm/summary/${firm.crd}`);
-				await assertExternalSummaryDoesNotBounceHome(page, href!, `FINRA Summary for ${firm.crd}`);
+				await assertExternalLinkDoesNotBounceHome(page, href!, `FINRA Summary for ${firm.crd}`);
 			} else {
 				await expect(finraSummary).toHaveCount(0);
 			}
@@ -329,9 +435,33 @@ test.describe('Fetched firm source colors and FINRA/SEC summary links', () => {
 				const href = await secSummary.getAttribute('href');
 				expect(href, `SEC AdvisorInfo Summary href for ${firm.crd}`).toBeTruthy();
 				expect(href!).toContain(`adviserinfo.sec.gov/firm/summary/${firm.crd}`);
-				await assertExternalSummaryDoesNotBounceHome(page, href!, `SEC AdvisorInfo Summary for ${firm.crd}`);
+				await assertExternalLinkDoesNotBounceHome(page, href!, `SEC AdvisorInfo Summary for ${firm.crd}`);
 			} else {
 				await expect(secSummary).toHaveCount(0);
+			}
+
+			if (firm.expectSecDocLinks) {
+				await expect(formAdv).toHaveCount(1);
+				await expect(brochure).toHaveCount(1);
+				await expect(formCrs).toHaveCount(1);
+				for (const locator of [formAdv, brochure, formCrs]) {
+					const label = (await locator.textContent())?.replace(/\s+/g, ' ').trim() || 'SEC doc link';
+					const href = await locator.getAttribute('href');
+					expect(href, `${label} href for ${firm.crd}`).toBeTruthy();
+					await assertExternalLinkDoesNotBounceHome(page, href!, `${label} for ${firm.crd}`);
+				}
+			} else {
+				await expect(formAdv).toHaveCount(0);
+				await expect(brochure).toHaveCount(0);
+				await expect(formCrs).toHaveCount(0);
+			}
+
+			// Every sidebar external link must stay on FINRA/SEC hosts (catch extras like Detailed Report).
+			const allLinks = await collectSidebarExternalLinks(page);
+			expect(allLinks.length, `expected sidebar external links for firm ${firm.crd}`).toBeGreaterThan(0);
+			for (const link of allLinks) {
+				expect(link.href, `${link.text || 'sidebar link'} for ${firm.crd}`).toBeTruthy();
+				await assertExternalLinkDoesNotBounceHome(page, link.href, `${link.text || 'sidebar link'} for ${firm.crd}`);
 			}
 		}
 	});

@@ -72,6 +72,37 @@ describe('firmSourcePaint', () => {
 		).toBe('finra_only');
 	});
 
+	it('clears a polluted iaSecNumber that was copied from bdSECNumber on FINRA-only hydrate', () => {
+		const node: any = {
+			id: 'firm:8217',
+			group: 'firm',
+			firmId: '8217',
+			hasFinraData: true,
+			hasSecData: false,
+			bcScope: 'ACTIVE',
+			firmStatus: 'Approved',
+			// Prior bug: ensureFirmDetail stamped bdSECNumber onto iaSecNumber.
+			iaSecNumber: '24829',
+			bdSecNumber: '24829',
+		};
+		applyFirmSourceFieldsToNode(node, {
+			hasFinraData: true,
+			hasSecData: false,
+			basicInformation: {
+				firmId: 8217,
+				firmName: 'TRANSAMERICA CAPITAL, LLC',
+				bcScope: 'ACTIVE',
+				firmStatus: 'Approved',
+				bdSECNumber: '24829',
+			},
+		});
+		expect(node.hasFinraData).toBe(true);
+		expect(node.hasSecData).toBe(false);
+		expect(node.iaSecNumber).toBeNull();
+		expect(node.bdSecNumber).toBe('24829');
+		expect(getFirmSourceCoverage(node)).toBe('finra_only');
+	});
+
 	it('paints SEC-only green, FINRA-only purple, both purple with green border', () => {
 		expect(getFirmSourcePaintStyle({ hasSecData: true, hasFinraData: false })).toMatchObject({
 			coverage: 'sec_only',

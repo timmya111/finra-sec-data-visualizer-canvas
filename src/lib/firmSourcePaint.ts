@@ -200,7 +200,13 @@ export function applyFirmSourceFieldsToNode(node: any, src: any) {
 	if (fields.bcScope) node.bcScope = fields.bcScope;
 	if (fields.iaScope) node.iaScope = fields.iaScope;
 	if (fields.firmStatus) node.firmStatus = fields.firmStatus;
+	// Stamp SEC/BD numbers from the source snapshot. When the source has no IA SEC
+	// number (or explicitly hasSecData=false), clear any stale iaSecNumber so a prior
+	// bad hydrate (bdSECNumber copied onto iaSecNumber) cannot invent SEC coverage.
 	if (fields.iaSecNumber) node.iaSecNumber = fields.iaSecNumber;
+	else if (fields.hasSecData === false || Object.prototype.hasOwnProperty.call(src || {}, 'basicInformation') || src?.hasSecData === false) {
+		node.iaSecNumber = null;
+	}
 	if (fields.bdSecNumber) node.bdSecNumber = fields.bdSecNumber;
 	if (fields.districtName) node.districtName = fields.districtName;
 	if (fields.isLegacy) node.isLegacy = fields.isLegacy;
@@ -213,6 +219,13 @@ export function applyFirmSourceFieldsToNode(node: any, src: any) {
 	}
 	node.hasFinraData = fields.hasFinraData;
 	node.hasSecData = fields.hasSecData;
+	if (fields.hasSecData === false) {
+		node.iaSecNumber = null;
+		if (node.basicInformation && typeof node.basicInformation === 'object') {
+			delete node.basicInformation.iaSECNumber;
+			delete node.basicInformation.iaSecNumber;
+		}
+	}
 	return node;
 }
 
