@@ -4,6 +4,8 @@ import { logger } from '@/lib/logger';
 import { searchGraphFallback } from '@/lib/searchGraphFallback';
 import { searchDirectRedisFallback } from '@/lib/searchDirectFallback';
 import { searchExternalFallback } from '@/lib/searchExternalFallback';
+import { searchExternalNameSupplement } from '@/lib/searchExternalNameSupplement';
+import { setExternalApiContext } from '@/lib/externalApiGate';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -123,9 +125,38 @@ export async function GET(request: NextRequest) {
 				data = emptyResponse;
 			}
 		}
+		// Surname/text people search: merge fuzzy-filtered BrokerCheck hits so local
+		// sidecars (active/connected subset) still reach live Hopper/Hooper-scale coverage.
+		if (entity === 'individual' && !/^\d{1,10}$/.test(query) && !rawQuery.includes(',')) {
+			try {
+				setExternalApiContext('search');
+				const localFull = await searchLocalIndexMany('finra', entity, query, { limit: 1000, offset: 0, baseUrl });
+				const external = await searchExternalNameSupplement('finra', entity, query, { limit: 1000, offset: 0 });
+				if (external && (external.total || 0) > 0) {
+					data = mergeLocalSearchResponses([localFull, external], {
+						bucket: `finra:${entity}`,
+						limit,
+						offset,
+						repage: true,
+					});
+				} else if ((localFull?.total || 0) > 0) {
+					data = mergeLocalSearchResponses([localFull], {
+						bucket: `finra:${entity}`,
+						limit,
+						offset,
+						repage: true,
+					});
+				}
+			} catch (err: any) {
+				logger.warn('external name supplement failed for FINRA query', { query: rawQuery, error: err?.message || String(err) });
+			} finally {
+				setExternalApiContext(null);
+			}
+		}
+
 		const total = data?.total || 0;
-		// Prefer the local search index. Fallbacks only run when local found nothing
-		// (e.g. CRD inventory short-circuit, missing sidecar entry).
+		// Prefer the local search index (plus optional external name supplement). Fallbacks
+		// only run when local found nothing (e.g. CRD inventory short-circuit, missing sidecar).
 		if (total > 0) return jsonNoStore(data);
 
 		const fallbackQueries = rawQuery.includes(',') ? searchQueries : searchQueries.slice(0, 5);

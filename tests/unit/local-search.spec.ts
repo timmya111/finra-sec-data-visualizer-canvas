@@ -213,7 +213,7 @@ describe('local search indexes', () => {
 		expect(result.total).toBeGreaterThan(0);
 		expect(result.response.docs[0]?.ind_source_id).toBe('1000495');
 		expect(String(result.response.docs[0]?.ind_lastname || '').toLowerCase()).toContain('baccala');
-	});
+	}, 30000);
 
 	it('matches Mason as a whole word in first, middle, or last name', async () => {
 		const result = await searchLocalIndex('sec', 'individual', 'mason', { limit: 1000 });

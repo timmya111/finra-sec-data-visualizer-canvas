@@ -45,6 +45,13 @@ import {
 	type CachedFirmConnectionsPayload,
 } from '@/lib/clientVisitCache';
 import { requestSelectionRefresh } from '@/lib/selectionRefreshClient';
+import {
+	type HeaderSearchType,
+	searchHitMatchesActivityFilter,
+	searchTypeActivityFilter,
+	searchTypeIncludesFirms,
+	searchTypeIncludesPeople,
+} from '@/lib/searchHitActivity';
 import styles from './dashboard.module.css';
 
 type DashboardAction = 'fetch-crds' | 'list-new-crds';
@@ -2030,7 +2037,7 @@ function DashboardPageInner() {
 	const [searchResults, setSearchResults] = useState<SearchResultCard[]>([]);
 	const [searchSkippedCount, setSearchSkippedCount] = useState(0);
 	const [hasSearchRun, setHasSearchRun] = useState(false);
-	const [searchType, setSearchType] = useState<'all' | 'people' | 'firms'>('people');
+	const [searchType, setSearchType] = useState<HeaderSearchType>('all');
 	const [crawlProgress, setCrawlProgress] = useState<{
 		active: boolean;
 		current: number;
@@ -4540,8 +4547,9 @@ function DashboardPageInner() {
 		setSearchSkippedCount(0);
 
 		try {
-			const includePeople = searchType === 'all' || searchType === 'people';
-			const includeFirms = searchType === 'all' || searchType === 'firms';
+			const includePeople = searchTypeIncludesPeople(searchType);
+			const includeFirms = searchTypeIncludesFirms(searchType);
+			const activityFilter = searchTypeActivityFilter(searchType);
 			const [finraIndividualRes, finraFirmRes, secIndividualRes, secFirmRes] = await Promise.all([
 				includePeople ? fetch(`/api/finra/search?type=individual&query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
 				includeFirms ? fetch(`/api/finra/search?type=firm&query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
@@ -4569,6 +4577,9 @@ function DashboardPageInner() {
 				for (const item of items) {
 					if (isCorruptSearchItem(item)) {
 						skipped += 1;
+						continue;
+					}
+					if (activityFilter && activityFilter.kind === entity && !searchHitMatchesActivityFilter(item, activityFilter)) {
 						continue;
 					}
 
@@ -4810,14 +4821,16 @@ function DashboardPageInner() {
 											id='fg-search-type'
 											className='fg-search-type-inside'
 											value={searchType}
-											onChange={(event) => setSearchType(event.target.value as 'all' | 'people' | 'firms')}
+											onChange={(event) => setSearchType(event.target.value as HeaderSearchType)}
 											onClick={(event) => event.stopPropagation()}
 											onMouseDown={(event) => event.stopPropagation()}
-											title='Search type: all, people, or firms'
+											title='Search type: all, active people/firms, or inactive-only'
 											aria-label='Search type'>
 											<option value='all'>All</option>
 											<option value='people'>People</option>
+											<option value='people-inactive'>People inactive</option>
 											<option value='firms'>Firms</option>
+											<option value='firms-inactive'>Firms inactive</option>
 										</select>
 									</span>
 								</button>

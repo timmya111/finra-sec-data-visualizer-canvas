@@ -335,7 +335,7 @@ export default function FinraGraph() {
 	const [graphReady, setGraphReady] = useState(false);
 	const [browserPathname, setBrowserPathname] = useState('');
 	const [fetchQuery, setFetchQuery] = useState('');
-	const [searchType, setSearchType] = useState<'all' | 'people' | 'firms'>('people');
+	const [searchType, setSearchType] = useState<'all' | 'people' | 'firms' | 'people-inactive' | 'firms-inactive'>('people');
 	const [isFindBarOpen, setIsFindBarOpen] = useState(false);
 	const [findQuery, setFindQuery] = useState('');
 	const [findMatchState, setFindMatchState] = useState({ total: 0, activeOrdinal: 0 });
@@ -365,7 +365,9 @@ export default function FinraGraph() {
 		// Load persisted search type for the header search control
 		try {
 			const st = localStorage.getItem('finra_search_type');
-			if (st === 'people' || st === 'firms' || st === 'all') setSearchType(st);
+			if (st === 'people' || st === 'firms' || st === 'all' || st === 'people-inactive' || st === 'firms-inactive') {
+				setSearchType(st);
+			}
 		} catch {}
 
 		// Lightweight heap beacon for navigation crash diagnosis (Chrome only).
@@ -578,31 +580,26 @@ export default function FinraGraph() {
 		focusFindInput();
 	}, [focusFindInput]);
 
-	const closeFindBar = useCallback(
-		({ clearQuery = false }: { clearQuery?: boolean } = {}) => {
-			const input = findInputRef.current;
-			if (input && document.activeElement === input) {
-				input.blur();
-				window.requestAnimationFrame(() => {
-					if (appRef.current) {
-						appRef.current.focus({ preventScroll: true });
-					}
-				});
-			}
-			setIsFindBarOpen(false);
-			if (clearQuery) {
-				setFindQuery('');
-				setFindMatchState({ total: 0, activeOrdinal: 0 });
-				setActiveFindNodeId(null);
-				setFocusedFindNodeId(null);
-				window.dispatchEvent(new CustomEvent(FIND_CLOSE_EVENT, { detail: { clearQuery: true } }));
-				return;
-			}
-			setFocusedFindNodeId(activeFindNodeId);
-			window.dispatchEvent(new CustomEvent(FIND_CLOSE_EVENT, { detail: { clearQuery: false } }));
-		},
-		[activeFindNodeId],
-	);
+	const closeFindBar = useCallback(({ clearQuery = true }: { clearQuery?: boolean } = {}) => {
+		const input = findInputRef.current;
+		if (input && document.activeElement === input) {
+			input.blur();
+			window.requestAnimationFrame(() => {
+				if (appRef.current) {
+					appRef.current.focus({ preventScroll: true });
+				}
+			});
+		}
+		setIsFindBarOpen(false);
+		setActiveFindNodeId(null);
+		setFocusedFindNodeId(null);
+		if (clearQuery) {
+			setFindQuery('');
+			setFindMatchState({ total: 0, activeOrdinal: 0 });
+		}
+		// Always clear find highlights; never select/open the active match on dismiss.
+		window.dispatchEvent(new CustomEvent(FIND_CLOSE_EVENT, { detail: { clearQuery: true } }));
+	}, []);
 
 	const submitFindQuery = useCallback(() => {
 		const query = findQuery.trim();
@@ -964,37 +961,48 @@ export default function FinraGraph() {
 	useEffect(() => {
 		if (!isMounted) return;
 		// Menu stays open until the hamburger toggle closes it — no outside-click / Escape auto-hide.
-		const handleDocumentClickCapture = (event: MouseEvent) => {
+		const shouldDismissFindForTarget = (target: Node | null) => {
 			const findBar = document.getElementById('fg-find-header');
 			const findToggle = document.getElementById('fg-find-toggle');
-			const target = event.target as Node | null;
+			return Boolean(
+				isFindBarOpenRef.current && findBar && target && !findBar.contains(target) && (!findToggle || !findToggle.contains(target)),
+			);
+		};
 
-			if (isFindBarOpenRef.current && findBar && target && !findBar.contains(target) && (!findToggle || !findToggle.contains(target))) {
-				closeFindBar({ clearQuery: false });
-			}
+		const handleDocumentPointerDownCapture = (event: PointerEvent) => {
+			if (!shouldDismissFindForTarget(event.target as Node | null)) return;
+			// Swallow the dismiss gesture so canvas/node handlers do not select underneath.
+			event.preventDefault();
+			event.stopPropagation();
+			closeFindBar({ clearQuery: true });
+		};
+
+		const handleDocumentClickCapture = (event: MouseEvent) => {
+			if (!shouldDismissFindForTarget(event.target as Node | null)) return;
+			event.preventDefault();
+			event.stopPropagation();
+			if (isFindBarOpenRef.current) closeFindBar({ clearQuery: true });
 		};
 
 		const handleDocumentFocusIn = (event: FocusEvent) => {
-			const findBar = document.getElementById('fg-find-header');
-			const findToggle = document.getElementById('fg-find-toggle');
-			const target = event.target as Node | null;
-			if (isFindBarOpenRef.current && findBar && target && !findBar.contains(target) && (!findToggle || !findToggle.contains(target))) {
-				closeFindBar({ clearQuery: false });
-			}
+			if (!shouldDismissFindForTarget(event.target as Node | null)) return;
+			closeFindBar({ clearQuery: true });
 		};
 
 		const handleEscapeKey = (event: KeyboardEvent) => {
 			if (event.key !== 'Escape') return;
 			if (isFindBarOpenRef.current) {
 				event.preventDefault();
-				closeFindBar();
+				closeFindBar({ clearQuery: true });
 			}
 		};
+		document.addEventListener('pointerdown', handleDocumentPointerDownCapture, true);
 		document.addEventListener('click', handleDocumentClickCapture, true);
 		document.addEventListener('focusin', handleDocumentFocusIn, true);
 		document.addEventListener('keydown', handleEscapeKey);
 
 		return () => {
+			document.removeEventListener('pointerdown', handleDocumentPointerDownCapture, true);
 			document.removeEventListener('click', handleDocumentClickCapture, true);
 			document.removeEventListener('focusin', handleDocumentFocusIn, true);
 			document.removeEventListener('keydown', handleEscapeKey);
@@ -1220,11 +1228,13 @@ export default function FinraGraph() {
 											className='fg-search-type-inside'
 											value={searchType}
 											onChange={(e) => setSearchType(e.target.value as any)}
-											title='Search type: all, people, or firms'
+											title='Search type: all, active people/firms, or inactive-only'
 											aria-label='Search type'>
 											<option value='all'>All</option>
 											<option value='people'>People</option>
+											<option value='people-inactive'>People inactive</option>
 											<option value='firms'>Firms</option>
+											<option value='firms-inactive'>Firms inactive</option>
 										</select>
 									</span>
 								</button>

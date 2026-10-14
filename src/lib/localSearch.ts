@@ -400,13 +400,18 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 function buildSearchIndexes(docs: PreparedLocalSearchDoc[]) {
 	const nameTokenIndex = new Map<string, number[]>();
 	const employmentFirmIdIndex = new Map<string, number[]>();
+	// Docs are indexed in ascending order, so a token/firm key only re-sees the
+	// current docIndex as consecutive duplicates (name + surname + compact forms).
+	const pushUniqueDocIndex = (list: number[], docIndex: number) => {
+		if (list[list.length - 1] !== docIndex) list.push(docIndex);
+	};
 	const addToken = (token: string, docIndex: number) => {
 		const key = String(token || '')
 			.trim()
 			.toLowerCase();
 		if (!key) return;
 		const list = nameTokenIndex.get(key);
-		if (list) list.push(docIndex);
+		if (list) pushUniqueDocIndex(list, docIndex);
 		else nameTokenIndex.set(key, [docIndex]);
 	};
 	for (let docIndex = 0; docIndex < docs.length; docIndex += 1) {
@@ -423,7 +428,7 @@ function buildSearchIndexes(docs: PreparedLocalSearchDoc[]) {
 			const key = String(firmId || '').trim();
 			if (!key) continue;
 			const list = employmentFirmIdIndex.get(key);
-			if (list) list.push(docIndex);
+			if (list) pushUniqueDocIndex(list, docIndex);
 			else employmentFirmIdIndex.set(key, [docIndex]);
 		}
 	}
@@ -457,9 +462,14 @@ function collectCandidateDocs(
 	const tokenIndex = index.nameTokenIndex;
 	if (!tokenIndex || !tokens.length) return docs;
 
+	// Ignore 1-char tokens from apostrophe splits ("o'reilly" → ["o","reilly"]) so
+	// rarest selection is driven by the meaningful surname token.
+	const effectiveTokens = tokens.filter((token) => token.length >= 2);
+	const narrowingTokens = effectiveTokens.length ? effectiveTokens : tokens;
+
 	// Prefer the rarest exact token so fuzzy/scored matching runs on a small candidate set.
 	let rarest: number[] | null = null;
-	for (const token of tokens) {
+	for (const token of narrowingTokens) {
 		const list = tokenIndex.get(token);
 		if (!list) {
 			rarest = null;
@@ -469,6 +479,23 @@ function collectCandidateDocs(
 	}
 	if (!rarest) return docs; // exact token miss → keep full scan for fuzzy paths
 	if (rarest.length >= docs.length * 0.45) return docs; // not selective enough
+
+	// Prefix + fuzzy-expand the longest narrowing token ("hopper" → Hopperton/Hooper/Hoppe).
+	// Exact-only narrowing dropped those before scored matching could run.
+	const expandToken = narrowingTokens.reduce((longest, token) => (token.length > longest.length ? token : longest), '');
+	if (expandToken.length >= 3) {
+		const seen = new Set<number>(rarest);
+		for (const key of tokenIndex.keys()) {
+			if (key === expandToken) continue;
+			const prefixHit = key.length > expandToken.length && key.startsWith(expandToken);
+			const fuzzyHit = tokensFuzzyMatch(expandToken, key);
+			if (!prefixHit && !fuzzyHit) continue;
+			for (const docIndex of tokenIndex.get(key) || []) seen.add(docIndex);
+		}
+		if (seen.size > rarest.length) {
+			return Array.from(seen, (docIndex) => docs[docIndex]).filter(Boolean);
+		}
+	}
 	return rarest.map((docIndex) => docs[docIndex]).filter(Boolean);
 }
 
@@ -1364,21 +1391,23 @@ export async function searchLocalIndex(source: LocalSearchSource, type: LocalSea
 	const hasMinimumQuery = hasMinimumSearchQuery(query);
 	const candidates =
 		!normalizedQuery || !hasMinimumQuery ? [] : collectCandidateDocs(docs, index, normalizedQuery, tokens);
+	// Score the full candidate set so total/numFound reflect every match, not the page slice.
 	const matches =
-		!normalizedQuery || !hasMinimumQuery ? [] : await buildQueryMatchesAsync(candidates, query, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
+		!normalizedQuery || !hasMinimumQuery ? [] : await buildQueryMatchesAsync(candidates, query, normalizedQuery, tokens, 0);
+	const total = matches.length;
 	const pageDocs = limit > 0 ? matches.slice(offset, offset + limit) : [];
 	const resultDocs = pageDocs.map((doc) => doc.hit || {});
 	return {
 		bucket,
 		generatedAt: index?.generatedAt ?? null,
-		total: matches.length,
+		total,
 		hits: {
-			total: matches.length,
+			total,
 			start: offset,
 			hits: pageDocs.map((doc) => ({ _id: doc.id, _source: doc.hit || {} })),
 		},
 		response: {
-			numFound: matches.length,
+			numFound: total,
 			start: offset,
 			docs: resultDocs,
 		},
@@ -1402,13 +1431,16 @@ export async function searchQueriesSequentially<T>(queries: string[], runner: (q
 
 export function mergeLocalSearchResponses(
 	responses: LocalSearchResponse[],
-	options: { bucket?: string; generatedAt?: string | null; limit?: number; offset?: number } = {},
+	options: { bucket?: string; generatedAt?: string | null; limit?: number; offset?: number; repage?: boolean } = {},
 ): LocalSearchResponse {
 	const bucket = options.bucket ?? responses[0]?.bucket ?? 'finra:individual';
-	const limit = Math.max(0, Math.min(options.limit ?? 12, 1000));
-	const offset = Math.max(0, options.offset ?? 0);
+	const limit = Math.max(0, Math.min(options.limit ?? responses[0]?.pageSize ?? 12, 1000));
+	const offset = Math.max(0, options.offset ?? responses[0]?.hits?.start ?? 0);
 	const mergedDocs: any[] = [];
 	const seenIds = new Set<string>();
+	// Default: callers already applied limit/offset inside searchLocalIndex(Many). Re-slicing
+	// here dropped page-2+ results and capped total to the first page length.
+	// `repage: true` is for combining full (or large) result sets then applying limit/offset once.
 	for (const response of responses) {
 		for (const doc of response.results || []) {
 			const docId = String(doc?.id || doc?.ind_source_id || doc?.firm_source_id || '').trim();
@@ -1417,18 +1449,23 @@ export function mergeLocalSearchResponses(
 			mergedDocs.push(doc);
 		}
 	}
-	const pageDocs = limit > 0 ? mergedDocs.slice(offset, offset + limit) : [];
+	let reportedTotal = 0;
+	for (const response of responses) {
+		reportedTotal = Math.max(reportedTotal, Number(response.total || response.hits?.total || response.response?.numFound || 0) || 0);
+	}
+	const total = options.repage ? mergedDocs.length : Math.max(reportedTotal, mergedDocs.length);
+	const pageDocs = options.repage && limit > 0 ? mergedDocs.slice(offset, offset + limit) : mergedDocs;
 	return {
 		bucket: bucket as LocalSearchBucket,
 		generatedAt: options.generatedAt ?? responses.find((response) => response.generatedAt)?.generatedAt ?? null,
-		total: mergedDocs.length,
+		total,
 		hits: {
-			total: mergedDocs.length,
+			total,
 			start: offset,
 			hits: pageDocs.map((doc) => ({ _id: String(doc?.id || doc?.ind_source_id || doc?.firm_source_id || ''), _source: doc })),
 		},
 		response: {
-			numFound: mergedDocs.length,
+			numFound: total,
 			start: offset,
 			docs: pageDocs,
 		},
@@ -1471,7 +1508,8 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 		const tokens = tokenizeQuery(searchQuery);
 		if (!normalizedQuery || !tokens.length || !hasMinimumSearchQuery(searchQuery)) continue;
 		const candidates = collectCandidateDocs(docs, index, normalizedQuery, tokens);
-		const matches = await buildQueryMatchesAsync(candidates, searchQuery, normalizedQuery, tokens, limit > 0 ? limit + offset : 0);
+		// Full match list so pagination totals stay correct after dedupe.
+		const matches = await buildQueryMatchesAsync(candidates, searchQuery, normalizedQuery, tokens, 0);
 		if (!matches.length) continue;
 		for (const match of matches) {
 			const docId = String(match?.hit?.id || match?.id || match?.hit?.ind_source_id || match?.hit?.firm_source_id || '').trim();
@@ -1481,18 +1519,19 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 		}
 	}
 
+	const total = mergedDocs.length;
 	const pageDocs = limit > 0 ? mergedDocs.slice(offset, offset + limit) : [];
 	return {
 		bucket,
 		generatedAt: index?.generatedAt ?? null,
-		total: mergedDocs.length,
+		total,
 		hits: {
-			total: mergedDocs.length,
+			total,
 			start: offset,
 			hits: pageDocs.map((doc) => ({ _id: String(doc?.id || doc?.ind_source_id || doc?.firm_source_id || ''), _source: doc })),
 		},
 		response: {
-			numFound: mergedDocs.length,
+			numFound: total,
 			start: offset,
 			docs: pageDocs,
 		},

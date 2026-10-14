@@ -1934,6 +1934,7 @@ a,
 	font-size: 12px;
 	padding: 2px 6px;
 	height: 24px;
+	max-width: 11.5rem;
 	border-radius: 4px;
 	border: 1px solid var(--border-strong);
 	background: var(--surface);

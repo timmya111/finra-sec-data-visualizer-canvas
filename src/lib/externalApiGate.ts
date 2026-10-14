@@ -27,12 +27,27 @@ export function canCallExternalApis() {
 	const context = getExternalApiContext();
 	// Deliberate server jobs may run even when ambient UI fetches are disabled.
 	// Only runtime setExternalApiContext counts — ambient EXTERNAL_API_CONTEXT in .env does not.
-	if (context === 'cronjob' || context === 'build' || context === 'selection-refresh') {
+	if (context === 'cronjob' || context === 'build' || context === 'selection-refresh' || context === 'search') {
 		return true;
 	}
 
 	if (isExplicitlyDisabled()) return false;
-	return false;
+	const enabled = getFlagValue('EXTERNAL_API_ENABLED');
+	return enabled !== '' && truthy.has(enabled);
+}
+
+/**
+ * Bounded BrokerCheck/IAPD name search may run even when detail fetches are disabled.
+ * Opt out with EXTERNAL_SEARCH_DISABLED=1; force on with EXTERNAL_SEARCH_SUPPLEMENT=1.
+ * Local development allows it by default so surname search can reach live coverage.
+ */
+export function canCallExternalSearchApis() {
+	const searchDisabled = getFlagValue('EXTERNAL_SEARCH_DISABLED');
+	if (searchDisabled !== '' && truthy.has(searchDisabled)) return false;
+	if (canCallExternalApis()) return true;
+	const supplement = getFlagValue('EXTERNAL_SEARCH_SUPPLEMENT', 'EXTERNAL_API_ENABLED');
+	if (supplement !== '' && truthy.has(supplement)) return true;
+	return process.env.NODE_ENV === 'development';
 }
 
 export function setExternalApiContext(context: string | null | undefined) {

@@ -69,6 +69,12 @@ import {
 } from './filterTags';
 import { readVisited, readVisitedSync, rememberVisited, visitConnectionsKey, visitDetailKey } from './clientVisitCache';
 import { createGraphLayoutWorker } from './graphLayoutWorker';
+import {
+	searchHitMatchesActivityFilter,
+	searchTypeActivityFilter,
+	searchTypeIncludesFirms,
+	searchTypeIncludesPeople,
+} from './searchHitActivity';
 
 // API base. When VITE_API_URL is not set, use relative paths so the dev
 // server proxy (`/api`) is used and we don't hardcode a backend port.
@@ -976,16 +982,18 @@ const MAX_FIRM_CONTROL_OWNERS_ON_CANVAS = 24;
 const SIDEBAR_CONNECTIONS_PREVIEW_LIMIT = 100;
 const PROFILE_SEED_FETCH_CONCURRENCY = 50;
 const SEED_QUERY_FETCH_CONCURRENCY = 50;
-// Sidecar hits usually already carry names + employments; keep optional id-detail
-// hydration small so a second search is not starved by Redis/disk GETs.
-const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = 20;
-const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 100;
-/** Progressive database-search canvas flushes: coalesce pages so a large on-screen graph is not rebuilt per hit page. */
-const SEARCH_FLUSH_MIN_INTERVAL_MS = 280;
-const SEARCH_FLUSH_NODE_THRESHOLD = 36;
 /** Soft cap on text-search hits; shrinks when the canvas is already dense to keep inject work bounded. */
 const MAX_TEXT_SEARCH_HITS_BASE = 1000;
 const MAX_TEXT_SEARCH_HITS_DENSE = 400;
+// Text-search hits are often slim (name + CRD, no employment arrays). Hydrate like
+// CRD paste import so each person lands with current employer firm(s) already linked.
+// Cap at the same soft hit budget; keep concurrency gentle to avoid fetch/paint crashes.
+const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = MAX_TEXT_SEARCH_HITS_BASE;
+const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 5;
+const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD = 24;
+/** Progressive database-search canvas flushes: coalesce pages so a large on-screen graph is not rebuilt per hit page. */
+const SEARCH_FLUSH_MIN_INTERVAL_MS = 280;
+const SEARCH_FLUSH_NODE_THRESHOLD = 36;
 const SEARCH_DENSE_GRAPH_NODE_THRESHOLD = 200;
 /** Shared-selection / canvas import hydration chunk size. */
 const ON_SCREEN_DETAIL_FETCH_BATCH_SIZE = 20;
@@ -8501,41 +8509,11 @@ export function init(
 		window.addEventListener('finra:reapply-selection', (() => {
 			reapplySelectionState();
 		}) as EventListener);
-		window.addEventListener(FIND_CLOSE_EVENT, ((event: Event) => {
-			const detail = (event as CustomEvent<{ clearQuery?: boolean }>).detail || {};
+		window.addEventListener(FIND_CLOSE_EVENT, ((_event: Event) => {
+			// Esc / click-away only dismisses find chrome. Selecting a match is Enter / form submit.
 			stopSearchPulseLoop();
 			updateFocusReadout(null);
-			if (detail.clearQuery) {
-				clearFindMatches();
-				return;
-			}
-
-			const selectAndOpenMatch = (nodeId: string) => {
-				startSearchPulseLoop(nodeId, { interval: 1400, immediate: true });
-				const liveNode = Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.find((n) => n.id === nodeId) : null;
-				if (liveNode) {
-					markUserInitiatedGraphExpansion();
-					anchorNode(liveNode);
-					selectNode(liveNode, { skipAutoExpand: true });
-					void expandNodeThroughNonGrayHops(liveNode).catch((err) => {
-						console.error('Progressive non-gray hop expansion failed:', err);
-						refreshTraceState({ deferMs: 120 });
-					});
-					void fetchCacheStats();
-				}
-			};
-
-			if (activeFindMatchIndex >= 0 && activeFindMatchOrder[activeFindMatchIndex]) {
-				selectAndOpenMatch(activeFindMatchOrder[activeFindMatchIndex]);
-				return;
-			}
-			if (activeFindMatchOrder.length) {
-				activeFindMatchIndex = getNearestActiveMatchIndex();
-				const nodeId = activeFindMatchOrder[activeFindMatchIndex];
-				if (nodeId) {
-					selectAndOpenMatch(nodeId);
-				}
-			}
+			clearFindMatches();
 		}) as EventListener);
 		findRequestListenersBound = true;
 	}
@@ -9019,12 +8997,12 @@ export function init(
 			try {
 				// ── 1. Search local indexed endpoints in parallel ─────────────
 				// These hit /api/finra/search and /api/finra/sec-search which query local indexes.
-				const PAGE_SIZE = 100; // FINRA Solr supports up to 100 per page
-				// Keep sidecar-backed search responsive; callers can still page through
-				// results explicitly instead of materializing an unbounded graph import.
+				// Request up to the soft hit budget per page (API allows ≤1000); keep paging
+				// only when a surname/common-name result set exceeds that budget.
 				const existingCanvasCount = Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.length : 0;
 				const MAX_TEXT_SEARCH_HITS =
 					existingCanvasCount >= SEARCH_DENSE_GRAPH_NODE_THRESHOLD ? MAX_TEXT_SEARCH_HITS_DENSE : MAX_TEXT_SEARCH_HITS_BASE;
+				const PAGE_SIZE = MAX_TEXT_SEARCH_HITS;
 
 				const fetchSingleCrd = async (crd) => {
 					const SINGLE_PAGE_SIZE = 12;
@@ -9094,25 +9072,36 @@ export function init(
 				};
 
 				const fetchSec = async (queryText = q, onPage: ((pageHits: any[]) => void | Promise<void>) | null = null) => {
-					const su = makeApiUrl('/api/finra/sec-search');
-					su.searchParams.set('query', queryText);
-					su.searchParams.set('pageSize', '50'); // SEC pagination
-					su.searchParams.set('pageNumber', '1');
+					const hits = [];
+					let start = 0;
+					let total = null;
 					try {
-						const sr = await fetchWithTimeout(su.toString());
-						if (!sr.ok) return [];
-						const sj = await sr.json();
-						const page = sj?.hits?.hits || sj?.response?.docs || sj?.currentPage || sj?.results || [];
-						if (page.length && onPage) await onPage(page);
-						return page;
+						do {
+							const su = makeApiUrl('/api/finra/sec-search');
+							su.searchParams.set('query', queryText);
+							su.searchParams.set('pageSize', String(PAGE_SIZE));
+							su.searchParams.set('pageNumber', String(Math.floor(start / Math.max(PAGE_SIZE, 1)) + 1));
+							su.searchParams.set('start', String(start));
+							const sr = await fetchWithTimeout(su.toString());
+							if (!sr.ok) break;
+							const sj = await sr.json();
+							const page = sj?.hits?.hits || sj?.response?.docs || sj?.currentPage || sj?.results || [];
+							if (total === null) total = sj?.hits?.total ?? sj?.response?.numFound ?? sj?.total ?? page.length;
+							const remaining = Math.max(0, MAX_TEXT_SEARCH_HITS - hits.length);
+							const boundedPage = page.slice(0, remaining);
+							hits.push(...boundedPage);
+							if (boundedPage.length && onPage) await onPage(boundedPage);
+							start += page.length;
+							if (page.length < PAGE_SIZE || hits.length >= MAX_TEXT_SEARCH_HITS) break;
+						} while (start < total);
 					} catch (err) {
 						console.warn('SEC database search request failed', err);
-						return [];
 					}
+					return hits;
 				};
 
-				// Respect header search type selector (all | people | firms) before issuing requests
-				// so a people-only search does not spend the hit budget on firm pages first.
+				// Respect header search type selector (all | people | people-inactive | firms | firms-inactive)
+				// before issuing requests so a people-only search does not spend the hit budget on firm pages first.
 				let headerSearchType = 'all';
 				try {
 					const stEl = document.getElementById('fg-search-type') as HTMLSelectElement | null;
@@ -9121,7 +9110,6 @@ export function init(
 							.trim()
 							.toLowerCase();
 				} catch {}
-
 				const getSearchHitIndividualId = (hit) => {
 					const src = hit?._source || hit || {};
 					const baseId = String(src?.basicInformation?.individualId || src?.ind_source_id || src?.ind_crd || '').trim();
@@ -9192,16 +9180,27 @@ export function init(
 				const hitHasFirmId = (hit) => Boolean(getSearchHitFirmId(hit));
 
 				const filterHitsBySearchType = (hits: any[]) => {
-					if (headerSearchType === 'people') return (hits || []).filter((hit) => hitHasIndividualId(hit));
-					if (headerSearchType === 'firms') return (hits || []).filter((hit) => hitHasFirmId(hit));
-					return hits || [];
+					const activityFilter = searchTypeActivityFilter(headerSearchType);
+					return (hits || []).filter((hit) => {
+						if (headerSearchType === 'people' || headerSearchType === 'people-inactive') {
+							if (!hitHasIndividualId(hit)) return false;
+							if (activityFilter) return searchHitMatchesActivityFilter(hit, activityFilter);
+							return true;
+						}
+						if (headerSearchType === 'firms' || headerSearchType === 'firms-inactive') {
+							if (!hitHasFirmId(hit)) return false;
+							if (activityFilter) return searchHitMatchesActivityFilter(hit, activityFilter);
+							return true;
+						}
+						return true;
+					});
 				};
 
 				const fetchTextQueryHits = async (queryText, onPage: ((pageHits: any[]) => void | Promise<void>) | null = null) => {
 					const hits = [];
 					let emitted = 0;
-					const includePeople = headerSearchType === 'all' || headerSearchType === 'people';
-					const includeFirms = headerSearchType === 'all' || headerSearchType === 'firms';
+					const includePeople = searchTypeIncludesPeople(headerSearchType);
+					const includeFirms = searchTypeIncludesFirms(headerSearchType);
 					const boundedOnPage = onPage ?
 						async (pageHits: any[]) => {
 							// Count only hits that will survive the active type filter against the shared budget.
@@ -9736,6 +9735,31 @@ export function init(
 					const textSearchHydrationTargets = selectTextSearchHydrationTargets(textSearchHydrationCandidates, TEXT_SEARCH_DETAIL_HYDRATION_LIMIT);
 					if (textSearchHydrationTargets.length) {
 						const hydratedTargetIds: string[] = [];
+						const pendingHydrateNodes: any[] = [];
+						const pendingHydrateLinks: any[] = [];
+						let hydrateFlushBusy = false;
+
+						const flushHydrationBatch = (options: { final?: boolean } = {}) => {
+							if (hydrateFlushBusy) return;
+							const nodes = pendingHydrateNodes.splice(0, pendingHydrateNodes.length);
+							const links = pendingHydrateLinks.splice(0, pendingHydrateLinks.length);
+							if (!nodes.length && !links.length) return;
+							hydrateFlushBusy = true;
+							try {
+								// Match CRD paste import: coalesce detail+employer appends and skip sim
+								// reheat on intermediate chunks so large name searches crash less.
+								globalState.appendFetched(nodes, links, {
+									skipPersist: true,
+									skipFindRefresh: true,
+									skipSimRestart: !options.final,
+								});
+								mergeIntoGraphData(nodes, links);
+							} finally {
+								hydrateFlushBusy = false;
+							}
+						};
+
+						updateFetchStatus(`Linking employers for ${textSearchHydrationTargets.length} search hit${textSearchHydrationTargets.length === 1 ? '' : 's'}…`);
 						await mapWithConcurrency(textSearchHydrationTargets, TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY, async (target) => {
 							const targetId = String(target.nodeId || '').trim();
 							if (!targetId) return null;
@@ -9772,18 +9796,20 @@ export function init(
 								}
 								// Drop previous_* links if a batch ever includes them — search fetch is current-only.
 								const currentOnlyLinks = (batch?.links || []).filter((link) => isAutoExpansionLink(link) || isControlRelationship(link));
-								if (batch?.nodes?.length || currentOnlyLinks.length) {
-									globalState.appendFetched(batch.nodes || [], currentOnlyLinks, { skipPersist: true, skipFindRefresh: true });
-									mergeIntoGraphData(batch.nodes || [], currentOnlyLinks);
-								}
+								if (batch?.nodes?.length) pendingHydrateNodes.push(...batch.nodes);
+								if (currentOnlyLinks.length) pendingHydrateLinks.push(...currentOnlyLinks);
 								hydratedTargetIds.push(targetId);
-								updateFetchStatus(`Enriching ${targetId}…`);
-								await yieldToBrowser();
+								if (pendingHydrateNodes.length + pendingHydrateLinks.length >= TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD) {
+									flushHydrationBatch();
+									updateFetchStatus(`Linked employers for ${hydratedTargetIds.length} of ${textSearchHydrationTargets.length}…`);
+									await yieldToBrowser();
+								}
 							} catch {
 								/* non-critical enrichment miss */
 							}
 							return null;
 						});
+						flushHydrationBatch({ final: true });
 						if (hydratedTargetIds.length) {
 							rerenderGraphNodesByIds(hydratedTargetIds);
 							refreshGraphColors();
