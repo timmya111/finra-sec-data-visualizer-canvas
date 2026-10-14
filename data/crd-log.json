@@ -1,8 +1,76 @@
 {
   "firms": [
     {
+      "id": 4031,
+      "name": "PENN MUTUAL EQUITY SERVICES, INC."
+    },
+    {
+      "id": 2882,
+      "name": "WASHINGTON SQUARE SECURITIES, INC."
+    },
+    {
       "id": 29604,
       "name": "NATIONAL PLANNING CORPORATION"
+    },
+    {
+      "id": 168267,
+      "name": "INDEPENDENT ADVISOR ALLIANCE, LLC"
+    },
+    {
+      "id": 6413,
+      "name": "LPL FINANCIAL LLC"
+    },
+    {
+      "id": 723,
+      "name": "THE ROBINSON-HUMPHREY COMPANY, LLC"
+    },
+    {
+      "id": 7059,
+      "name": "CITIGROUP GLOBAL MARKETS INC."
+    },
+    {
+      "id": 8174,
+      "name": "UBS FINANCIAL SERVICES INC."
+    },
+    {
+      "id": 3496,
+      "name": "STEPHENS"
+    },
+    {
+      "id": 5685,
+      "name": "PRUCO SECURITIES CORPORATION"
+    },
+    {
+      "id": 6321,
+      "name": "IDS LIFE INSURANCE COMPANY"
+    },
+    {
+      "id": 6363,
+      "name": "AMERIPRISE FINANCIAL SERVICES, INC."
+    },
+    {
+      "id": 628,
+      "name": "FIFTH THIRD SECURITIES, INC."
+    },
+    {
+      "id": 79,
+      "name": "J.P. MORGAN SECURITIES LLC"
+    },
+    {
+      "id": 19616,
+      "name": "WELLS FARGO CLEARING SERVICES, LLC"
+    },
+    {
+      "id": 29106,
+      "name": "E*TRADE SECURITIES LLC"
+    },
+    {
+      "id": 2580,
+      "name": "THE LINCOLN NATIONAL LIFE INSURANCE COMPANY"
+    },
+    {
+      "id": 3978,
+      "name": "LINCOLN FINANCIAL ADVISORS CORPORATION"
     },
     {
       "id": 40178,
@@ -89,10 +157,6 @@
       "name": "ING FINANCIAL ADVISERS, LLC"
     },
     {
-      "id": 2882,
-      "name": "VOYA FINANCIAL ADVISORS, INC."
-    },
-    {
       "id": 10582,
       "name": "WELLS FARGO INVESTMENTS, LLC"
     },
@@ -153,14 +217,6 @@
       "name": "SAYBRUS EQUITY SERVICES, INC"
     },
     {
-      "id": 5685,
-      "name": "PRUCO SECURITIES, LLC."
-    },
-    {
-      "id": 8174,
-      "name": "UBS FINANCIAL SERVICES INC."
-    },
-    {
       "id": 7556,
       "name": "MORGAN STANLEY"
     },
@@ -191,10 +247,6 @@
     {
       "id": 43399,
       "name": "MEDALLION EQUITIES, INC."
-    },
-    {
-      "id": 79,
-      "name": "J.P. MORGAN SECURITIES LLC"
     },
     {
       "id": 7471,
@@ -229,10 +281,6 @@
       "name": "DLJDIRECT INC."
     },
     {
-      "id": 19616,
-      "name": "FIRST UNION SECURITIES, INC."
-    },
-    {
       "id": 7654,
       "name": "UBS SECURITIES LLC"
     },
@@ -255,10 +303,6 @@
     {
       "id": 154026,
       "name": "OLIVETREE FINANCIAL, LLC"
-    },
-    {
-      "id": 7059,
-      "name": "CITIGROUP GLOBAL MARKETS INC."
     },
     {
       "id": 8206,
@@ -299,14 +343,6 @@
     {
       "id": 27878,
       "name": "MUTUAL OF AMERICA SECURITIES LLC"
-    },
-    {
-      "id": 6321,
-      "name": "IDS LIFE INSURANCE COMPANY"
-    },
-    {
-      "id": 6363,
-      "name": "AMERIPRISE FINANCIAL SERVICES, INC."
     },
     {
       "id": 111514,
@@ -415,10 +451,6 @@
     {
       "id": 38642,
       "name": "BLACKROCK INVESTMENTS, LLC"
-    },
-    {
-      "id": 6413,
-      "name": "LPL FINANCIAL LLC"
     },
     {
       "id": 6627,
@@ -615,10 +647,6 @@
     {
       "id": 793,
       "name": "STIFEL, NICOLAUS & COMPANY, INCORPORATED"
-    },
-    {
-      "id": 168267,
-      "name": "INDEPENDENT ADVISOR ALLIANCE, LLC"
     },
     {
       "id": 1774,
@@ -851,10 +879,6 @@
     {
       "id": 7369,
       "name": "INVESCO DISTRIBUTORS, INC."
-    },
-    {
-      "id": 3978,
-      "name": "LINCOLN FINANCIAL ADVISORS CORPORATION"
     },
     {
       "id": 285300,
@@ -1609,10 +1633,6 @@
       "name": "SECURITIES MANAGEMENT & RESEARCH, INC."
     },
     {
-      "id": 29106,
-      "name": "E*TRADE SECURITIES LLC"
-    },
-    {
       "id": 17503,
       "name": "WACHOVIA BROKERAGE SERVICE"
     },
@@ -1841,10 +1861,6 @@
       "name": "USALLIANZ SECURITIES, INC."
     },
     {
-      "id": 723,
-      "name": "THE ROBINSON-HUMPHREY COMPANY, LLC"
-    },
-    {
       "id": 1020,
       "name": "CANACCORD ADAMS INC."
     },
@@ -1977,10 +1993,6 @@
       "name": "OPPENHEIMERFUNDS DISTRIBUTOR, INC."
     },
     {
-      "id": 4031,
-      "name": "HORNOR, TOWNSEND & KENT, INC."
-    },
-    {
       "id": 11173,
       "name": "NATIONWIDE ADVISORY SERVICES, INC."
     },
@@ -2083,10 +2095,6 @@
     {
       "id": 3777,
       "name": "ATLAS CLEARING, INC."
-    },
-    {
-      "id": 628,
-      "name": "THE OHIO COMPANY"
     },
     {
       "id": 3664,
@@ -2727,10 +2735,6 @@
     {
       "id": 116763,
       "name": "ACORN FINANCIAL ADVISORY SERVICES, INC."
-    },
-    {
-      "id": 2580,
-      "name": "THE LINCOLN NATIONAL LIFE INSURANCE COMPANY"
     },
     {
       "id": 13256,
@@ -8034,6 +8038,42 @@
     }
   ],
   "individuals": [
+    {
+      "id": 1046706,
+      "name": "TIMOTHY MOORE CREECH"
+    },
+    {
+      "id": 845934,
+      "name": "MONTAGUE LAFFITTE BOYD"
+    },
+    {
+      "id": 2983588,
+      "name": "DANIEL CROCKETT"
+    },
+    {
+      "id": 6152328,
+      "name": "WILLIAM LLOYD ADDISON"
+    },
+    {
+      "id": 7927552,
+      "name": "Sean Thomas McCulloch"
+    },
+    {
+      "id": 6333830,
+      "name": "THOMAS JOHN FABER"
+    },
+    {
+      "id": 5214022,
+      "name": "NATHANIEL CHAMBERS"
+    },
+    {
+      "id": 4678823,
+      "name": "DAVID G. CURRY"
+    },
+    {
+      "id": 7066935,
+      "name": "MASON T MOORE"
+    },
     {
       "id": 2700217,
       "name": "KEVIN WILLIAM BERWALD"

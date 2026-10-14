@@ -6969,5 +6969,5 @@ html[data-safe-gpu='1'] #finra-app :focus-visible {
 }
 
 .fg-empty-card {
-	top: 0;
+	top: 20px;
 }
