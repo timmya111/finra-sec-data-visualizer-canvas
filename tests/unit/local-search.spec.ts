@@ -125,23 +125,28 @@ describe('local search indexes', () => {
 		});
 	});
 
-	it('counts unique firm connections from individual search hits', () => {
+	it('counts unique current firm connections from individual search hits', () => {
 		expect(
 			countIndividualConnectionsFromSearchHit({
 				ind_connection_count: 12,
 				ind_current_employments: [{ firmId: '1' }],
 			}),
-		).toBe(12);
+		).toBe(1);
 		expect(
 			countIndividualConnectionsFromSearchHit({
 				ind_current_employments: [{ firmId: '10' }, { firm_id: '10' }],
 				ind_previous_employments: [{ firmId: '20' }],
 				ind_ia_previous_employments: [{ firmId: '30' }],
 			}),
-		).toBe(3);
+		).toBe(1);
+		expect(
+			countIndividualConnectionsFromSearchHit({
+				ind_connection_count: 9,
+			}),
+		).toBe(9);
 	});
 
-	it('hydrates knownConnectionCount onto person nodes from search sidecars', async () => {
+	it('hydrates knownConnectionCount onto person nodes from current employers only', async () => {
 		const payload = JSON.stringify({
 			generatedAt: new Date().toISOString(),
 			bucket: 'finra:individual',
@@ -171,7 +176,7 @@ describe('local search indexes', () => {
 				{ id: 'person:4242', group: 'individual', crd: '4242' },
 			];
 			await hydrateNodeConnectionCountsFromSearchSidecar(nodes, { seedRoots: [root] });
-			expect(nodes[0].knownConnectionCount).toBe(7);
+			expect(nodes[0].knownConnectionCount).toBe(1);
 		});
 	});
 

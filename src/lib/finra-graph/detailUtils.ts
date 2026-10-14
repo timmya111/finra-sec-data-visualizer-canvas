@@ -245,14 +245,41 @@ export function applyIndividualDetail(targetNode, detail, fallbackCrd = null) {
 	if (detail.brokerDetails) targetNode.brokerDetails = detail.brokerDetails;
 
 	try {
-		const firms = new Set();
+		const allFirms = new Set();
+		const currentFirms = new Set();
 		for (const employment of flattenEmploymentRecords(detail)) {
-			if (employment?.firmId) firms.add(employment.firmId);
-			else if (employment?.bdSECNumber) firms.add(employment.bdSECNumber);
+			const firmKey = employment?.firmId || employment?.bdSECNumber || null;
+			if (!firmKey) continue;
+			allFirms.add(firmKey);
+			if (employment?._isCurrent !== false) currentFirms.add(firmKey);
 		}
-		targetNode.firmCount = firms.size;
+		// All-time unique firms (sidebar "Firms (all time)" / history completeness floor).
+		const existingFirmCount = Math.floor(Number(targetNode.firmCount) || 0);
+		targetNode.firmCount = Math.max(allFirms.size, existingFirmCount);
+		// Graph node sizing uses current employers only (same metric as ranked CRD lists).
+		const currentCount = currentFirms.size;
+		const hasCurrentArrays = Array.isArray(detail.currentEmployments) || Array.isArray(detail.currentIAEmployments);
+		const hasPreviousArrays =
+			(Array.isArray(detail.previousEmployments) && detail.previousEmployments.length > 0) ||
+			(Array.isArray(detail.previousIAEmployments) && detail.previousIAEmployments.length > 0);
+		// Empty search stubs often ship `currentEmployments: []` with no previous arrays — do not
+		// zero out a sidecar current-connection floor. Live detail (non-empty current, previous
+		// history, or resolved flags) is authoritative, including true zero-current people.
+		const authoritativeCurrentRoster =
+			hasCurrentArrays &&
+			(currentCount > 0 ||
+				hasPreviousArrays ||
+				detail?._detailLoaded === true ||
+				detail?._employmentHistoryResolved === true ||
+				targetNode?._detailLoaded === true ||
+				targetNode?._employmentHistoryResolved === true);
 		const existingKnown = Math.floor(Number(targetNode.knownConnectionCount) || 0);
-		if (firms.size > existingKnown) targetNode.knownConnectionCount = firms.size;
+		if (authoritativeCurrentRoster) {
+			targetNode.knownConnectionCount = currentCount;
+			if ('ind_connection_count' in targetNode) delete targetNode.ind_connection_count;
+		} else if (currentCount > existingKnown) {
+			targetNode.knownConnectionCount = currentCount;
+		}
 	} catch {
 		/* ignore */
 	}

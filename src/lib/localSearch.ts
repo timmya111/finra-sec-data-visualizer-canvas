@@ -92,12 +92,15 @@ function collectStateStreetValues(hit: LocalSearchHit | null | undefined): strin
 }
 
 /** Drop bulky employment arrays from the in-memory hit after extracting match fields. */
-function slimSearchHit(hit: LocalSearchHit, connectionCount: number): LocalSearchHit {
+function slimSearchHit(hit: LocalSearchHit, connectionCount: number, fromEmploymentArrays = false): LocalSearchHit {
 	const slim: LocalSearchHit = { ...hit };
 	for (const key of HEAVY_SEARCH_HIT_KEYS) {
 		if (key in slim) delete slim[key];
 	}
-	if (connectionCount > 0) {
+	// Prefer current-only count computed from employment arrays over a stale all-time scalar.
+	if (fromEmploymentArrays && Number.isFinite(connectionCount) && connectionCount >= 0) {
+		slim.ind_connection_count = Math.floor(connectionCount);
+	} else if (connectionCount > 0) {
 		const existing = Number(slim.ind_connection_count ?? slim.knownConnectionCount);
 		if (!Number.isFinite(existing) || existing <= 0) {
 			slim.ind_connection_count = connectionCount;
@@ -364,7 +367,9 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 	// Collect match fields from full employment payloads before they are stripped from memory.
 	const employmentFirmIds = collectEmploymentFirmIds(hit);
 	const stateStreetValues = collectStateStreetValues(hit);
-	const connectionCount = countIndividualConnectionsFromSearchHit(hit) || employmentFirmIds.length;
+	const hasEmploymentArrays = listEmploymentCollections(hit).length > 0;
+	// Sizing metric is current employers only — do not fall back to all-time firm ids.
+	const connectionCount = countIndividualConnectionsFromSearchHit(hit);
 	const nameCandidates = collectNameCandidates(doc);
 	const surnameCandidates = collectSurnameCandidates(doc);
 	const normalizedNameSearchText = simplifyName(doc.nameSearchText || primaryNameCandidates.join(' '));
@@ -376,7 +381,7 @@ function prepareDoc(doc: LocalSearchDoc): PreparedLocalSearchDoc {
 		// Drop bulky raw blobs once normalized copies exist — keeps warm RSS closer to match fields only.
 		searchText: '',
 		strictSearchText: '',
-		hit: slimSearchHit(hit, connectionCount),
+		hit: slimSearchHit(hit, connectionCount, hasEmploymentArrays),
 		primaryNameSearchText: normalizedNameSearchText,
 		normalizedNameSearchText,
 		normalizedStrictSearchText,
@@ -766,31 +771,35 @@ function employmentFirmId(entry: any): string {
 		.replace(/^firm:/i, '');
 }
 
-/** Unique firm connections across current/previous employment arrays on a search hit or detail payload. */
+/**
+ * Unique current firm connections on a search hit or detail payload.
+ * Graph node sizing and ranked CRD lists use current BD/IA employers only.
+ */
 export function countIndividualConnectionsFromSearchHit(hit: LocalSearchHit | null | undefined): number {
 	if (!hit || typeof hit !== 'object') return 0;
-	const scalar = Number((hit as any).ind_connection_count ?? (hit as any).knownConnectionCount);
-	if (Number.isFinite(scalar) && scalar > 0) return Math.floor(scalar);
 
 	const firmIds = new Set<string>();
-	const collections = [
+	const currentCollections = [
 		(hit as any).ind_current_employments,
 		(hit as any).ind_ia_current_employments,
-		(hit as any).ind_previous_employments,
-		(hit as any).ind_ia_previous_employments,
 		(hit as any).currentEmployments,
 		(hit as any).currentIAEmployments,
-		(hit as any).previousEmployments,
-		(hit as any).previousIAEmployments,
 	];
-	for (const collection of collections) {
+	let sawCurrentArray = false;
+	for (const collection of currentCollections) {
 		if (!Array.isArray(collection)) continue;
+		sawCurrentArray = true;
 		for (const entry of collection) {
 			const firmId = employmentFirmId(entry);
 			if (firmId) firmIds.add(firmId);
 		}
 	}
-	return firmIds.size;
+	if (sawCurrentArray) return firmIds.size;
+
+	// Slim hits keep only the scalar after employment arrays are dropped.
+	const scalar = Number((hit as any).ind_connection_count ?? (hit as any).knownConnectionCount);
+	if (Number.isFinite(scalar) && scalar > 0) return Math.floor(scalar);
+	return 0;
 }
 
 const firmConnectionCountFlatfileCache = new Map<string, number>();
@@ -864,8 +873,8 @@ export async function hydrateGraphNodesFromSearchSidecar(nodes: any[] = [], opti
 
 /**
  * Hydrate knownConnectionCount onto graph nodes from search sidecars.
- * Individuals: ind_connection_count or unique firms across employment arrays.
- * Firms: firm_connection_count when present on the search hit.
+ * Individuals: current BD/IA employer count (ind_connection_count / current arrays).
+ * Firms: firm_connection_count when present on the search hit (current roster).
  */
 export async function hydrateNodeConnectionCountsFromSearchSidecar(nodes: any[] = [], options: LocalSearchOptions = {}): Promise<any[]> {
 	const list = Array.isArray(nodes) ? nodes : [];
@@ -908,6 +917,13 @@ export async function hydrateNodeConnectionCountsFromSearchSidecar(nodes: any[] 
 		if (group === 'individual' || id.startsWith('person:')) {
 			const crd = String(node?.crd || id.replace(/^person:/i, '')).trim();
 			const hit = personHits.get(crd);
+			// Detail/current employment arrays are authoritative for sizing. Do not let a
+			// stale all-time sidecar scalar re-inflate knownConnectionCount after fetch.
+			const hasCurrentArrays = Array.isArray(node?.currentEmployments) || Array.isArray(node?.currentIAEmployments);
+			if (hasCurrentArrays) {
+				node.knownConnectionCount = countIndividualConnectionsFromSearchHit(node);
+				continue;
+			}
 			const count = countIndividualConnectionsFromSearchHit(hit) || countIndividualConnectionsFromSearchHit(node);
 			applyKnownConnectionCount(node, count);
 		} else if (group === 'firm' || id.startsWith('firm:')) {
@@ -1615,7 +1631,11 @@ export function buildIndividualDoc(source: string, detail: any): LocalSearchDoc 
 		...previousIAEmployments.map((e: any) => e.firmId),
 	]);
 	const registrationCount = getRegistrationCount(detail);
-	const indConnectionCount = firmIds.length;
+	// Node sizing / ranking: unique current BD+IA employers only.
+	const indConnectionCount = uniqueTexts([
+		...currentEmployments.map((e: any) => e.firmId),
+		...currentIAEmployments.map((e: any) => e.firmId),
+	]).length;
 
 	const currentAddressTexts = uniqueTexts([
 		...currentEmployments.flatMap((e: any) => [e.city, e.zipCode, ...e.branchOfficeLocations.flatMap((l: any) => [l.city, l.zipCode])]),

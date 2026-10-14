@@ -9337,6 +9337,8 @@ export function init(
 							`CRD ${crd}`,
 					);
 
+					const sidecarCurrentConn = Math.floor(Number(src?.ind_connection_count ?? parsed?.ind_connection_count ?? parsed?.knownConnectionCount) || 0);
+
 					if (existingGraphNode) {
 						existingGraphNode._trustedCurrentRelationshipData =
 							existingGraphNode._trustedCurrentRelationshipData === true || (resolved.hasEmbeddedDetail && hasRichIndividualDetail(parsed));
@@ -9344,6 +9346,9 @@ export function init(
 						existingGraphNode.iaScope = src?.ind_ia_scope ?? parsed?.basicInformation?.iaScope ?? parsed?.iaScope ?? existingGraphNode.iaScope ?? null;
 						existingGraphNode.hasFinraData = resolved.hasFinraData;
 						existingGraphNode.hasSecData = resolved.hasSecData;
+						if (sidecarCurrentConn > Math.floor(Number(existingGraphNode.knownConnectionCount) || 0)) {
+							existingGraphNode.knownConnectionCount = sidecarCurrentConn;
+						}
 						{
 							const bcAct = classifyActivityText(existingGraphNode.bcScope);
 							const iaAct = classifyActivityText(existingGraphNode.iaScope);
@@ -9381,6 +9386,9 @@ export function init(
 						existingGraphNode.currentEmployments = Array.isArray(parsed?.currentEmployments) ? parsed.currentEmployments : (existingGraphNode.currentEmployments ?? []);
 						existingGraphNode.currentIAEmployments = Array.isArray(parsed?.currentIAEmployments) ? parsed.currentIAEmployments : (existingGraphNode.currentIAEmployments ?? []);
 						applyIndividualDetail(existingGraphNode, parsed, crd);
+						if (sidecarCurrentConn > Math.floor(Number(existingGraphNode.knownConnectionCount) || 0)) {
+							existingGraphNode.knownConnectionCount = sidecarCurrentConn;
+						}
 						updatedExistingNodeIds.add(existingGraphNode.id);
 					} else if (!batchNodeIds.has(personId)) {
 						// Propagate disclosure flags if present
@@ -9409,6 +9417,7 @@ export function init(
 									hasFinraData: resolved.hasFinraData,
 									hasSecData: resolved.hasSecData,
 									_trustedCurrentRelationshipData: resolved.hasEmbeddedDetail && hasRichIndividualDetail(parsed),
+									...(sidecarCurrentConn > 0 ? { knownConnectionCount: sidecarCurrentConn } : {}),
 								},
 								parsed,
 								crd,
@@ -9519,17 +9528,20 @@ export function init(
 						const crd = personKey;
 						if (crd) {
 							addIndividualFromSource(src);
-							const sidecarGraphReady = Boolean(
-								(Array.isArray(src?.ind_current_employments) && src.ind_current_employments.length > 0) ||
-								(Array.isArray(src?.ind_ia_current_employments) && src.ind_ia_current_employments.length > 0) ||
-								(src?.ind_firstname && src?.ind_lastname) ||
-								src?.ind_crd ||
-								src?.ind_source_id,
-							);
+							// Slim search hits often have names + ind_connection_count but no employment
+							// arrays. Treat "ready" only when current employer firms are already present
+							// so header Search still hydrates current-only links + sizing.
+							const parsedCurrentFirms = [
+								...(Array.isArray(parsed?.currentEmployments) ? parsed.currentEmployments : []),
+								...(Array.isArray(parsed?.currentIAEmployments) ? parsed.currentIAEmployments : []),
+								...(Array.isArray(src?.ind_current_employments) ? src.ind_current_employments : []),
+								...(Array.isArray(src?.ind_ia_current_employments) ? src.ind_ia_current_employments : []),
+							].filter((entry) => String(entry?.firmId || entry?.firm_id || '').trim());
+							const hasCurrentEmploymentGraph = parsedCurrentFirms.length > 0;
 							textSearchHydrationCandidates.push({
 								nodeId: `person:${crd}`,
 								group: 'individual',
-								hasEmbeddedDetail: resolved.hasEmbeddedDetail || sidecarGraphReady,
+								hasEmbeddedDetail: hasCurrentEmploymentGraph,
 							});
 							continue;
 						}
@@ -9730,16 +9742,39 @@ export function init(
 							const rawId = targetId.split(':').pop() || '';
 							if (!rawId) return null;
 							try {
-								const batch = target.group === 'firm' ? await fetchFirmBatch(rawId) : await fetchIndividualBatch(rawId, null, { includePreviousEmployerIds: [] });
+								const batch =
+									target.group === 'firm' ?
+										await fetchFirmBatch(rawId)
+									:	await fetchIndividualBatch(rawId, null, {
+											includePreviousEmployments: false,
+											includePreviousEmployerIds: [],
+										});
 								const liveTargetNode = globalState.layoutNodes?.find((node) => node.id === targetId) || null;
 								const primaryNode = Array.isArray(batch?.nodes) ? batch.nodes.find((node) => node?.id === targetId) || null : null;
 								if (liveTargetNode && primaryNode && typeof primaryNode === 'object') {
 									Object.assign(liveTargetNode, primaryNode);
 									normalizeNodeLabelInPlace(liveTargetNode);
+									// Enrichment is current-only: keep previous arrays for sidebar, but do not
+									// leave a stale all-time sizing floor on the live node.
+									if (target.group === 'individual') {
+										liveTargetNode._detailLoaded = true;
+										const currentOnly = new Set();
+										for (const employment of [
+											...(Array.isArray(liveTargetNode.currentEmployments) ? liveTargetNode.currentEmployments : []),
+											...(Array.isArray(liveTargetNode.currentIAEmployments) ? liveTargetNode.currentIAEmployments : []),
+										]) {
+											const firmId = String(employment?.firmId || employment?.firm_id || employment?.bdSECNumber || '').trim();
+											if (firmId) currentOnly.add(firmId);
+										}
+										liveTargetNode.knownConnectionCount = currentOnly.size;
+										if ('ind_connection_count' in liveTargetNode) delete liveTargetNode.ind_connection_count;
+									}
 								}
-								if (batch?.nodes?.length || batch?.links?.length) {
-									globalState.appendFetched(batch.nodes || [], batch.links || [], { skipPersist: true, skipFindRefresh: true });
-									mergeIntoGraphData(batch.nodes || [], batch.links || []);
+								// Drop previous_* links if a batch ever includes them — search fetch is current-only.
+								const currentOnlyLinks = (batch?.links || []).filter((link) => isAutoExpansionLink(link) || isControlRelationship(link));
+								if (batch?.nodes?.length || currentOnlyLinks.length) {
+									globalState.appendFetched(batch.nodes || [], currentOnlyLinks, { skipPersist: true, skipFindRefresh: true });
+									mergeIntoGraphData(batch.nodes || [], currentOnlyLinks);
 								}
 								hydratedTargetIds.push(targetId);
 								updateFetchStatus(`Enriching ${targetId}…`);
@@ -12300,7 +12335,12 @@ function resolveControlConnectionFirmNodeId(controlRecord) {
 
 function readSidecarKnownConnectionCount(node) {
 	if (!node || typeof node !== 'object') return 0;
-	const candidates = [node.knownConnectionCount, node.ind_connection_count, node.firm_connection_count, node.firmCount];
+	const group = String(node.group || '').toLowerCase();
+	const isIndividual = group === 'individual' || String(node.id || '').startsWith('person:');
+	// People: current-connection fields only. firmCount is all-time and must not inflate size.
+	const candidates = isIndividual
+		? [node.knownConnectionCount, node.ind_connection_count]
+		: [node.knownConnectionCount, node.ind_connection_count, node.firm_connection_count, node.firmCount];
 	for (const value of candidates) {
 		const n = Number(value);
 		if (Number.isFinite(n) && n > 0) return Math.floor(n);
@@ -12355,6 +12395,9 @@ function getKnownNodeConnectionFloor(node) {
 	};
 
 	if (node.group === 'individual') {
+		// Graph sizing uses current employers only; previous (gray) firms appear on click
+		// and must not inflate fetched node radius.
+		const hasCurrentArrays = Array.isArray(node.currentEmployments) || Array.isArray(node.currentIAEmployments);
 		for (const employment of Array.isArray(node.currentEmployments) ? node.currentEmployments : []) {
 			const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
 			addConnection('employed', firmNodeId ? `current|${firmNodeId}` : null);
@@ -12362,14 +12405,6 @@ function getKnownNodeConnectionFloor(node) {
 		for (const employment of Array.isArray(node.currentIAEmployments) ? node.currentIAEmployments : []) {
 			const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
 			addConnection('employed', firmNodeId ? `current|${firmNodeId}` : null);
-		}
-		for (const employment of Array.isArray(node.previousEmployments) ? node.previousEmployments : []) {
-			const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
-			addConnection('employed', firmNodeId ? `previous|${firmNodeId}` : null);
-		}
-		for (const employment of Array.isArray(node.previousIAEmployments) ? node.previousIAEmployments : []) {
-			const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
-			addConnection('employed', firmNodeId ? `previous|${firmNodeId}` : null);
 		}
 
 		const controlRecords = [
@@ -12383,10 +12418,18 @@ function getKnownNodeConnectionFloor(node) {
 			addConnection('controls', firmNodeId ? `controls|${firmNodeId}` : null);
 		}
 
-		counts.total = Math.max(counts.total, sidecarFloor, counts.controls + counts.employed);
+		// With current employment arrays from detail/fetch, size from those + controls only.
+		// Skip stale ind_connection_count / all-time sidecar scalars.
+		if (hasCurrentArrays) {
+			const knownCurrent = Math.floor(Number(node.knownConnectionCount) || 0);
+			counts.total = Math.max(counts.total, knownCurrent, counts.controls + counts.employed);
+		} else {
+			counts.total = Math.max(counts.total, sidecarFloor, counts.controls + counts.employed);
+		}
 
-		// If we computed no connections but have a cached value, use it as a floor.
-		if (!counts.total && connCache && node.id) {
+		// Current employment arrays are authoritative (including zero). Do not revive an
+		// all-time localStorage floor that would re-inflate fetched node size.
+		if (!counts.total && !hasCurrentArrays && connCache && node.id) {
 			const cached = connCache[String(node.id)];
 			if (cached && typeof cached === 'object') {
 				return { total: Number(cached.total) || 0, controls: Number(cached.controls) || 0, employed: Number(cached.employed) || 0 };

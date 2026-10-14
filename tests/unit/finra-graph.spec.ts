@@ -1616,7 +1616,8 @@ describe('FinraGraph DOM helpers (unit)', () => {
 
 		applyGraphDerivedNodeMetrics(nodes, []);
 
-		expect(nodes[0]?._deg).toMatchObject({ total: 4, employed: 3, controls: 1 });
+		// Current employers (2) + control (1); previous firms must not inflate fetch sizing.
+		expect(nodes[0]?._deg).toMatchObject({ total: 3, employed: 2, controls: 1 });
 		expect(nodes[0]?._vizHalf).toBeGreaterThan(6);
 	});
 
