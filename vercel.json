@@ -11,12 +11,10 @@
 			"maxDuration": 30
 		},
 		"src/app/api/finra/search/route.ts": {
-			"maxDuration": 60,
-			"memory": 3008
+			"maxDuration": 60
 		},
 		"src/app/api/finra/sec-search/route.ts": {
-			"maxDuration": 60,
-			"memory": 3008
+			"maxDuration": 60
 		},
 		"src/app/api/finra/external-validity/route.ts": {
 			"maxDuration": 60
