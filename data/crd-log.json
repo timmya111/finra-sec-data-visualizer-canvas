@@ -1,6 +1,22 @@
 {
   "firms": [
     {
+      "id": 143323,
+      "name": "BUCKINGHAM STRATEGIC WEALTH, LLC"
+    },
+    {
+      "id": 105644,
+      "name": "CETERA INVESTMENT ADVISERS LLC"
+    },
+    {
+      "id": 10358,
+      "name": "CETERA FINANCIAL SPECIALISTS LLC"
+    },
+    {
+      "id": 337318,
+      "name": "PORTFOLIO GUIDE"
+    },
+    {
       "id": 5979,
       "name": "OLDE DISCOUNT CORPORATION"
     },
@@ -447,10 +463,6 @@
     {
       "id": 10465,
       "name": "CAPITAL BROKERAGE CORPORATION"
-    },
-    {
-      "id": 10358,
-      "name": "TERRA SECURITIES CORPORATION"
     },
     {
       "id": 1703,
@@ -971,10 +983,6 @@
     {
       "id": 159076,
       "name": "DYNASTY SECURITIES, LLC"
-    },
-    {
-      "id": 105644,
-      "name": "CETERA INVESTMENT ADVISERS LLC"
     },
     {
       "id": 727,
@@ -1663,10 +1671,6 @@
     {
       "id": 104510,
       "name": "EDELMAN FINANCIAL ENGINES"
-    },
-    {
-      "id": 143323,
-      "name": "BUCKINGHAM STRATEGIC WEALTH, LLC"
     },
     {
       "id": 143319,
@@ -8218,6 +8222,10 @@
     }
   ],
   "individuals": [
+    {
+      "id": 6616562,
+      "name": "MATTHEW DALLAS"
+    },
     {
       "id": 2508417,
       "name": "JEFFREY LEE RICHARDSON"

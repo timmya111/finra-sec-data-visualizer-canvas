@@ -710,6 +710,28 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(html).toContain('fg-badge active');
 	});
 
+	it('renderFirmDetail omits FINRA links for SEC-only firms', () => {
+		// Portfolio Guide CRD 337318 — IA ACTIVE, no BrokerCheck firm page.
+		const html = renderFirmDetail({
+			id: 'firm:337318',
+			firmId: '337318',
+			label: 'PORTFOLIO GUIDE',
+			group: 'firm',
+			hasFinraData: false,
+			hasSecData: true,
+			iaScope: 'ACTIVE',
+			officeAddress: 'ST. LOUIS, MO, United States',
+			secDocumentLinks: [{ label: 'SEC AdvisorInfo Summary', href: 'https://adviserinfo.sec.gov/firm/summary/337318' }],
+			basicInformation: { firmId: 337318, firmName: 'PORTFOLIO GUIDE', iaScope: 'ACTIVE', isIAFirm: 'Y' },
+		} as any);
+
+		expect(html).toContain('SEC AdvisorInfo Summary');
+		expect(html).toContain('adviserinfo.sec.gov/firm/summary/337318');
+		expect(html).not.toContain('Verify Source (FINRA)');
+		expect(html).not.toContain('brokercheck.finra.org/firm/summary/337318');
+		expect(html).not.toContain('FINRA Summary');
+	});
+
 	it('resolves person employment links via SEC firm identifiers when CRD is absent', () => {
 		const employment = {
 			firmId: '',

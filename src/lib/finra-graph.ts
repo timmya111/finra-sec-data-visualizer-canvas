@@ -22478,7 +22478,6 @@ function renderFirmDetail(d: any) {
 			</div>
 			<div class="fg-ext-links">
 				${showFinra && hasFinraPage && firmId ? `<a class="fg-ext-link bc" href="https://brokercheck.finra.org/firm/summary/${encodeURIComponent(firmId)}" target="_blank" rel="noopener noreferrer">&#x2197; FINRA Summary</a>` : ''}
-				${!showFinra && !isIa && firmId ? `<a class="fg-ext-link bc" href="https://brokercheck.finra.org/firm/summary/${encodeURIComponent(firmId)}" target="_blank" rel="noopener noreferrer">&#x2197; Verify Source (FINRA)</a>` : ''}
 				${
 					showSec && hasSecPage && Array.isArray(secDocumentLinks) && secDocumentLinks.length > 0 ?
 						secDocumentLinks
