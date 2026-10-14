@@ -41,5 +41,46 @@ describe('mapOfficialSearchHitsToConnections', () => {
 		expect(entries.some((entry) => entry.firmId === '2525')).toBe(false);
 	});
 
+	it('maps SEC IA current employments from inner_hits for SEC-only firms', () => {
+		const entries = mapOfficialSearchHitsToConnections(
+			'310632',
+			[
+				{
+					_source: {
+						ind_source_id: '1931609',
+						ind_firstname: 'SEAN',
+						ind_middlename: 'EUGENE',
+						ind_lastname: 'CANADAY',
+						ind_bc_scope: 'InActive',
+						ind_ia_scope: 'Active',
+					},
+					inner_hits: {
+						ind_ia_current_employments: {
+							hits: {
+								hits: [
+									{
+										_source: {
+											firmId: '310632',
+											firmName: 'BOS ASSET MANAGEMENT, LLC',
+											registrationBeginDate: '1/1/2020',
+										},
+									},
+								],
+							},
+						},
+					},
+				},
+			],
+			'official-search-sec',
+		);
 
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			individualId: '1931609',
+			isCurrent: true,
+			iaScope: 'Active',
+			bcScope: 'InActive',
+		});
+		expect(String(entries[0]?.name || '')).toMatch(/SEAN/i);
+	});
 });

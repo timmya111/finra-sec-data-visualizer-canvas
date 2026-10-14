@@ -1349,6 +1349,33 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(isNodeInactive(approvedFirm)).toBe(false);
 	});
 
+	it('isNodeInactive grays scraped Legacy / non-live orphan firms', () => {
+		// DELOITTE INVESTMENT ADVISORS LLC CRD 104593 — scraped from disabled
+		// individual detail; no FINRA/SEC firm page.
+		const node = {
+			id: 'firm:104593',
+			group: 'firm',
+			label: 'DELOITTE INVESTMENT ADVISORS LLC',
+			firmId: '104593',
+			stub: true,
+			hasFinraData: false,
+			hasSecData: false,
+			firmStatus: 'Legacy / non-live',
+			orphan: {
+				firmId: '104593',
+				firmName: 'DELOITTE INVESTMENT ADVISORS LLC',
+				parentCrd: '3110800',
+				parentType: 'individual',
+				bcScope: 'NotInScope',
+				iaScope: 'NotInScope',
+				firmStatus: 'Legacy / non-live',
+				_externalPages: { finra: false, sec: false },
+			},
+		} as any;
+
+		expect(isNodeInactive(node)).toBe(true);
+	});
+
 	it('supports a data-driven forced gray link without hard-coded CRDs', () => {
 		const link = {
 			source: { id: 'person:111' },

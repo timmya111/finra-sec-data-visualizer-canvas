@@ -13366,7 +13366,8 @@ function classifyActivityText(value) {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, '');
 	if (!normalized) return null;
-	if (/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|previouslyregistered|nolongerregistered|notregistered|expanded)/.test(normalized)) {
+	// "Legacy / non-live" (scraped orphan firms with no BrokerCheck/IAPD page) → legacynonlive.
+	if (/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|previouslyregistered|nolongerregistered|notregistered|expanded|legacy|nonlive)/.test(normalized)) {
 		return 'inactive';
 	}
 	if (/(active|approved|current)/.test(normalized)) {
@@ -17451,9 +17452,21 @@ async function ensureFirmDetail(firmNode) {
 				// Non-live firm refs inherit scraped firmStatus so child nodes match parent/link
 				// colors immediately (Active → live colors; inactive → gray).
 				const orphanFirmStatus = String(orphan.firmStatus || orphan.status || orphan.registrationStatus || '').trim();
+				const externalPages = orphan._externalPages && typeof orphan._externalPages === 'object' ? orphan._externalPages : null;
+				const noExternalPages =
+					externalPages &&
+					externalPages.finra === false &&
+					externalPages.sec === false;
 				if (orphanFirmStatus) {
 					firmNode.firmStatus = orphanFirmStatus;
-					const inactive = /inactive|terminated|revoked|suspended|notinscope/i.test(orphanFirmStatus.replace(/\s+/g, ''));
+				}
+				// Scraped Legacy/non-live refs and orphans with no FINRA/SEC detail page stay gray.
+				const inactive =
+					noExternalPages ||
+					/inactive|terminated|revoked|suspended|notinscope|legacy|non-?live/i.test(
+						orphanFirmStatus.replace(/\s+/g, ''),
+					);
+				if (orphanFirmStatus || noExternalPages) {
 					firmNode.inactive = inactive;
 					firmNode._vizInactive = inactive;
 				}

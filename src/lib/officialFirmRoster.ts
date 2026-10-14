@@ -252,16 +252,32 @@ export async function fetchOfficialFirmRoster(firmId: string): Promise<OfficialF
 	const normalizedFirmId = String(firmId || '').trim();
 	if (!normalizedFirmId) return null;
 
-	const [finra, sec] = await Promise.all([
-		fetchAllOfficialHits('finra', normalizedFirmId).catch(() => ({ hits: [] as any[], total: 0 })),
-		fetchAllOfficialHits('sec', normalizedFirmId).catch(() => ({ hits: [] as any[], total: 0 })),
-	]);
-
-	let finraHits = finra.hits;
-	let secHits = sec.hits;
+	// When external APIs are disabled (local e2e / EXTERNAL_API_DISABLED), still try
+	// national JSON fallbacks so SEC-only firms can hydrate from disk.
+	let finraHits: any[] = [];
+	let secHits: any[] = [];
+	let finraTotal = 0;
+	let secTotal = 0;
+	try {
+		const { canCallExternalApis } = await import('@/lib/externalApiGate');
+		if (canCallExternalApis()) {
+			const [finra, sec] = await Promise.all([
+				fetchAllOfficialHits('finra', normalizedFirmId).catch(() => ({ hits: [] as any[], total: 0 })),
+				fetchAllOfficialHits('sec', normalizedFirmId).catch(() => ({ hits: [] as any[], total: 0 })),
+			]);
+			finraHits = finra.hits;
+			secHits = sec.hits;
+			finraTotal = finra.total;
+			secTotal = sec.total;
+		}
+	} catch {
+		// gate import/fetch failures fall through to local fallbacks
+	}
 	if (!finraHits.length) finraHits = readLocalOfficialSearchFallback('finra', normalizedFirmId);
 	if (!secHits.length) secHits = readLocalOfficialSearchFallback('sec', normalizedFirmId);
 	if (!finraHits.length && !secHits.length) return null;
+	if (!finraTotal) finraTotal = finraHits.length;
+	if (!secTotal) secTotal = secHits.length;
 
 	const merged = mergeOfficialEntries([
 		mapOfficialSearchHitsToConnections(normalizedFirmId, finraHits, 'official-search-finra'),
@@ -272,7 +288,7 @@ export async function fetchOfficialFirmRoster(firmId: string): Promise<OfficialF
 	return {
 		...merged,
 		source: OFFICIAL_FIRM_ROSTER_SOURCE,
-		officialTotals: { finra: finra.total, sec: sec.total },
+		officialTotals: { finra: finraTotal, sec: secTotal },
 		fetchedAt: new Date().toISOString(),
 	};
 }

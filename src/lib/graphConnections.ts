@@ -1746,6 +1746,9 @@ export async function getFirmConnectionsFromGraph(
       local.path,
       normalizedFirmId,
     );
+    if (skipEnrichment) {
+      return hydrateFirmConnectionsFromSearchSidecar(result, normalizedFirmId);
+    }
     return attachConnectionDisplayFields(result, normalizedFirmId, redis);
   }
 
@@ -1757,6 +1760,9 @@ export async function getFirmConnectionsFromGraph(
   ]);
 
   if (countFirmConnectionEntries(combined) > 0) {
+    if (skipEnrichment) {
+      return hydrateFirmConnectionsFromSearchSidecar(combined, normalizedFirmId);
+    }
     return attachConnectionDisplayFields(combined, normalizedFirmId, redis);
   }
 
@@ -1779,5 +1785,8 @@ export async function getFirmConnectionsFromGraph(
     local.path,
     normalizedFirmId,
   );
+  if (skipEnrichment) {
+    return hydrateFirmConnectionsFromSearchSidecar(computed, normalizedFirmId);
+  }
   return attachConnectionDisplayFields(computed, normalizedFirmId, redis);
 }

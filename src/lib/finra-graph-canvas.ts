@@ -501,7 +501,8 @@ function classifyScopeActivity(value: unknown): 'active' | 'inactive' | null {
 		.replace(/[^a-z0-9]+/g, '');
 	if (!normalized) return null;
 	// Check inactive tokens before "active" — "InActive" contains the substring "active".
-	if (/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|expanded)/.test(normalized)) {
+	// "Legacy / non-live" (scraped orphan firms) normalizes to legacynonlive.
+	if (/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|expanded|legacy|nonlive)/.test(normalized)) {
 		return 'inactive';
 	}
 	if (/(active|approved|current)/.test(normalized)) return 'active';

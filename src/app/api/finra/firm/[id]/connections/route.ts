@@ -18,8 +18,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 		const light =
 			String(request.nextUrl.searchParams.get('light') || '').trim() === '1' ||
 			String(request.nextUrl.searchParams.get('skipEnrichment') || '').trim() === '1';
+		// Redis/disk miss must backfill from official FINRA/SEC individual-by-firm search
+		// (e.g. SEC-only firms like 310632 BOS Asset Management with no firm-connections key).
 		const { currentConnections, previousConnections } = await getFirmConnectionsFromGraph(id, {
 			skipEnrichment: light,
+			computeIfMissing: true,
 		});
 		const current = bucket === 'previous' ? [] : currentConnections || [];
 		const previous = bucket === 'current' ? [] : previousConnections || [];

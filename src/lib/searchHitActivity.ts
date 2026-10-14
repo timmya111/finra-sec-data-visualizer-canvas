@@ -14,7 +14,7 @@ export function classifySearchActivityText(value: unknown): 'active' | 'inactive
 		.replace(/[^a-z0-9]+/g, '');
 	if (!normalized) return null;
 	if (
-		/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|previouslyregistered|nolongerregistered|notregistered|expanded)/.test(
+		/(inactive|terminated|revoked|suspended|notinscope|withdrawn|barred|expelled|denied|ceased|closed|cancelled|canceled|previouslyregistered|nolongerregistered|notregistered|expanded|legacy|nonlive)/.test(
 			normalized,
 		)
 	) {
