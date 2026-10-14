@@ -1,5 +1,7 @@
 /** Canvas/SVG firm fill+stroke from FINRA / SEC source coverage. */
 
+import { enrichFirmSearchHitSource } from './searchHitActivity';
+
 export type FirmSourceCoverage = 'both' | 'sec_only' | 'finra_only' | 'none';
 
 /** SEC-only firm fill — keep the existing connected-firm green. */
@@ -88,8 +90,8 @@ export function firmHasSecSource(node: any): boolean {
 	}
 	if (hasAnyItems(node.secDocumentLinks)) return true;
 	if (Boolean(String(node.secSummaryDescription || '').trim())) return true;
+	// firmStatus is a BrokerCheck/BD field — do not treat it as SEC/IA coverage.
 	if (hasActivitySignal(node.iaScope) || hasActivitySignal(node.basicInformation?.iaScope)) return true;
-	if (hasActivitySignal(node.firmStatus) || hasActivitySignal(node.basicInformation?.firmStatus)) return true;
 	return false;
 }
 
@@ -100,6 +102,118 @@ export function getFirmSourceCoverage(node: any): FirmSourceCoverage {
 	if (sec) return 'sec_only';
 	if (finra) return 'finra_only';
 	return 'none';
+}
+
+export type FirmSourceFieldSnapshot = {
+	bcScope: string | null;
+	iaScope: string | null;
+	firmStatus: string | null;
+	iaSecNumber: string | null;
+	bdSecNumber: string | null;
+	hasFinraData: boolean;
+	hasSecData: boolean;
+	basicInformation?: Record<string, any>;
+	districtName?: string | null;
+	isLegacy?: string | null;
+	selfRegulatoryOrgs?: any[];
+};
+
+function firstNonEmptyString(...values: unknown[]) {
+	for (const value of values) {
+		const text = String(value || '').trim();
+		if (text) return text;
+	}
+	return null;
+}
+
+/**
+ * Normalize firm search hits / detail payloads into the fields graph paint needs.
+ * Search/detail often use `iaSECNumber` (capital SEC) while the canvas reads `iaSecNumber`.
+ */
+export function extractFirmSourceFields(src: any): FirmSourceFieldSnapshot {
+	const enriched = enrichFirmSearchHitSource(src && typeof src === 'object' ? src : {}, src?.normalizedStrictSearchText || src?.strictSearchText);
+	const bi = enriched?.basicInformation && typeof enriched.basicInformation === 'object' ? { ...enriched.basicInformation } : {};
+	const bcScope = firstNonEmptyString(bi.bcScope, enriched.firm_bc_scope, enriched.bcScope);
+	const iaScope = firstNonEmptyString(bi.iaScope, enriched.firm_ia_scope, enriched.iaScope);
+	const firmStatus = firstNonEmptyString(bi.firmStatus, enriched.firmStatus);
+	const iaSecNumber = firstNonEmptyString(
+		enriched.firm_ia_sec_number,
+		enriched.iaSecNumber,
+		enriched.iaSECNumber,
+		bi.iaSECNumber,
+		bi.iaSecNumber,
+	);
+	const bdSecNumber = firstNonEmptyString(
+		enriched.firm_bd_sec_number,
+		enriched.bdSecNumber,
+		enriched.bdSECNumber,
+		bi.bdSECNumber,
+		bi.bdSecNumber,
+	);
+	const districtName = firstNonEmptyString(bi.districtName, enriched.districtName);
+	const isLegacy = firstNonEmptyString(bi.isLegacy, enriched.isLegacy);
+	const selfRegulatoryOrgs = Array.isArray(enriched.selfRegulatoryOrgs)
+		? enriched.selfRegulatoryOrgs
+		: Array.isArray(enriched.SROs)
+			? enriched.SROs
+			: undefined;
+
+	const explicitFinra =
+		typeof enriched.hasFinraData === 'boolean' ? enriched.hasFinraData
+		: typeof src?.hasFinraData === 'boolean' ? src.hasFinraData
+		: null;
+	const explicitSec =
+		typeof enriched.hasSecData === 'boolean' ? enriched.hasSecData
+		: typeof src?.hasSecData === 'boolean' ? src.hasSecData
+		: null;
+
+	const probe = {
+		bcScope,
+		iaScope,
+		firmStatus,
+		iaSecNumber,
+		bdSecNumber,
+		districtName,
+		isLegacy,
+		selfRegulatoryOrgs,
+		basicInformation: Object.keys(bi).length ? bi : undefined,
+	};
+	return {
+		bcScope,
+		iaScope,
+		firmStatus,
+		iaSecNumber,
+		bdSecNumber,
+		districtName,
+		isLegacy,
+		selfRegulatoryOrgs,
+		basicInformation: Object.keys(bi).length ? bi : undefined,
+		hasFinraData: explicitFinra != null ? explicitFinra : firmHasFinraSource(probe),
+		hasSecData: explicitSec != null ? explicitSec : firmHasSecSource(probe),
+	};
+}
+
+/** Merge extractFirmSourceFields onto an existing firm node (fetch / hydrate). */
+export function applyFirmSourceFieldsToNode(node: any, src: any) {
+	if (!node || typeof node !== 'object') return node;
+	const fields = extractFirmSourceFields(src);
+	if (fields.bcScope) node.bcScope = fields.bcScope;
+	if (fields.iaScope) node.iaScope = fields.iaScope;
+	if (fields.firmStatus) node.firmStatus = fields.firmStatus;
+	if (fields.iaSecNumber) node.iaSecNumber = fields.iaSecNumber;
+	if (fields.bdSecNumber) node.bdSecNumber = fields.bdSecNumber;
+	if (fields.districtName) node.districtName = fields.districtName;
+	if (fields.isLegacy) node.isLegacy = fields.isLegacy;
+	if (fields.selfRegulatoryOrgs?.length) node.selfRegulatoryOrgs = fields.selfRegulatoryOrgs;
+	if (fields.basicInformation) {
+		node.basicInformation =
+			node.basicInformation && typeof node.basicInformation === 'object' ?
+				{ ...fields.basicInformation, ...node.basicInformation }
+			:	{ ...fields.basicInformation };
+	}
+	node.hasFinraData = fields.hasFinraData;
+	node.hasSecData = fields.hasSecData;
+	return node;
 }
 
 export type FirmSourcePaintStyle = {

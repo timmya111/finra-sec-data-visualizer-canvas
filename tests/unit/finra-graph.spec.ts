@@ -1305,6 +1305,50 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(isNodeInactive(activeSec)).toBe(false);
 	});
 
+	it('isNodeInactive grays firms when firmStatus is Terminated even if iaScope stays ACTIVE', () => {
+		// State Farm Investment Management Corp. CRD 3487 — BrokerCheck keeps
+		// iaScope ACTIVE + historical SEC Approved while firmStatus is Terminated.
+		const node = {
+			id: 'firm:3487',
+			group: 'firm',
+			label: 'STATE FARM INVESTMENT MANAGEMENT CORP.',
+			firmId: '3487',
+			hasFinraData: true,
+			hasSecData: true,
+			bcScope: 'INACTIVE',
+			iaScope: 'ACTIVE',
+			firmStatus: 'Terminated',
+			firmStatusDate: '06/30/2001',
+			iaSecNumber: '8184',
+			districtName: 'Chicago',
+			registrationStatus: [{ secJurisdiction: 'SEC', status: 'Approved', effectiveDate: '12/14/1971' }],
+			basicInformation: {
+				firmId: 3487,
+				firmName: 'STATE FARM INVESTMENT MANAGEMENT CORP.',
+				bcScope: 'INACTIVE',
+				iaScope: 'ACTIVE',
+				firmStatus: 'Terminated',
+				firmStatusDate: '06/30/2001',
+				iaSECNumber: '8184',
+				districtName: 'Chicago',
+			},
+		} as any;
+
+		expect(isNodeInactive(node)).toBe(true);
+
+		const approvedFirm = {
+			id: 'firm:8217',
+			group: 'firm',
+			label: 'TRANSAMERICA CAPITAL, LLC',
+			firmId: '8217',
+			hasFinraData: true,
+			hasSecData: false,
+			bcScope: 'ACTIVE',
+			firmStatus: 'Approved',
+		} as any;
+		expect(isNodeInactive(approvedFirm)).toBe(false);
+	});
+
 	it('supports a data-driven forced gray link without hard-coded CRDs', () => {
 		const link = {
 			source: { id: 'person:111' },

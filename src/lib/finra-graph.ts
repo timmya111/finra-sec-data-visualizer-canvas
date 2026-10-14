@@ -78,6 +78,8 @@ import {
 import {
 	FIRM_SEC_ONLY_FILL,
 	FIRM_SEC_ONLY_STROKE,
+	applyFirmSourceFieldsToNode,
+	extractFirmSourceFields,
 	getFirmSourceCoverage,
 	getFirmSourcePaintStyle,
 } from './firmSourcePaint';
@@ -9414,14 +9416,13 @@ export function init(
 					const firmNodeId = `firm:${firmId}`;
 					const bi = src?.basicInformation && typeof src.basicInformation === 'object' ? src.basicInformation : {};
 					const firmLabel = getSearchHitFirmLabel(src, firmId);
+					const sourceFields = extractFirmSourceFields(src);
 					const existingFirm = findExistingFirmNode(firmId);
 					if (existingFirm) {
 						if (firmLabel && isGenericOrPlaceholderLabel(existingFirm.label, 'firm')) {
 							existingFirm.label = firmLabel;
 						}
-						if (bi.bcScope && !existingFirm.bcScope) existingFirm.bcScope = bi.bcScope;
-						if (bi.iaScope && !existingFirm.iaScope) existingFirm.iaScope = bi.iaScope;
-						if (bi.firmStatus && !existingFirm.firmStatus) existingFirm.firmStatus = bi.firmStatus;
+						applyFirmSourceFieldsToNode(existingFirm, src);
 						if (!existingFirm.basicInformation && Object.keys(bi).length) existingFirm.basicInformation = { ...bi };
 						updatedExistingNodeIds.add(existingFirm.id);
 						return;
@@ -9430,14 +9431,18 @@ export function init(
 						// Propagate disclosure flags if present
 						const disclosureFlag = src?.disclosureFlag ?? src?.firm_disclosure_flag ?? bi?.disclosureFlag;
 						const iaDisclosureFlag = src?.iaDisclosureFlag ?? bi?.iaDisclosureFlag;
-						const bcScope = bi.bcScope ?? src?.firm_bc_scope ?? src?.bcScope ?? null;
-						const iaScope = bi.iaScope ?? src?.firm_ia_scope ?? src?.iaScope ?? null;
-						const firmStatus = bi.firmStatus ?? src?.firmStatus ?? null;
+						const bcScope = sourceFields.bcScope;
+						const iaScope = sourceFields.iaScope;
+						const firmStatus = sourceFields.firmStatus;
 						const bcAct = classifyActivityText(bcScope);
 						const iaAct = classifyActivityText(iaScope);
 						const firmAct = classifyActivityText(firmStatus);
-						const scopeLooksActive = bcAct === 'active' || iaAct === 'active' || firmAct === 'active';
-						const scopeLooksInactive = bcAct === 'inactive' || iaAct === 'inactive' || firmAct === 'inactive';
+						// firmStatus Terminated/Inactive forces gray even when iaScope stays ACTIVE.
+						const scopeLooksInactive =
+							firmAct === 'inactive' ||
+							((bcAct === 'inactive' || iaAct === 'inactive') && firmAct !== 'active' && bcAct !== 'active' && iaAct !== 'active');
+						const scopeLooksActive =
+							firmAct !== 'inactive' && (bcAct === 'active' || iaAct === 'active' || firmAct === 'active');
 						batchNodeIds.add(firmNodeId);
 						batchAllNodes.push({
 							id: firmNodeId,
@@ -9452,10 +9457,12 @@ export function init(
 							formedState: bi.formedState ?? null,
 							formedDate: bi.formedDate ?? null,
 							regulator: bi.regulator ?? null,
-							bdSecNumber: src?.firm_bd_sec_number || src?.bdSecNumber || bi.bdSECNumber || bi.bdSecNumber,
-							iaSecNumber: src?.firm_ia_sec_number || src?.iaSecNumber || bi.iaSECNumber || bi.iaSecNumber,
+							bdSecNumber: sourceFields.bdSecNumber,
+							iaSecNumber: sourceFields.iaSecNumber,
+							hasFinraData: sourceFields.hasFinraData,
+							hasSecData: sourceFields.hasSecData,
 							otherNames: Array.isArray(bi.otherNames) ? bi.otherNames : [],
-							basicInformation: Object.keys(bi).length ? { ...bi } : undefined,
+							basicInformation: sourceFields.basicInformation || (Object.keys(bi).length ? { ...bi } : undefined),
 							disclosureFlag,
 							iaDisclosureFlag,
 							_vizInactive: scopeLooksInactive && !scopeLooksActive ? true : false,
@@ -9569,6 +9576,7 @@ export function init(
 							const firmNodeId = `firm:${firmId}`;
 							const bi = detail?.basicInformation || {};
 							const firmLabel = bi.firmName || detail?.firmName || detail?.name || `Firm ${firmId}`;
+							const sourceFields = extractFirmSourceFields(detail);
 							if (!findExistingFirmNode(firmId) && !batchNodeIds.has(firmNodeId) && !globalState.layoutNodes.some((n) => n.id === firmNodeId)) {
 								batchNodeIds.add(firmNodeId);
 								batchAllNodes.push({
@@ -9576,22 +9584,26 @@ export function init(
 									label: firmLabel,
 									group: 'firm',
 									firmId,
-									bcScope: bi.bcScope ?? detail?.bcScope ?? null,
-									firmStatus: bi.firmStatus ?? detail?.firmStatus,
+									bcScope: sourceFields.bcScope,
+									iaScope: sourceFields.iaScope,
+									firmStatus: sourceFields.firmStatus ?? bi.firmStatus ?? detail?.firmStatus,
 									firmStatusDate: bi.firmStatusDate ?? detail?.firmStatusDate,
 									firmType: bi.firmType ?? detail?.firmType,
 									formedState: bi.formedState ?? detail?.formedState,
 									formedDate: bi.formedDate ?? detail?.formedDate,
 									regulator: bi.regulator ?? detail?.regulator,
-									bdSecNumber: bi.bdSECNumber ?? bi.bdSecNumber ?? detail?.bdSECNumber ?? detail?.bdSecNumber,
-									iaSecNumber: bi.iaSecNumber ?? detail?.iaSecNumber,
-									isLegacy: bi.isLegacy ?? detail?.isLegacy,
+									bdSecNumber: sourceFields.bdSecNumber,
+									iaSecNumber: sourceFields.iaSecNumber,
+									hasFinraData: sourceFields.hasFinraData,
+									hasSecData: sourceFields.hasSecData,
+									isLegacy: sourceFields.isLegacy ?? bi.isLegacy ?? detail?.isLegacy,
 									fiscalYearEnd: bi.fiscalMonthEndCode ?? detail?.fiscalMonthEndCode,
 									otherNames: bi.otherNames ?? detail?.otherNames ?? [],
-									selfRegulatoryOrgs: detail?.selfRegulatoryOrgs ?? detail?.SROs ?? [],
+									selfRegulatoryOrgs: detail?.selfRegulatoryOrgs ?? detail?.SROs ?? sourceFields.selfRegulatoryOrgs ?? [],
 									activeStates: detail?.activeStates ?? detail?.registeredStates ?? [],
 									directOwners: detail?.directOwners ?? [],
 									disclosures: detail?.disclosures ?? [],
+									basicInformation: sourceFields.basicInformation || (Object.keys(bi).length ? { ...bi } : undefined),
 								});
 							}
 							for (const o of detail?.directOwners || []) {
@@ -9735,6 +9747,9 @@ export function init(
 								if (liveTargetNode && primaryNode && typeof primaryNode === 'object') {
 									Object.assign(liveTargetNode, primaryNode);
 									normalizeNodeLabelInPlace(liveTargetNode);
+									if (target.group === 'firm') {
+										applyFirmSourceFieldsToNode(liveTargetNode, primaryNode);
+									}
 									// Enrichment is current-only: keep previous arrays for sidebar, but do not
 									// leave a stale all-time sizing floor on the live node.
 									if (target.group === 'individual') {
@@ -10061,15 +10076,20 @@ async function fetchAndInjectQuery(q) {
 				// Propagate disclosure flags if present
 				const disclosureFlag = src?.disclosureFlag ?? src?.firm_disclosure_flag ?? null;
 				const iaDisclosureFlag = src?.iaDisclosureFlag ?? null;
+				const sourceFields = extractFirmSourceFields(src);
 				newNodes.push({
 					id: firmNodeId,
 					label: firmLabel,
 					group: 'firm',
 					firmId,
-					bcScope: bi.bcScope ?? src?.firm_bc_scope ?? src?.bcScope ?? null,
-					iaScope: bi.iaScope ?? src?.iaScope ?? null,
-					firmStatus: bi.firmStatus ?? null,
-					basicInformation: Object.keys(bi).length ? { ...bi } : undefined,
+					bcScope: sourceFields.bcScope,
+					iaScope: sourceFields.iaScope,
+					firmStatus: sourceFields.firmStatus,
+					iaSecNumber: sourceFields.iaSecNumber,
+					bdSecNumber: sourceFields.bdSecNumber,
+					hasFinraData: sourceFields.hasFinraData,
+					hasSecData: sourceFields.hasSecData,
+					basicInformation: sourceFields.basicInformation || (Object.keys(bi).length ? { ...bi } : undefined),
 					disclosureFlag,
 					iaDisclosureFlag,
 					_source: 'finra',
@@ -13560,13 +13580,13 @@ function hasFirmSecPresence(node: any) {
 		.trim();
 	if (rawFirmId && SUPPRESSED_SEC_FIRM_IDS.has(rawFirmId)) return false;
 	if (isNotInScopeValue(node?.iaScope) || isNotInScopeValue(node?.basicInformation?.iaScope)) return false;
+	// Prefer explicit source-truth when available (FINRA-only BD firms often have firmStatus Approved).
+	if (node.hasSecData === false) return false;
 	if (node.hasSecData === true) return true;
 	if (Boolean(String(node?.iaSecNumber || node?.basicInformation?.iaSECNumber || node?.basicInformation?.iaSecNumber || '').trim())) return true;
 	if (hasAnyItems(node?.secDocumentLinks)) return true;
 	if (Boolean(String(node?.secSummaryDescription || '').trim())) return true;
 	const secStatusFlags = collectNodeActivityFlags([
-		node?.firmStatus,
-		node?.basicInformation?.firmStatus,
 		node?.iaScope,
 		node?.basicInformation?.iaScope,
 		...getRegistrationStatusActivityValues(node),
@@ -13626,10 +13646,24 @@ function isNodeInactive(node, visited = new Set()) {
 	const sourceTruth = getNodeSourceTruth(node);
 
 	if (node.group === 'firm') {
+		// BrokerCheck BD firmStatus is authoritative for gray vs colored paint.
+		// Terminated/Inactive firms stay gray even when a stale iaScope ACTIVE or
+		// historical registrationStatus "Approved" row remains on the payload
+		// (e.g. State Farm Investment Management CRD 3487).
+		const firmStatusFlags = collectNodeActivityFlags([
+			node.firmStatus,
+			node.basicInformation?.firmStatus,
+			node.status,
+			node.orphan?.firmStatus,
+			node.orphan?.status,
+		]);
+		if (firmStatusFlags.hasInactive && !firmStatusFlags.hasActive) return true;
+
 		const finraFlags = sourceTruth.finra ? collectNodeActivityFlags([node.bcScope, node.basicInformation?.bcScope]) : { hasActive: false, hasInactive: false };
+		// firmStatus is BD/BrokerCheck — do not fold it into SEC activity flags.
 		const secFlags =
 			sourceTruth.sec ?
-				collectNodeActivityFlags([node.firmStatus, node.basicInformation?.firmStatus, node.iaScope, node.basicInformation?.iaScope, ...getRegistrationStatusActivityValues(node)])
+				collectNodeActivityFlags([node.iaScope, node.basicInformation?.iaScope, ...getRegistrationStatusActivityValues(node)])
 			:	{ hasActive: false, hasInactive: false };
 		const registrationStatusFlags = collectNodeActivityFlags(getRegistrationStatusActivityValues(node));
 		if (finraFlags.hasActive || secFlags.hasActive || registrationStatusFlags.hasActive) return false;
@@ -17475,8 +17509,10 @@ async function ensureFirmDetail(firmNode) {
 				const bcAct = classifyActivityText(firmNode.bcScope || firmNode.basicInformation?.bcScope);
 				const iaAct = classifyActivityText(firmNode.iaScope || bi.iaScope || firmNode.basicInformation?.iaScope);
 				const firmAct = classifyActivityText(firmNode.firmStatus || bi.firmStatus);
-				if (bcAct === 'active' || iaAct === 'active' || firmAct === 'active') firmNode._vizInactive = false;
-				else if (bcAct === 'inactive' || iaAct === 'inactive' || firmAct === 'inactive') firmNode._vizInactive = true;
+				// firmStatus Terminated/Inactive forces gray even when iaScope stays ACTIVE.
+				if (firmAct === 'inactive') firmNode._vizInactive = true;
+				else if (bcAct === 'active' || iaAct === 'active' || firmAct === 'active') firmNode._vizInactive = false;
+				else if (bcAct === 'inactive' || iaAct === 'inactive') firmNode._vizInactive = true;
 			}
 			if (bi.firmStatusDate) firmNode.firmStatusDate = bi.firmStatusDate;
 			if (bi.firmType) firmNode.firmType = bi.firmType;
@@ -17489,6 +17525,7 @@ async function ensureFirmDetail(firmNode) {
 			if (bi.iaSECNumber || bi.iaSecNumber || bi.bdSECNumber) firmNode.iaSecNumber = bi.iaSECNumber || bi.iaSecNumber || bi.bdSECNumber;
 			if (bi.isLegacy) firmNode.isLegacy = bi.isLegacy;
 			if (Array.isArray(bi.otherNames) && bi.otherNames.length) firmNode.otherNames = bi.otherNames;
+			applyFirmSourceFieldsToNode(firmNode, detail);
 			if (detail.hasFinraData != null) firmNode.hasFinraData = detail.hasFinraData;
 			if (detail.hasSecData != null) firmNode.hasSecData = detail.hasSecData;
 			// If FINRA explicitly reports no firm data, persist suppression so

@@ -60,6 +60,32 @@ export async function resetBrowserGraphState(page: Page) {
 	});
 }
 
+/** Persist a cleared session marker so reload skips the resume dialog. */
+export async function setClearedGraphSession(page: Page) {
+	await page.evaluate(() => {
+		const envelope = {
+			expiresAt: Date.now() + 60_000,
+			data: { cleared: true },
+		};
+		localStorage.setItem('finra_session', JSON.stringify(envelope));
+		sessionStorage.removeItem('finra_session');
+		localStorage.removeItem('finra_selection_log');
+		localStorage.removeItem('finra_sidebar_pinned');
+		localStorage.removeItem('finra_selection_log_pinned');
+	});
+}
+
+/** Dismiss the crash/resume prompt if it is showing. */
+export async function dismissResumeSessionDialog(page: Page) {
+	const resetContent = page.getByRole('button', { name: 'Reset content' });
+	if (await resetContent.count()) {
+		await resetContent.click();
+		await expect(page.getByRole('heading', { name: 'Resume previous session?' })).toHaveCount(0, {
+			timeout: 10_000,
+		});
+	}
+}
+
 /** Open the graph hamburger menu. Optionally expand Info so rich panel details hydrate. */
 export async function openGraphSideMenu(page: Page, options: { expandInfo?: boolean } = {}) {
 	const { expandInfo = true } = options;

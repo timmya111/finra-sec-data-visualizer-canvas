@@ -516,12 +516,15 @@ function isInactiveNode(node: Node) {
 	const firm = classifyScopeActivity(
 		node.status || node.firmStatus || node.basicInformation?.firmStatus || node.orphan?.firmStatus || node.orphan?.status,
 	);
+	// BrokerCheck BD firmStatus Terminated/Inactive wins over stale iaScope ACTIVE
+	// (matches SVG isNodeInactive — e.g. State Farm CRD 3487).
+	if (firm === 'inactive') return true;
 	// Real Active scope always wins over a stale Queue stub `_vizInactive: true`
 	// (previous-at-firm used to force that flag even for Active brokers).
 	// Non-live / Form BD orphans inherit Active from orphan.firmStatus the same way.
 	if (bc === 'active' || ia === 'active' || firm === 'active') return false;
 	// SEC-only firms carry activity on iaScope; do not ignore IA inactive.
-	if (bc === 'inactive' || ia === 'inactive' || firm === 'inactive') return true;
+	if (bc === 'inactive' || ia === 'inactive') return true;
 	if (node._vizInactive === true) return true;
 	if (node._vizInactive === false) return false;
 
@@ -717,6 +720,10 @@ export function drawCanvasFrame(
 ) {
 	currentNodes = nodes;
 	currentLinks = links;
+	if (typeof window !== 'undefined') {
+		(window as any).__FINRA_GRAPH_NODES = nodes;
+		(window as any).__FINRA_GRAPH_LINKS = links;
+	}
 	// Keep prior Log Bold ids when a redraw omits them (zoom/tick used to wipe bold labels).
 	currentOpts = {
 		...opts,
