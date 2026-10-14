@@ -9500,15 +9500,23 @@ export function init(
 						// Propagate disclosure flags if present
 						const disclosureFlag = src?.disclosureFlag ?? src?.firm_disclosure_flag ?? bi?.disclosureFlag;
 						const iaDisclosureFlag = src?.iaDisclosureFlag ?? bi?.iaDisclosureFlag;
+						const bcScope = bi.bcScope ?? src?.firm_bc_scope ?? src?.bcScope ?? null;
+						const iaScope = bi.iaScope ?? src?.firm_ia_scope ?? src?.iaScope ?? null;
+						const firmStatus = bi.firmStatus ?? src?.firmStatus ?? null;
+						const bcAct = classifyActivityText(bcScope);
+						const iaAct = classifyActivityText(iaScope);
+						const firmAct = classifyActivityText(firmStatus);
+						const scopeLooksActive = bcAct === 'active' || iaAct === 'active' || firmAct === 'active';
+						const scopeLooksInactive = bcAct === 'inactive' || iaAct === 'inactive' || firmAct === 'inactive';
 						batchNodeIds.add(firmNodeId);
 						batchAllNodes.push({
 							id: firmNodeId,
 							label: firmLabel,
 							group: 'firm',
 							firmId,
-							bcScope: bi.bcScope ?? src?.firm_bc_scope ?? src?.bcScope ?? null,
-							iaScope: bi.iaScope ?? src?.firm_ia_scope ?? src?.iaScope ?? null,
-							firmStatus: bi.firmStatus ?? src?.firmStatus ?? null,
+							bcScope,
+							iaScope,
+							firmStatus,
 							firmStatusDate: bi.firmStatusDate ?? null,
 							firmType: bi.firmType ?? null,
 							formedState: bi.formedState ?? null,
@@ -9520,6 +9528,7 @@ export function init(
 							basicInformation: Object.keys(bi).length ? { ...bi } : undefined,
 							disclosureFlag,
 							iaDisclosureFlag,
+							_vizInactive: scopeLooksInactive && !scopeLooksActive ? true : false,
 						});
 					}
 				}
@@ -13694,6 +13703,7 @@ function isNodeInactive(node, visited = new Set()) {
 			:	{ hasActive: false, hasInactive: false };
 		const registrationStatusFlags = collectNodeActivityFlags(getRegistrationStatusActivityValues(node));
 		if (finraFlags.hasActive || secFlags.hasActive || registrationStatusFlags.hasActive) return false;
+		if (finraFlags.hasInactive || secFlags.hasInactive || registrationStatusFlags.hasInactive) return true;
 		if ((sourceTruth.finra || sourceTruth.sec) && Array.isArray(node.activeStates) && node.activeStates.length) return false;
 		if (node.isLegacy === 'Y' && !sourceTruth.sec) return true;
 		const isFirmStub = node.stub || (!node.basicInformation && !node.bcScope && !node.firmStatus && !node.iaScope && !node.bdSecNumber && !node.iaSecNumber);
@@ -17414,6 +17424,9 @@ async function ensureFirmDetail(firmNode) {
 				if (fn.firmStatusDate) firmNode.firmStatusDate = fn.firmStatusDate;
 				if (fn.firmType) firmNode.firmType = fn.firmType;
 				if (fn.bcScope) firmNode.bcScope = fn.bcScope;
+				if (fn.iaScope) firmNode.iaScope = fn.iaScope;
+				if (fn.basicInformation?.iaScope && !firmNode.iaScope) firmNode.iaScope = fn.basicInformation.iaScope;
+				if (fn.basicInformation?.bcScope && !firmNode.bcScope) firmNode.bcScope = fn.basicInformation.bcScope;
 				if (fn.regulator) firmNode.regulator = fn.regulator;
 				if (fn.formedState) firmNode.formedState = fn.formedState;
 				if (fn.formedDate) firmNode.formedDate = fn.formedDate;
@@ -17548,8 +17561,16 @@ async function ensureFirmDetail(firmNode) {
 				if (!firmNode.basicInformation) firmNode.basicInformation = {};
 				if (!firmNode.basicInformation.firmName) firmNode.basicInformation.firmName = preferredFirmName;
 			}
-			if (bi.bcScope || bi.iaScope) firmNode.bcScope = bi.bcScope || bi.iaScope;
+			if (bi.bcScope) firmNode.bcScope = bi.bcScope;
+			if (bi.iaScope) firmNode.iaScope = bi.iaScope;
 			if (bi.firmStatus) firmNode.firmStatus = bi.firmStatus;
+			{
+				const bcAct = classifyActivityText(firmNode.bcScope || firmNode.basicInformation?.bcScope);
+				const iaAct = classifyActivityText(firmNode.iaScope || bi.iaScope || firmNode.basicInformation?.iaScope);
+				const firmAct = classifyActivityText(firmNode.firmStatus || bi.firmStatus);
+				if (bcAct === 'active' || iaAct === 'active' || firmAct === 'active') firmNode._vizInactive = false;
+				else if (bcAct === 'inactive' || iaAct === 'inactive' || firmAct === 'inactive') firmNode._vizInactive = true;
+			}
 			if (bi.firmStatusDate) firmNode.firmStatusDate = bi.firmStatusDate;
 			if (bi.firmType) firmNode.firmType = bi.firmType;
 			if (bi.firmSize) firmNode.firmSize = bi.firmSize;

@@ -6,11 +6,7 @@ const FinraGraph = dynamic(() => import('@/components/FinraGraph'), {
 	loading: () => (
 		<div className='fg-loading-shell'>
 			<header className='fg-header'>
-				<div className='fg-header-bar'>
-					<div className='fg-header-brand'>
-						<h1 className='fg-title'>FINRA</h1>
-					</div>
-				</div>
+				<div className='fg-header-bar'></div>
 			</header>
 			<main className='fg-main fg-loading-main'>
 				<div className='fg-empty-card'>

@@ -4920,7 +4920,10 @@ text.fg-label.fg-label--logged {
 	background: rgba(255, 255, 255, 0.96);
 	color: var(--text);
 	outline: 1px solid rgba(59, 130, 246, 0.18);
-	transition: border-color 150ms ease, box-shadow 150ms ease, outline-color 150ms ease;
+	transition:
+		border-color 150ms ease,
+		box-shadow 150ms ease,
+		outline-color 150ms ease;
 }
 
 .fg-selection-log-filter:focus,
@@ -6891,9 +6894,6 @@ html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:
 	color: #bfdbfe !important;
 }
 
-
-
-
 /* ── Aggressive glow budget (NVIDIA + hybrid) ── */
 /* Soft blur shadows promote compositor layers and climb RSS on both NVIDIA-only
    and hybrid Chrome. Prefer flat borders / thin stroke rings. */
@@ -6966,4 +6966,8 @@ html[data-safe-gpu='1'] #finra-app :focus-visible {
 	box-shadow: none !important;
 	outline: 2px solid rgba(37, 99, 235, 0.55);
 	outline-offset: 1px;
+}
+
+.fg-empty-card {
+	top: 0;
 }

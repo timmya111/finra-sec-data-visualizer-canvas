@@ -516,11 +516,12 @@ function isInactiveNode(node: Node) {
 	const firm = classifyScopeActivity(
 		node.status || node.firmStatus || node.basicInformation?.firmStatus || node.orphan?.firmStatus || node.orphan?.status,
 	);
-	// Real Active scope always wins over a stale queue stub `_vizInactive: true`
+	// Real Active scope always wins over a stale Queue stub `_vizInactive: true`
 	// (previous-at-firm used to force that flag even for Active brokers).
 	// Non-live / Form BD orphans inherit Active from orphan.firmStatus the same way.
 	if (bc === 'active' || ia === 'active' || firm === 'active') return false;
-	if (bc === 'inactive' || firm === 'inactive') return true;
+	// SEC-only firms carry activity on iaScope; do not ignore IA inactive.
+	if (bc === 'inactive' || ia === 'inactive' || firm === 'inactive') return true;
 	if (node._vizInactive === true) return true;
 	if (node._vizInactive === false) return false;
 

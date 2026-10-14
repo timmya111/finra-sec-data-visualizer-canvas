@@ -30,6 +30,31 @@ function unwrapSearchHit(hit: any) {
 	return hit?._source || hit || {};
 }
 
+/**
+ * SEC firm index docs often omit firm_ia_scope on `hit`, but strictSearchText embeds
+ * the ADV status as `active y not requested` / `inactive y not requested`.
+ */
+export function inferFirmIaScopeFromStrictSearchText(text: unknown): 'ACTIVE' | 'INACTIVE' | null {
+	const st = String(text || '').toLowerCase();
+	if (!st) return null;
+	if (/\binactive\s+y\s+not\s+requested\b/.test(st)) return 'INACTIVE';
+	if (/\bactive\s+y\s+not\s+requested\b/.test(st)) return 'ACTIVE';
+	return null;
+}
+
+/** Copy/enrich a firm search hit so activity filters see firm_ia_scope. */
+export function enrichFirmSearchHitSource(hit: Record<string, any> | null | undefined, strictSearchText?: unknown) {
+	const src = hit && typeof hit === 'object' ? { ...hit } : {};
+	const existing = String(src.firm_ia_scope || src.iaScope || src.basicInformation?.iaScope || '').trim();
+	if (existing) {
+		if (!src.firm_ia_scope) src.firm_ia_scope = existing;
+		return src;
+	}
+	const inferred = inferFirmIaScopeFromStrictSearchText(strictSearchText ?? src.strictSearchText);
+	if (inferred) src.firm_ia_scope = inferred;
+	return src;
+}
+
 function activityFlagsForHit(hit: any, kind: 'individual' | 'firm'): Array<'active' | 'inactive' | null> {
 	const src = unwrapSearchHit(hit);
 	const basic = src?.basicInformation && typeof src.basicInformation === 'object' ? src.basicInformation : {};
@@ -39,10 +64,11 @@ function activityFlagsForHit(hit: any, kind: 'individual' | 'firm'): Array<'acti
 			classifySearchActivityText(src.ind_ia_scope ?? basic.iaScope ?? src.iaScope),
 		];
 	}
+	const enriched = enrichFirmSearchHitSource(src, src.strictSearchText);
 	return [
-		classifySearchActivityText(src.firm_bc_scope ?? basic.bcScope ?? src.bcScope),
-		classifySearchActivityText(src.firm_ia_scope ?? basic.iaScope ?? src.iaScope),
-		classifySearchActivityText(src.firmStatus ?? basic.firmStatus),
+		classifySearchActivityText(enriched.firm_bc_scope ?? basic.bcScope ?? enriched.bcScope),
+		classifySearchActivityText(enriched.firm_ia_scope ?? basic.iaScope ?? enriched.iaScope),
+		classifySearchActivityText(enriched.firmStatus ?? basic.firmStatus),
 	];
 }
 

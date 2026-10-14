@@ -4,7 +4,7 @@ test('loads the core graph shell', async ({ page }) => {
 	await page.goto('/');
 
 	await expect(page.locator('#finra-app')).toBeVisible();
-	await expect(page.getByRole('heading', { name: 'FINRA' })).toBeVisible();
+	await expect(page.locator('.fg-header-brand')).toHaveCount(0);
 	await expect(page.locator('#fg-fetch-input')).toBeVisible();
 	await expect(page.locator('#fg-database-search')).toBeVisible();
 	await expect(page.locator('#fg-svg')).toBeVisible();

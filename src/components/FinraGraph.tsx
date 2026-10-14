@@ -964,9 +964,7 @@ export default function FinraGraph() {
 		const shouldDismissFindForTarget = (target: Node | null) => {
 			const findBar = document.getElementById('fg-find-header');
 			const findToggle = document.getElementById('fg-find-toggle');
-			return Boolean(
-				isFindBarOpenRef.current && findBar && target && !findBar.contains(target) && (!findToggle || !findToggle.contains(target)),
-			);
+			return Boolean(isFindBarOpenRef.current && findBar && target && !findBar.contains(target) && (!findToggle || !findToggle.contains(target)));
 		};
 
 		const handleDocumentPointerDownCapture = (event: PointerEvent) => {
@@ -1146,11 +1144,7 @@ export default function FinraGraph() {
 				id='finra-app'
 				className='fg-app-loading'>
 				<header className='fg-header'>
-					<div className='fg-header-bar'>
-						<div className='fg-header-brand'>
-							<h1 className='fg-title'>FINRA/SEC</h1>
-						</div>
-					</div>
+					<div className='fg-header-bar'></div>
 				</header>
 				<main className='fg-main fg-loading-main'>
 					<div className='fg-empty-card'>
@@ -1173,10 +1167,6 @@ export default function FinraGraph() {
 			<title>{pageTitle}</title>
 			<header className='fg-header'>
 				<div className='fg-header-bar'>
-					<div className='fg-header-brand'>
-						<h1 className='fg-title'>FINRA/SEC</h1>
-					</div>
-
 					<div
 						id='fg-header-controls'
 						className='fg-header-controls'>
@@ -1743,13 +1733,16 @@ export default function FinraGraph() {
 								<span className='fg-empty-card__arrow-line'></span>
 								<span className='fg-empty-card__arrow-head'></span>
 							</div>
-							<h4 className='fg-empty-title'>Fetch nodes with the search field above.</h4>
+							<h4 className='fg-empty-title'>
+								Fetch firm and broker nodes from <br />
+								FINRA Broker Check / SEC Advisor Info
+							</h4>
 							<ul className='fg-empty-steps'>
-								<li>
-									Selecting Firm nodes reveal it's BD/Control Positions (red). Full firm connection list can be seen within the dashboard, selected CRDs are added to the Queue
-									Graph list which will then be fetched onto the node graph when returning.
-								</li>
+								<li>For discovery, enter a firm name or CRD number, or a broker name or CRD number. You can also enter a comma-separated list of names/CRDs.</li>
 								<li>Selecting Individual nodes reveal it's current and previous employment connections (blue).</li>
+								<li>Selecting SEC Only Firm nodes (green)reveal it's current broker connections (blue).</li>
+								<li>Selecting Firm nodes with FINRA data (purple)reveal it's business direct connections and employed by (red).</li>
+								<li>To find the full list of connections for a firm, view that firm in the dashboard, to see the full connection list for a firm</li>
 							</ul>
 							<br />
 							<a

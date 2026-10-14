@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { getSearchIndexFilePaths } from './searchDataPaths';
 import { isValidCrd } from '@/lib/crd';
 import { isGenericFirmDisplayName as isGenericFirmDisplayNameShared, isGenericPersonDisplayName } from '@/lib/displayNameGuards';
+import { enrichFirmSearchHitSource } from './searchHitActivity';
 
 export type LocalSearchSource = 'finra' | 'sec';
 export type LocalSearchEntity = 'individual' | 'firm';
@@ -1396,7 +1397,7 @@ export async function searchLocalIndex(source: LocalSearchSource, type: LocalSea
 		!normalizedQuery || !hasMinimumQuery ? [] : await buildQueryMatchesAsync(candidates, query, normalizedQuery, tokens, 0);
 	const total = matches.length;
 	const pageDocs = limit > 0 ? matches.slice(offset, offset + limit) : [];
-	const resultDocs = pageDocs.map((doc) => doc.hit || {});
+	const resultDocs = pageDocs.map((doc) => mapLocalSearchHitSource(doc));
 	return {
 		bucket,
 		generatedAt: index?.generatedAt ?? null,
@@ -1404,7 +1405,7 @@ export async function searchLocalIndex(source: LocalSearchSource, type: LocalSea
 		hits: {
 			total,
 			start: offset,
-			hits: pageDocs.map((doc) => ({ _id: doc.id, _source: doc.hit || {} })),
+			hits: pageDocs.map((doc) => ({ _id: doc.id, _source: mapLocalSearchHitSource(doc) })),
 		},
 		response: {
 			numFound: total,
@@ -1416,6 +1417,22 @@ export async function searchLocalIndex(source: LocalSearchSource, type: LocalSea
 		pageNumber: limit > 0 ? Math.floor(offset / limit) + 1 : 1,
 		pageSize: limit,
 	};
+}
+
+function mapLocalSearchHitSource(
+	doc: {
+		hit?: LocalSearchHit;
+		strictSearchText?: string;
+		normalizedStrictSearchText?: string;
+		type?: string;
+	} | null | undefined,
+) {
+	const hit = doc?.hit && typeof doc.hit === 'object' ? doc.hit : {};
+	if (doc?.type === 'firm' || hit.firm_id || hit.firmId) {
+		// prepareDoc clears raw strictSearchText to save RSS; use the normalized copy.
+		return enrichFirmSearchHitSource(hit, doc?.normalizedStrictSearchText || doc?.strictSearchText);
+	}
+	return { ...hit };
 }
 
 export async function searchQueriesSequentially<T>(queries: string[], runner: (query: string) => Promise<T | null>, predicate: (value: T | null) => boolean): Promise<T[]> {
@@ -1512,10 +1529,10 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 		const matches = await buildQueryMatchesAsync(candidates, searchQuery, normalizedQuery, tokens, 0);
 		if (!matches.length) continue;
 		for (const match of matches) {
-			const docId = String(match?.hit?.id || match?.id || match?.hit?.ind_source_id || match?.hit?.firm_source_id || '').trim();
+			const docId = String(match?.hit?.id || match?.id || match?.hit?.ind_source_id || match?.hit?.firm_source_id || match?.hit?.firm_id || '').trim();
 			if (!docId || seenIds.has(docId)) continue;
 			seenIds.add(docId);
-			mergedDocs.push(match.hit || {});
+			mergedDocs.push(mapLocalSearchHitSource(match));
 		}
 	}
 
@@ -1528,7 +1545,10 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 		hits: {
 			total,
 			start: offset,
-			hits: pageDocs.map((doc) => ({ _id: String(doc?.id || doc?.ind_source_id || doc?.firm_source_id || ''), _source: doc })),
+			hits: pageDocs.map((doc) => ({
+				_id: String(doc?.id || doc?.ind_source_id || doc?.firm_source_id || doc?.firm_id || ''),
+				_source: doc,
+			})),
 		},
 		response: {
 			numFound: total,
@@ -1743,6 +1763,7 @@ export function buildFirmDoc(source: string, detail: any): LocalSearchDoc | null
 		firm_other_names: otherNames,
 		otherNames,
 		firm_bc_scope: toText(basicInformation.bcScope),
+		firm_ia_scope: toText(basicInformation.iaScope || detail.iaScope) || null,
 		bdSecNumber: toText(basicInformation.bdSECNumber || detail.bdSecNumber) || null,
 		iaSecNumber: toText(basicInformation.iaSECNumber || detail.iaSecNumber) || null,
 		disclosureFlag: detail.bdDisclosureFlag ?? detail.disclosureFlag ?? null,

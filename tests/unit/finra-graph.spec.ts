@@ -1276,6 +1276,35 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(isNodeInactive(node)).toBe(false);
 	});
 
+	it('isNodeInactive marks SEC-only firms inactive from iaScope without folding into bcScope', () => {
+		const node = {
+			id: 'firm:162462',
+			group: 'firm',
+			label: 'DFJ EPLANET',
+			firmId: '162462',
+			hasSecData: true,
+			hasFinraData: false,
+			iaScope: 'INACTIVE',
+			iaSecNumber: '75168',
+			bcScope: null,
+		} as any;
+
+		expect(isNodeInactive(node)).toBe(true);
+
+		const activeSec = {
+			id: 'firm:107342',
+			group: 'firm',
+			label: 'FISHER INVESTMENTS',
+			firmId: '107342',
+			hasSecData: true,
+			hasFinraData: false,
+			iaScope: 'ACTIVE',
+			iaSecNumber: '29362',
+			bcScope: null,
+		} as any;
+		expect(isNodeInactive(activeSec)).toBe(false);
+	});
+
 	it('supports a data-driven forced gray link without hard-coded CRDs', () => {
 		const link = {
 			source: { id: 'person:111' },
