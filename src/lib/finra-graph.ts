@@ -990,19 +990,22 @@ const MAX_FIRM_CONTROL_OWNERS_ON_CANVAS = 24;
 const SIDEBAR_CONNECTIONS_PREVIEW_LIMIT = 100;
 const PROFILE_SEED_FETCH_CONCURRENCY = 50;
 const SEED_QUERY_FETCH_CONCURRENCY = 50;
-/** Soft cap on text-search hits; shrinks when the canvas is already dense to keep inject work bounded. */
-const MAX_TEXT_SEARCH_HITS_BASE = 1000;
-const MAX_TEXT_SEARCH_HITS_DENSE = 400;
+/**
+ * Header Search fetches at most this many closest new matches per click.
+ * Searching the same term again continues with the next matches not yet on canvas.
+ */
+export const TEXT_SEARCH_FETCH_LIMIT = 200;
 // Text-search hits are often slim (name + CRD, no employment arrays). Hydrate like
 // CRD paste import so each person lands with current employer firm(s) already linked.
-// Cap at the same soft hit budget; keep concurrency gentle to avoid fetch/paint crashes.
-const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = MAX_TEXT_SEARCH_HITS_BASE;
+// Cap hydration at the same per-click fetch budget; keep concurrency gentle to avoid fetch/paint crashes.
+const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = TEXT_SEARCH_FETCH_LIMIT;
 const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 5;
 const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD = 24;
 /** Progressive database-search canvas flushes: coalesce pages so a large on-screen graph is not rebuilt per hit page. */
 const SEARCH_FLUSH_MIN_INTERVAL_MS = 280;
 const SEARCH_FLUSH_NODE_THRESHOLD = 36;
-const SEARCH_DENSE_GRAPH_NODE_THRESHOLD = 200;
+/** Last normalized header Search query — used to detect repeat searches for "next page" messaging. */
+let lastDatabaseSearchQueryKey = '';
 /** Shared-selection / canvas import hydration chunk size. */
 const ON_SCREEN_DETAIL_FETCH_BATCH_SIZE = 20;
 /** Log-list / bulk restore: higher fan-out + larger chunks so hundreds of CRDs don't crawl. */
@@ -2920,6 +2923,96 @@ export function selectTextSearchHydrationTargets(
 	}
 
 	return selected;
+}
+
+export function normalizeDatabaseSearchQueryKey(query: string, searchType = 'all') {
+	const normalizedQuery = String(query || '')
+		.trim()
+		.toLowerCase()
+		.replace(/\s+/g, ' ');
+	const normalizedType = String(searchType || 'all')
+		.trim()
+		.toLowerCase() || 'all';
+	return normalizedQuery ? `${normalizedType}::${normalizedQuery}` : '';
+}
+
+export function getSearchHitGraphDedupeKey(hit: any): string {
+	const src = hit?._source || hit || {};
+	const personId = String(src?.basicInformation?.individualId || src?.ind_source_id || src?.ind_crd || '').trim();
+	if (personId) return `person:${personId}`;
+	if (typeof src?.id === 'string' && src.id.startsWith('person:')) return src.id;
+	if (src?.type === 'individual' && src?.crd) return `person:${String(src.crd).trim()}`;
+	const firmId = String(src?.basicInformation?.firmId || src?.firm_id || src?.firmId || src?.firm_source_id || '').trim();
+	if (firmId) return `firm:${firmId}`;
+	if (typeof src?.id === 'string' && src.id.startsWith('firm:')) return src.id;
+	if (src?.type === 'firm' && src?.crd) return `firm:${String(src.crd).trim()}`;
+	return '';
+}
+
+/** Higher = closer name/id match for header Search ranking across FINRA/SEC pools. */
+export function scoreSearchHitCloseness(hit: any, rawQuery: string): number {
+	const query = String(rawQuery || '').trim();
+	if (!query) return 0;
+	const comparableQuery = normalizeComparableName(query);
+	const numericQuery = /^\d+$/.test(query) ? query : '';
+	const src = hit?._source || hit || {};
+	const dedupeKey = getSearchHitGraphDedupeKey(hit);
+	const idTail = dedupeKey.includes(':') ? dedupeKey.split(':').pop() || '' : '';
+	if (numericQuery && idTail === numericQuery) return 10000;
+
+	const personLabel = [src?.ind_firstname, src?.ind_middlename, src?.ind_lastname].filter(Boolean).join(' ');
+	const firmLabel = String(src?.label || src?.firm_name || src?.firmName || src?.name || src?.basicInformation?.firmName || '').trim();
+	const label = normalizeComparableName(personLabel || firmLabel || src?.name || src?.label || '');
+	if (!label || !comparableQuery) return 0;
+	if (label === comparableQuery) return 5000;
+
+	const queryTokens = comparableQuery.split(/\s+/).filter(Boolean);
+	const labelTokens = label.split(/\s+/).filter(Boolean);
+	// Prefix equality is only for single-token labels (or full multi-token query prefixes),
+	// so a surname query like "noble" does not rank "NOBLE CAPITAL" above "Philip Noble".
+	if (labelTokens.length === 1 && (label.startsWith(comparableQuery) || comparableQuery.startsWith(label))) return 4000;
+	if (queryTokens.length > 1 && (label.startsWith(comparableQuery) || comparableQuery.startsWith(label))) return 4000;
+
+	let score = 0;
+	for (const token of queryTokens) {
+		if (labelTokens.includes(token)) score += 120;
+		else if (labelTokens.some((candidate) => candidate.startsWith(token) || token.startsWith(candidate))) score += 60;
+	}
+	if (queryTokens.length && labelTokens.length && queryTokens[queryTokens.length - 1] === labelTokens[labelTokens.length - 1]) {
+		score += 800;
+	} else if (queryTokens.length === 1 && labelTokens.includes(queryTokens[0])) {
+		score += 500;
+	}
+	if (label.includes(comparableQuery)) score += 180;
+	return score;
+}
+
+/**
+ * Dedupe search hits, skip ids already on canvas, prioritize closest matches, cap at limit.
+ * Used so a repeat Search of the same term can take the next closest matches not yet fetched.
+ */
+export function selectNextTextSearchHits(
+	hits: any[] = [],
+	options: { query?: string; limit?: number; skipIds?: Iterable<string> | null } = {},
+) {
+	const limit = Math.max(0, Number(options.limit ?? TEXT_SEARCH_FETCH_LIMIT) || 0);
+	if (!limit) return [];
+	const query = String(options.query || '').trim();
+	const skipIds = new Set(
+		Array.from(options.skipIds || [])
+			.map((id) => String(id || '').trim())
+			.filter(Boolean),
+	);
+	const scored: Array<{ hit: any; key: string; score: number; index: number }> = [];
+	const seen = new Set<string>();
+	(Array.isArray(hits) ? hits : []).forEach((hit, index) => {
+		const key = getSearchHitGraphDedupeKey(hit);
+		if (!key || seen.has(key) || skipIds.has(key)) return;
+		seen.add(key);
+		scored.push({ hit, key, score: scoreSearchHitCloseness(hit, query), index });
+	});
+	scored.sort((left, right) => right.score - left.score || left.index - right.index || left.key.localeCompare(right.key));
+	return scored.slice(0, limit).map((entry) => entry.hit);
 }
 
 export function rankFindNodeMatches(rawQuery, nodePool = [], liveLinks = []) {
@@ -8989,14 +9082,11 @@ export function init(
 			fetchBtn.dataset.fetching = 'true';
 			fetchBtn.setAttribute('aria-busy', 'true');
 			try {
-				// ── 1. Search local indexed endpoints in parallel ─────────────
-				// These hit /api/finra/search and /api/finra/sec-search which query local indexes.
-				// Request up to the soft hit budget per page (API allows ≤1000); keep paging
-				// only when a surname/common-name result set exceeds that budget.
-				const existingCanvasCount = Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.length : 0;
-				const MAX_TEXT_SEARCH_HITS =
-					existingCanvasCount >= SEARCH_DENSE_GRAPH_NODE_THRESHOLD ? MAX_TEXT_SEARCH_HITS_DENSE : MAX_TEXT_SEARCH_HITS_BASE;
-				const PAGE_SIZE = MAX_TEXT_SEARCH_HITS;
+				// ── 1. Search local indexed endpoints ─────────────────────────
+				// Cap each Search click at TEXT_SEARCH_FETCH_LIMIT closest matches that are
+				// not already on canvas. Repeat the same term to pull the next batch.
+				const MAX_TEXT_SEARCH_HITS = TEXT_SEARCH_FETCH_LIMIT;
+				const PAGE_SIZE = TEXT_SEARCH_FETCH_LIMIT;
 
 				const fetchSingleCrd = async (crd) => {
 					const SINGLE_PAGE_SIZE = 12;
@@ -9036,63 +9126,67 @@ export function init(
 					return hits;
 				};
 
-				const fetchFinraAll = async (useFirm, queryText = q, onPage: ((pageHits: any[]) => void | Promise<void>) | null = null) => {
-					const hits = [];
+				/** Page a source while skipping ids already on canvas until `limit` new hits are collected. */
+				const fetchPagedNewHits = async (
+					fetchPage: (start: number, pageSize: number) => Promise<{ page: any[]; total: number | null }>,
+					options: { limit: number; skipIds: Set<string>; filterHits: (hits: any[]) => any[] },
+				) => {
+					const hits: any[] = [];
+					const seen = new Set<string>();
 					let start = 0;
-					let total = null;
+					let total: number | null = null;
 					try {
 						do {
-							const su = makeApiUrl('/api/finra/search');
-							su.searchParams.set('query', queryText);
-							su.searchParams.set('rows', String(PAGE_SIZE));
-							su.searchParams.set('start', String(start));
-							if (useFirm) su.searchParams.set('firm', '1');
-							const sr = await fetchWithTimeout(su.toString());
-							if (!sr.ok) break;
-							const sj = await sr.json();
-							const page = sj?.hits?.hits || sj?.response?.docs || sj?.results || [];
-							if (total === null) total = sj?.hits?.total ?? sj?.response?.numFound ?? page.length;
-							const remaining = Math.max(0, MAX_TEXT_SEARCH_HITS - hits.length);
-							const boundedPage = page.slice(0, remaining);
-							hits.push(...boundedPage);
-							if (boundedPage.length && onPage) await onPage(boundedPage);
+							const { page, total: pageTotal } = await fetchPage(start, PAGE_SIZE);
+							if (pageTotal != null && Number.isFinite(pageTotal)) total = pageTotal;
+							if (!page.length) break;
+							for (const hit of options.filterHits(page)) {
+								const key = getSearchHitGraphDedupeKey(hit);
+								if (!key || seen.has(key) || options.skipIds.has(key)) continue;
+								seen.add(key);
+								hits.push(hit);
+								if (hits.length >= options.limit) break;
+							}
 							start += page.length;
-							if (page.length < PAGE_SIZE || hits.length >= MAX_TEXT_SEARCH_HITS) break;
-						} while (start < total);
+							if (page.length < PAGE_SIZE || hits.length >= options.limit) break;
+						} while (total == null || start < total);
 					} catch (err) {
 						console.warn('Database search request failed', err);
 					}
 					return hits;
 				};
 
-				const fetchSec = async (queryText = q, onPage: ((pageHits: any[]) => void | Promise<void>) | null = null) => {
-					const hits = [];
-					let start = 0;
-					let total = null;
-					try {
-						do {
-							const su = makeApiUrl('/api/finra/sec-search');
-							su.searchParams.set('query', queryText);
-							su.searchParams.set('pageSize', String(PAGE_SIZE));
-							su.searchParams.set('pageNumber', String(Math.floor(start / Math.max(PAGE_SIZE, 1)) + 1));
-							su.searchParams.set('start', String(start));
-							const sr = await fetchWithTimeout(su.toString());
-							if (!sr.ok) break;
-							const sj = await sr.json();
-							const page = sj?.hits?.hits || sj?.response?.docs || sj?.currentPage || sj?.results || [];
-							if (total === null) total = sj?.hits?.total ?? sj?.response?.numFound ?? sj?.total ?? page.length;
-							const remaining = Math.max(0, MAX_TEXT_SEARCH_HITS - hits.length);
-							const boundedPage = page.slice(0, remaining);
-							hits.push(...boundedPage);
-							if (boundedPage.length && onPage) await onPage(boundedPage);
-							start += page.length;
-							if (page.length < PAGE_SIZE || hits.length >= MAX_TEXT_SEARCH_HITS) break;
-						} while (start < total);
-					} catch (err) {
-						console.warn('SEC database search request failed', err);
-					}
-					return hits;
-				};
+				const fetchFinraNewHits = async (useFirm, queryText, options: { limit: number; skipIds: Set<string>; filterHits: (hits: any[]) => any[] }) =>
+					fetchPagedNewHits(async (start, pageSize) => {
+						const su = makeApiUrl('/api/finra/search');
+						su.searchParams.set('query', queryText);
+						su.searchParams.set('rows', String(pageSize));
+						su.searchParams.set('start', String(start));
+						if (useFirm) su.searchParams.set('firm', '1');
+						const sr = await fetchWithTimeout(su.toString());
+						if (!sr.ok) return { page: [], total: 0 };
+						const sj = await sr.json();
+						return {
+							page: sj?.hits?.hits || sj?.response?.docs || sj?.results || [],
+							total: sj?.hits?.total ?? sj?.response?.numFound ?? null,
+						};
+					}, options);
+
+				const fetchSecNewHits = async (queryText, options: { limit: number; skipIds: Set<string>; filterHits: (hits: any[]) => any[] }) =>
+					fetchPagedNewHits(async (start, pageSize) => {
+						const su = makeApiUrl('/api/finra/sec-search');
+						su.searchParams.set('query', queryText);
+						su.searchParams.set('pageSize', String(pageSize));
+						su.searchParams.set('pageNumber', String(Math.floor(start / Math.max(pageSize, 1)) + 1));
+						su.searchParams.set('start', String(start));
+						const sr = await fetchWithTimeout(su.toString());
+						if (!sr.ok) return { page: [], total: 0 };
+						const sj = await sr.json();
+						return {
+							page: sj?.hits?.hits || sj?.response?.docs || sj?.currentPage || sj?.results || [],
+							total: sj?.hits?.total ?? sj?.response?.numFound ?? sj?.total ?? null,
+						};
+					}, options);
 
 				// Respect header search type selector (all | people | people-inactive | firms | firms-inactive)
 				// before issuing requests so a people-only search does not spend the hit budget on firm pages first.
@@ -9104,6 +9198,8 @@ export function init(
 							.trim()
 							.toLowerCase();
 				} catch {}
+				const searchQueryKey = normalizeDatabaseSearchQueryKey(q, headerSearchType);
+				const isRepeatSameSearch = Boolean(searchQueryKey && searchQueryKey === lastDatabaseSearchQueryKey);
 				const getSearchHitIndividualId = (hit) => {
 					const src = hit?._source || hit || {};
 					const baseId = String(src?.basicInformation?.individualId || src?.ind_source_id || src?.ind_crd || '').trim();
@@ -9190,35 +9286,53 @@ export function init(
 					});
 				};
 
-				const fetchTextQueryHits = async (queryText, onPage: ((pageHits: any[]) => void | Promise<void>) | null = null) => {
-					const hits = [];
-					let emitted = 0;
+				const getCanvasSkipIds = () => {
+					const skipIds = new Set<string>();
+					for (const node of Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes : []) {
+						const id = String(node?.id || '').trim();
+						if (id) skipIds.add(id);
+					}
+					return skipIds;
+				};
+
+				const fetchTextQueryHits = async (
+					queryText,
+					onPage: ((pageHits: any[]) => void | Promise<void>) | null = null,
+					options: { limit?: number; skipIds?: Set<string> } = {},
+				) => {
 					const includePeople = searchTypeIncludesPeople(headerSearchType);
 					const includeFirms = searchTypeIncludesFirms(headerSearchType);
-					const boundedOnPage = onPage ?
-						async (pageHits: any[]) => {
-							// Count only hits that will survive the active type filter against the shared budget.
-							const typed = filterHitsBySearchType(pageHits || []);
-							const remaining = Math.max(0, MAX_TEXT_SEARCH_HITS - emitted);
-							const page = typed.slice(0, remaining);
-							emitted += page.length;
-							if (page.length) await onPage(page);
-						}
-					:	null;
+					const limit = Math.max(0, Number(options.limit ?? MAX_TEXT_SEARCH_HITS) || 0);
+					if (!limit) return [];
+					const skipIds = options.skipIds || getCanvasSkipIds();
+					// Fetch up to `limit` new hits per source (already skipping canvas), then re-rank
+					// closest matches across FINRA/SEC pools and keep only `limit`.
+					const pageOptions = {
+						limit,
+						skipIds,
+						filterHits: filterHitsBySearchType,
+					};
 					const requests: Promise<any[]>[] = [];
-					if (includePeople) requests.push(fetchFinraAll(false, queryText, boundedOnPage));
-					if (includeFirms) requests.push(fetchFinraAll(true, queryText, boundedOnPage));
+					if (includePeople) requests.push(fetchFinraNewHits(false, queryText, pageOptions));
+					if (includeFirms) requests.push(fetchFinraNewHits(true, queryText, pageOptions));
 					// SEC index mixes people/firms; keep it for all/people/firms and let the type filter decide.
-					requests.push(fetchSec(queryText, boundedOnPage));
+					requests.push(fetchSecNewHits(queryText, pageOptions));
+					const pooled: any[] = [];
 					const results = await Promise.allSettled(requests);
 					results.forEach((result, index) => {
 						if (result.status === 'fulfilled') {
-							hits.push(...filterHitsBySearchType(result.value));
+							pooled.push(...(result.value || []));
 						} else {
 							console.warn(`Database search request ${index} failed`, result.reason);
 						}
 					});
-					return hits.slice(0, MAX_TEXT_SEARCH_HITS);
+					const rankedNewHits = selectNextTextSearchHits(pooled, {
+						query: queryText,
+						limit,
+						skipIds,
+					});
+					if (rankedNewHits.length && onPage) await onPage(rankedNewHits);
+					return rankedNewHits;
 				};
 
 				// ── 2. Build nodes from search hits and flush onto canvas progressively ──
@@ -9696,6 +9810,7 @@ export function init(
 
 				// ── 3. Run searches and paint each page/match as it arrives ────────
 				updateFetchStatus(isNameList ? `Searching ${nameListTokens.length} names…` : `Searching “${q}”…`);
+				let rankedSearchHitCount = 0;
 
 				if (isCrdList) {
 					await mapWithConcurrency(tokens, 5, async (token) => {
@@ -9705,20 +9820,29 @@ export function init(
 								await hydrateDirectHit(hit);
 							});
 						} else {
+							rankedSearchHitCount += hits.length;
 							ingestTextHits(hits);
 							await yieldToBrowser();
 						}
 					});
 				} else if (isNameList) {
-					let nameSearchIndex = 0;
-					await mapWithConcurrency(nameListTokens, 3, async (term) => {
-						nameSearchIndex += 1;
-						updateFetchStatus(`Searching ${nameSearchIndex} of ${nameListTokens.length}: ${term}…`);
-						await fetchTextQueryHits(term, async (pageHits) => {
-							ingestTextHits(pageHits);
-							await yieldToBrowser();
-						});
-					});
+					// Share the 200-new-hit budget across comma-separated names; skip ids already on canvas.
+					const sharedSkipIds = getCanvasSkipIds();
+					let remainingBudget = MAX_TEXT_SEARCH_HITS;
+					for (let nameSearchIndex = 0; nameSearchIndex < nameListTokens.length; nameSearchIndex += 1) {
+						if (remainingBudget <= 0) break;
+						const term = nameListTokens[nameSearchIndex];
+						updateFetchStatus(`Searching ${nameSearchIndex + 1} of ${nameListTokens.length}: ${term}…`);
+						const pageHits = await fetchTextQueryHits(term, null, { limit: remainingBudget, skipIds: sharedSkipIds });
+						for (const hit of pageHits) {
+							const key = getSearchHitGraphDedupeKey(hit);
+							if (key) sharedSkipIds.add(key);
+						}
+						rankedSearchHitCount += pageHits.length;
+						ingestTextHits(pageHits);
+						remainingBudget = Math.max(0, remainingBudget - pageHits.length);
+						await yieldToBrowser();
+					}
 				} else if (isDirectId) {
 					let seedHits = filterHitsBySearchType(await fetchTextQueryHits(q));
 					if (!seedHits.length) {
@@ -9734,10 +9858,10 @@ export function init(
 						await hydrateDirectHit(hit);
 					});
 				} else {
-					await fetchTextQueryHits(q, async (pageHits) => {
-						ingestTextHits(pageHits);
-						await yieldToBrowser();
-					});
+					const pageHits = await fetchTextQueryHits(q);
+					rankedSearchHitCount = pageHits.length;
+					ingestTextHits(pageHits);
+					await yieldToBrowser();
 				}
 
 				flushSearchProgress(undefined, { force: true, persist: isDirectId });
@@ -9746,11 +9870,16 @@ export function init(
 					!isDirectId ? selectTextSearchHydrationTargets(textSearchHydrationCandidates, TEXT_SEARCH_DETAIL_HYDRATION_LIMIT) : [];
 
 				if (!progressiveAddedTotal && !progressiveExistingTotal && !textSearchHydrationTargets.length) {
+					if (searchQueryKey) lastDatabaseSearchQueryKey = searchQueryKey;
 					if (allHits.length > 0) {
 						updateFetchStatus(`No new graph nodes for "${q}" (hits lacked structured ids)`);
 						return;
 					}
-					updateFetchStatus(isNameList ? `No database results for ${nameListTokens.length} names` : `No database results for "${q}"`);
+					updateFetchStatus(
+						isRepeatSameSearch ? `No more matches for "${q}"`
+						: isNameList ? `No database results for ${nameListTokens.length} names`
+						:	`No database results for "${q}"`,
+					);
 					return;
 				}
 
@@ -9863,13 +9992,16 @@ export function init(
 				}
 				void fetchCacheStats();
 
+				if (searchQueryKey) lastDatabaseSearchQueryKey = searchQueryKey;
+
+				const morePrefix = !isDirectId && isRepeatSameSearch && progressiveAddedTotal > 0 ? 'more ' : '';
 				const addedLabel =
 					isNameList ?
-						`Added ${progressiveAddedTotal} node${progressiveAddedTotal !== 1 ? 's' : ''} for ${nameListTokens.length} names`
-					:	`Added ${progressiveAddedTotal} node${progressiveAddedTotal !== 1 ? 's' : ''} for "${q}"`;
+						`Added ${progressiveAddedTotal} ${morePrefix}node${progressiveAddedTotal !== 1 ? 's' : ''} for ${nameListTokens.length} names`
+					:	`Added ${progressiveAddedTotal} ${morePrefix}node${progressiveAddedTotal !== 1 ? 's' : ''} for "${q}"`;
 				const hitCapNote =
-					!isDirectId && MAX_TEXT_SEARCH_HITS < MAX_TEXT_SEARCH_HITS_BASE ?
-						` (capped at ${MAX_TEXT_SEARCH_HITS} hits while canvas is dense)`
+					!isDirectId && rankedSearchHitCount >= MAX_TEXT_SEARCH_HITS ?
+						` (closest ${MAX_TEXT_SEARCH_HITS}; search again for more)`
 					:	'';
 				updateFetchStatus(
 					(progressiveExistingTotal > 0 ? `${addedLabel}, ${progressiveExistingTotal} already on canvas` : addedLabel) + hitCapNote,

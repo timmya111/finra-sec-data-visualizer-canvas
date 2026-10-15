@@ -44,6 +44,10 @@ import {
 	rankFindNodeMatches,
 	scheduleNodeExpansion,
 	selectTextSearchHydrationTargets,
+	selectNextTextSearchHits,
+	scoreSearchHitCloseness,
+	normalizeDatabaseSearchQueryKey,
+	TEXT_SEARCH_FETCH_LIMIT,
 	buildFirmCurrentConnectionGraphBatch,
 	shouldFetchFirmDetailForOwnerEvidence,
 	shouldHydrateExpansionFrontierNodeDetail,
@@ -1778,6 +1782,28 @@ describe('FinraGraph DOM helpers (unit)', () => {
 			{ nodeId: 'person:1', group: 'individual' },
 			{ nodeId: 'firm:2', group: 'firm' },
 		]);
+	});
+
+	it('selectNextTextSearchHits prioritizes closest matches and skips canvas ids', () => {
+		expect(TEXT_SEARCH_FETCH_LIMIT).toBe(200);
+		expect(normalizeDatabaseSearchQueryKey('  Noble ', 'People')).toBe('people::noble');
+		const hits = [
+			{ _source: { ind_source_id: '1', ind_firstname: 'Ann', ind_lastname: 'Smith' } },
+			{ _source: { ind_source_id: '2', ind_firstname: 'Bob', ind_lastname: 'Noble' } },
+			{ _source: { ind_source_id: '3', ind_firstname: 'Philip', ind_lastname: 'Noble' } },
+			{ _source: { ind_source_id: '2', ind_firstname: 'Bob', ind_lastname: 'Noble' } },
+			{ _source: { firm_id: '99', firm_name: 'NOBLE CAPITAL' } },
+		];
+		expect(scoreSearchHitCloseness(hits[2], 'philip noble')).toBeGreaterThan(scoreSearchHitCloseness(hits[0], 'philip noble'));
+		const selected = selectNextTextSearchHits(hits, {
+			query: 'noble',
+			limit: 2,
+			skipIds: ['person:2'],
+		});
+		const ids = selected.map((hit) => String(hit?._source?.ind_source_id || hit?._source?.firm_id || ''));
+		expect(ids).toHaveLength(2);
+		expect(ids).not.toContain('2');
+		expect(ids[0]).toBe('3');
 	});
 
 	it('buildFirmCurrentConnectionGraphBatch adds current people with employed_by links', () => {
