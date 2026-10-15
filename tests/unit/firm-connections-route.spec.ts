@@ -24,6 +24,7 @@ const { getFirmConnectionsFromGraph } = vi.hoisted(() => ({
 
 vi.mock('@/lib/graphConnections', () => ({
 	getFirmConnectionsFromGraph,
+	FIRM_CONNECTIONS_HTTP_CACHE_SECONDS: 60 * 60 * 24 * 7,
 }));
 
 import { GET as getConnections } from '../../src/app/api/finra/firm/[id]/connections/route';
@@ -51,7 +52,9 @@ describe('firm connections route and deferConnections option', () => {
 		expect(data.currentConnections[0].name).toBe('John Doe');
 		expect(data.previousConnections).toHaveLength(1);
 		expect(data.previousConnections[0].name).toBe('Jane Smith');
-		expect(response.headers.get('cache-control')).toContain('s-maxage=60');
+		// 1 week HTTP cache (matches Redis firm-connections TTL).
+		expect(response.headers.get('cache-control')).toContain('s-maxage=604800');
+		expect(response.headers.get('cache-control')).toContain('max-age=604800');
 	});
 
 	it('passes skipEnrichment when light=1', async () => {
@@ -61,7 +64,10 @@ describe('firm connections route and deferConnections option', () => {
 		expect(response.status).toBe(200);
 		const data = await response.json();
 		expect(data.light).toBe(true);
-		expect(getFirmConnectionsFromGraph).toHaveBeenCalledWith('13686', { skipEnrichment: true });
+		expect(getFirmConnectionsFromGraph).toHaveBeenCalledWith('13686', {
+			skipEnrichment: true,
+			computeIfMissing: true,
+		});
 	});
 
 	it('handles invalid firm id gracefully', async () => {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getFirmConnectionsFromGraph } from '@/lib/graphConnections';
+import { FIRM_CONNECTIONS_HTTP_CACHE_SECONDS, getFirmConnectionsFromGraph } from '@/lib/graphConnections';
+import { sharedCacheHeaders } from '@/lib/httpCache';
 import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 				previousConnections: previous,
 				...(light ? { light: true } : {}),
 			},
-			{ headers: { 'Cache-Control': 'public, max-age=1209600, s-maxage=1209600, stale-while-revalidate=1209600' } },
+			{ headers: sharedCacheHeaders(FIRM_CONNECTIONS_HTTP_CACHE_SECONDS, FIRM_CONNECTIONS_HTTP_CACHE_SECONDS) },
 		);
 	} catch (err: any) {
 		logger.warn('Failed to load firm connections from graph route', { id, error: err?.message || String(err) });

@@ -2536,7 +2536,10 @@ async function applyPendingRouteNodeSelection() {
 				employmentPromise = (async () => {
 					try {
 						await ensureFirmDetail(liveNode);
-						if (getFirmSourceCoverage(liveNode) === 'sec_only' && !liveNode._secOnlyCurrentConnectionsExpanded) {
+						if (
+							shouldExpandFirmCurrentConnections(liveNode) &&
+							(!liveNode._secOnlyCurrentConnectionsExpanded || !firmHasAllCurrentConnectionsOnCanvas(liveNode))
+						) {
 							await expandSecOnlyFirmCurrentConnections(liveNode);
 							revealIncidentRenderedLinks(liveNode, isAutoExpansionLink);
 						}
@@ -5358,6 +5361,7 @@ function clearNonConnectedAction(button?: HTMLButtonElement) {
 	const keepIds = collectSelectionLogClearNonLogKeepIds(globalState.graphData, selectedNodesLog);
 	armClearNonLogKeepGate(keepIds);
 	pruneGraphDataToKeepIds(keepIds);
+	resetFirmConnectionExpandFlagsAfterPrune(keepIds);
 	if (button) flashSelectionLogActionButton(button, 'Step 1');
 }
 
@@ -5399,6 +5403,7 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	);
 	armClearNonLogKeepGate(afterStripIds);
 	pruneGraphDataToKeepIds(afterStripIds);
+	resetFirmConnectionExpandFlagsAfterPrune(afterStripIds);
 
 	// Selected people who lost any employment-history links should no longer look selected.
 	for (const personId of selectedPeople) {
@@ -17309,13 +17314,72 @@ export function buildFirmCurrentConnectionGraphBatch(
 	return { nodes, links, skippedExisting };
 }
 
+/** Count how many of the firm's current-connection people are present on the live canvas. */
+function countFirmCurrentConnectionsOnCanvas(firmNode: any) {
+	const current = Array.isArray(firmNode?.currentConnections) ? firmNode.currentConnections : [];
+	if (!current.length) return { present: 0, total: 0 };
+	const layoutIds = new Set((globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
+	let present = 0;
+	for (const person of current) {
+		const crd = String(person?.individualId || person?.crd || person?.crdNumber || person?.personId || '').trim();
+		if (/^\d+$/.test(crd) && layoutIds.has(`person:${crd}`)) present += 1;
+	}
+	return { present, total: current.length };
+}
+
+/** True when every known current-connection person is already on the canvas. */
+function firmHasAllCurrentConnectionsOnCanvas(firmNode: any) {
+	const { present, total } = countFirmCurrentConnectionsOnCanvas(firmNode);
+	return total > 0 && present >= total;
+}
+
+/** After clear-non-log prunes people, SEC-only firms must be allowed to expand again. */
+function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
+	const nodes = [
+		...(Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes : []),
+		...(Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes : []),
+	];
+	for (const node of nodes) {
+		if (!node || node.group !== 'firm') continue;
+		const id = String(node.id || '').trim();
+		if (keepIds.size && id && !keepIds.has(id)) continue;
+		// A few bridge people left on canvas must not keep the "already expanded" flag —
+		// otherwise SEC-only firms never re-inject the rest of the roster after clear-non-log.
+		if (node._secOnlyCurrentConnectionsExpanded && !firmHasAllCurrentConnectionsOnCanvas(node)) {
+			delete node._secOnlyCurrentConnectionsExpanded;
+		}
+	}
+}
+
+/**
+ * SEC-led firms auto-open their /connections current roster on the canvas.
+ * Prefer strict sec_only coverage; also recover when hasFinraData was flipped true
+ * without a BD bcScope (Fisher 107342 after hydrate) so clear-non-log can re-expand.
+ */
+function shouldExpandFirmCurrentConnections(firmNode: any) {
+	if (!firmNode || firmNode.group !== 'firm') return false;
+	if (getFirmSourceCoverage(firmNode) === 'sec_only') return true;
+	if (firmNode.hasFinraData === false && firmNode.hasSecData !== false) return true;
+	const bcRaw = String(firmNode.bcScope || firmNode.basicInformation?.bcScope || '').trim();
+	const bcNorm = bcRaw.toLowerCase().replace(/[^a-z0-9]+/g, '');
+	const hasBcSignal = Boolean(bcNorm) && bcNorm !== 'notinscope' && /(active|inactive|approved|current|terminated)/.test(bcNorm);
+	if (hasBcSignal) return false;
+	// No BD scope signal + SEC data / loaded SEC roster → keep using current-connections expand.
+	if (firmNode.hasSecData === false) return false;
+	if (Array.isArray(firmNode.currentConnections) && firmNode.currentConnections.length > 0) return true;
+	if (firmNode._secOnlyCurrentConnectionsExpanded || firmNode._connectionsLoaded) return true;
+	return firmNode.hasSecData === true;
+}
+
 /**
  * SEC-only (green) firm click: fetch /connections and add every current person onto the graph.
  * FINRA / dual firms keep Form BD control-only expand.
  */
 async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0 };
-	if (getFirmSourceCoverage(firmNode) !== 'sec_only') return { added: 0, linked: 0 };
+	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0 };
+	// Intentional firm expand — do not let a prior clear-non-log keep-gate drop the roster.
+	releaseClearNonLogKeepGate();
 
 	const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
 	updateFetchStatus(`Loading current connections for ${firmLabel}…`, true);
@@ -17587,8 +17651,13 @@ async function ensureFirmDetail(firmNode) {
 			if (bi.isLegacy) firmNode.isLegacy = bi.isLegacy;
 			if (Array.isArray(bi.otherNames) && bi.otherNames.length) firmNode.otherNames = bi.otherNames;
 			applyFirmSourceFieldsToNode(firmNode, detail);
+			// Detail API source flags win over inferred paint fields (prevents SEC-only
+			// firms like 107342 from flipping to hasFinraData=true and skipping roster expand).
 			if (detail.hasFinraData != null) firmNode.hasFinraData = detail.hasFinraData;
 			if (detail.hasSecData != null) firmNode.hasSecData = detail.hasSecData;
+			if (detail.hasFinraData === false) {
+				firmNode.hasFinraData = false;
+			}
 			// If FINRA explicitly reports no firm data, persist suppression so
 			// sidebar links self-correct during normal browsing.
 			if (detail.hasFinraData === false) {
@@ -18174,9 +18243,9 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 		didRevealOrMerge = didRevealOrMerge || (globalState.layoutNodes?.length || 0) > beforeCount;
 		didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, expansionLinkFilter) > 0 || didRevealOrMerge;
 
-		// Green SEC-only firms: also open the full current employment roster onto the canvas.
+		// Green SEC-led firms: also open the full current employment roster onto the canvas.
 		// FINRA-only / dual firms stay Form BD control-only on click (dashboard for full roster).
-		if (getFirmSourceCoverage(clickedNode) === 'sec_only') {
+		if (shouldExpandFirmCurrentConnections(clickedNode)) {
 			const beforeSec = globalState.layoutNodes?.length || 0;
 			await expandSecOnlyFirmCurrentConnections(clickedNode);
 			if (runId !== globalState.nonGrayExpandRunId) return;
@@ -18825,7 +18894,7 @@ async function materializeRouteSelectionNeighborhood(node, hops: number = getDef
 			linkFilter: isFirmControlOnlyLink,
 			markSelected: true,
 		});
-		if (getFirmSourceCoverage(node) === 'sec_only') {
+		if (shouldExpandFirmCurrentConnections(node)) {
 			try {
 				await expandSecOnlyFirmCurrentConnections(node);
 				revealIncidentRenderedLinks(node, isAutoExpansionLink);

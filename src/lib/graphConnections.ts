@@ -55,9 +55,14 @@ export type GraphConnectionEntry = {
   currentFirmName?: string;
 };
 
-const FIRM_CONNECTIONS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
-// Do not stick empty results for an hour — empty caches were masking recoveries.
-const EMPTY_FIRM_CONNECTIONS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
+/**
+ * Redis firm-connections keys persist with no expiry.
+ * HTTP/CDN caching for the connections API response is separate (1 week on the route).
+ */
+export const FIRM_CONNECTIONS_CACHE_TTL_SECONDS: number | null = null;
+const EMPTY_FIRM_CONNECTIONS_CACHE_TTL_SECONDS: number | null = null;
+/** HTTP max-age for GET /api/finra/firm/{id}/connections — 1 week. */
+export const FIRM_CONNECTIONS_HTTP_CACHE_SECONDS = 60 * 60 * 24 * 7;
 // v10: do not treat a thin primed-bundle hit as the full roster (v9 poisoned mega-firms).
 export const FIRM_CONNECTIONS_CACHE_VERSION = 10;
 

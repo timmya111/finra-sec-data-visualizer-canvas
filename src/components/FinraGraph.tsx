@@ -1746,10 +1746,10 @@ export default function FinraGraph() {
 							</ul>
 							<br />
 							<a
-								href='https://github.com/tvv1001'
+								href='https://github.com/timmya111/finra-sec-data-visualizer-canvas'
 								target='_blank'
 								rel='noopener noreferrer'>
-								GitHub Repository -- https://github.com/tvv1001
+								GitHub Repository -- https://github.com/timmya111/finra-sec-data-visualizer-canvas
 							</a>
 						</div>
 					</div>
