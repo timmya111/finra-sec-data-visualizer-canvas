@@ -146,6 +146,41 @@ describe('local search indexes', () => {
 		).toBe(9);
 	});
 
+	it('keeps compact current employers on slim search hits and drops previous arrays', async () => {
+		const payload = JSON.stringify({
+			generatedAt: new Date().toISOString(),
+			bucket: 'finra:individual',
+			docs: [
+				{
+					id: 'finra:individual:4242',
+					type: 'individual',
+					source: 'finra',
+					nameSearchText: 'test person',
+					strictSearchText: 'test person',
+					searchText: '4242 test person',
+					hit: {
+						ind_source_id: '4242',
+						ind_crd: '4242',
+						ind_firstname: 'Test',
+						ind_lastname: 'Person',
+						ind_current_employments: [{ firmId: '205', firmName: 'SANCTUARY SECURITIES, INC.', city: 'NY', street1: '1 Main' }],
+						ind_ia_current_employments: [{ firm_id: '226606', firm_name: 'SANCTUARY ADVISORS, LLC' }],
+						ind_previous_employments: [{ firmId: '6413', firmName: 'LPL FINANCIAL LLC', city: 'Boston' }],
+					},
+				},
+			],
+		});
+
+		await withTempSearchIndex('search-index.finra.individual.json.gz', gzipSync(Buffer.from(payload)), async (root) => {
+			const result = await searchLocalIndex('finra', 'individual', 'test person', { limit: 5, seedRoots: [root] });
+			const hit = result.results?.[0] || result.hits?.hits?.[0]?._source;
+			expect(hit?.ind_current_employments).toEqual([{ firmId: '205', firmName: 'SANCTUARY SECURITIES, INC.' }]);
+			expect(hit?.ind_ia_current_employments).toEqual([{ firmId: '226606', firmName: 'SANCTUARY ADVISORS, LLC' }]);
+			expect(hit?.ind_previous_employments).toBeUndefined();
+			expect(hit?.ind_connection_count).toBe(2);
+		});
+	});
+
 	it('hydrates knownConnectionCount onto person nodes from current employers only', async () => {
 		const payload = JSON.stringify({
 			generatedAt: new Date().toISOString(),

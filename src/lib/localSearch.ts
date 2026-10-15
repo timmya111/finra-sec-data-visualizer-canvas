@@ -92,11 +92,59 @@ function collectStateStreetValues(hit: LocalSearchHit | null | undefined): strin
 	return Array.from(values);
 }
 
-/** Drop bulky employment arrays from the in-memory hit after extracting match fields. */
+/** Keep firmId + firmName only so graph Search can link current employers without the heavy address payloads. */
+function compactCurrentEmploymentEntry(entry: any): { firmId: string; firmName?: string } | null {
+	const firmId = employmentFirmId(entry);
+	if (!firmId) return null;
+	const firmName = String(entry?.firmName || entry?.firm_name || entry?.name || '').trim();
+	return firmName ? { firmId, firmName } : { firmId };
+}
+
+function compactCurrentEmploymentArrays(hit: LocalSearchHit | null | undefined): {
+	ind_current_employments: Array<{ firmId: string; firmName?: string }>;
+	ind_ia_current_employments: Array<{ firmId: string; firmName?: string }>;
+} {
+	const bd: Array<{ firmId: string; firmName?: string }> = [];
+	const ia: Array<{ firmId: string; firmName?: string }> = [];
+	const seenBd = new Set<string>();
+	const seenIa = new Set<string>();
+	if (!hit || typeof hit !== 'object') {
+		return { ind_current_employments: bd, ind_ia_current_employments: ia };
+	}
+	for (const entry of [...(Array.isArray(hit.ind_current_employments) ? hit.ind_current_employments : []), ...(Array.isArray(hit.currentEmployments) ? hit.currentEmployments : [])]) {
+		const compact = compactCurrentEmploymentEntry(entry);
+		if (!compact || seenBd.has(compact.firmId)) continue;
+		seenBd.add(compact.firmId);
+		bd.push(compact);
+	}
+	for (const entry of [
+		...(Array.isArray(hit.ind_ia_current_employments) ? hit.ind_ia_current_employments : []),
+		...(Array.isArray(hit.currentIAEmployments) ? hit.currentIAEmployments : []),
+	]) {
+		const compact = compactCurrentEmploymentEntry(entry);
+		if (!compact || seenIa.has(compact.firmId)) continue;
+		seenIa.add(compact.firmId);
+		ia.push(compact);
+	}
+	return { ind_current_employments: bd, ind_ia_current_employments: ia };
+}
+
+/**
+ * Drop bulky previous/address employment payloads from the in-memory hit after extracting match fields.
+ * Retain compact current BD/IA employer stubs so header Search can attach current firms in the same
+ * flush as people (same behavior users expect from CRD paste import).
+ */
 function slimSearchHit(hit: LocalSearchHit, connectionCount: number, fromEmploymentArrays = false): LocalSearchHit {
+	const compactCurrent = compactCurrentEmploymentArrays(hit);
 	const slim: LocalSearchHit = { ...hit };
 	for (const key of HEAVY_SEARCH_HIT_KEYS) {
 		if (key in slim) delete slim[key];
+	}
+	if (compactCurrent.ind_current_employments.length) {
+		slim.ind_current_employments = compactCurrent.ind_current_employments;
+	}
+	if (compactCurrent.ind_ia_current_employments.length) {
+		slim.ind_ia_current_employments = compactCurrent.ind_ia_current_employments;
 	}
 	// Prefer current-only count computed from employment arrays over a stale all-time scalar.
 	if (fromEmploymentArrays && Number.isFinite(connectionCount) && connectionCount >= 0) {
@@ -1565,6 +1613,7 @@ export async function searchLocalIndexMany(source: LocalSearchSource, type: Loca
 
 export function clearSearchIndexCache() {
 	indexPromiseCache.clear();
+	hitByIdCache.clear();
 }
 
 // Resolve a display name for a CRD from the gzip sidecar (plus in-app validated extras).

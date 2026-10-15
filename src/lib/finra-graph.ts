@@ -8983,6 +8983,8 @@ export function init(
 				updateFetchStatus('Graph is still loading. Please try again.');
 				return;
 			}
+			// User-initiated Search may add current employers outside the last clear-non-log keep set.
+			releaseClearNonLogKeepGate();
 			fetchBtn.disabled = true;
 			fetchBtn.dataset.fetching = 'true';
 			fetchBtn.setAttribute('aria-busy', 'true');
@@ -9532,7 +9534,6 @@ export function init(
 						const parsed = resolved.detail || src;
 						const crd = personKey;
 						if (crd) {
-							addIndividualFromSource(src);
 							// Slim search hits often have names + ind_connection_count but no employment
 							// arrays. Treat "ready" only when current employer firms are already present
 							// so header Search still hydrates current-only links + sizing.
@@ -9543,11 +9544,19 @@ export function init(
 								...(Array.isArray(src?.ind_ia_current_employments) ? src.ind_ia_current_employments : []),
 							].filter((entry) => String(entry?.firmId || entry?.firm_id || '').trim());
 							const hasCurrentEmploymentGraph = parsedCurrentFirms.length > 0;
-							textSearchHydrationCandidates.push({
-								nodeId: `person:${crd}`,
-								group: 'individual',
-								hasEmbeddedDetail: hasCurrentEmploymentGraph,
-							});
+							// Paint immediately only when current firms can land in the same flush.
+							// Otherwise match CRD paste import: fetchIndividualBatch brings person +
+							// current employers together (no orphan person stubs without firms).
+							if (hasCurrentEmploymentGraph || isDirectId) {
+								addIndividualFromSource(src);
+							}
+							if (!isDirectId) {
+								textSearchHydrationCandidates.push({
+									nodeId: `person:${crd}`,
+									group: 'individual',
+									hasEmbeddedDetail: hasCurrentEmploymentGraph,
+								});
+							}
 							continue;
 						}
 						const firmId = firmKey;
@@ -9733,7 +9742,10 @@ export function init(
 
 				flushSearchProgress(undefined, { force: true, persist: isDirectId });
 
-				if (!progressiveAddedTotal && !progressiveExistingTotal) {
+				const textSearchHydrationTargets =
+					!isDirectId ? selectTextSearchHydrationTargets(textSearchHydrationCandidates, TEXT_SEARCH_DETAIL_HYDRATION_LIMIT) : [];
+
+				if (!progressiveAddedTotal && !progressiveExistingTotal && !textSearchHydrationTargets.length) {
 					if (allHits.length > 0) {
 						updateFetchStatus(`No new graph nodes for "${q}" (hits lacked structured ids)`);
 						return;
@@ -9742,9 +9754,7 @@ export function init(
 					return;
 				}
 
-				if (!isDirectId) {
-					const textSearchHydrationTargets = selectTextSearchHydrationTargets(textSearchHydrationCandidates, TEXT_SEARCH_DETAIL_HYDRATION_LIMIT);
-					if (textSearchHydrationTargets.length) {
+				if (textSearchHydrationTargets.length) {
 						const hydratedTargetIds: string[] = [];
 						const pendingHydrateNodes: any[] = [];
 						const pendingHydrateLinks: any[] = [];
@@ -9759,6 +9769,12 @@ export function init(
 							try {
 								// Match CRD paste import: coalesce detail+employer appends and skip sim
 								// reheat on intermediate chunks so large name searches crash less.
+								const existingIds = new Set((globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
+								const newNodeCount = nodes.reduce((count, node) => {
+									const id = String(node?.id || '').trim();
+									return id && !existingIds.has(id) ? count + 1 : count;
+								}, 0);
+								progressiveAddedTotal += newNodeCount;
 								globalState.appendFetched(nodes, links, {
 									skipPersist: true,
 									skipFindRefresh: true,
@@ -9777,6 +9793,7 @@ export function init(
 							const rawId = targetId.split(':').pop() || '';
 							if (!rawId) return null;
 							try {
+								// Same fetch as CRD paste import: individual/firm detail + current employers only.
 								const batch =
 									target.group === 'firm' ?
 										await fetchFirmBatch(rawId)
@@ -9829,7 +9846,6 @@ export function init(
 							refreshGraphColors();
 							refreshTraceState();
 						}
-					}
 				}
 
 				// Persist only for direct CRD lookups (text search stays session-local).
