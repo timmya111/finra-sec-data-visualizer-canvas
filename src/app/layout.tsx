@@ -54,9 +54,9 @@ export const metadata: Metadata = {
 		images: [
 			{
 				url: '/graph-screenshot.png',
-				width: 1280,
-				height: 720,
-				alt: 'FINRA SEC Graph Explorer application screenshot',
+				width: 1200,
+				height: 630,
+				alt: 'FINRA SEC Graph Explorer — interactive network of firms, people, and employment connections',
 			},
 		],
 	},

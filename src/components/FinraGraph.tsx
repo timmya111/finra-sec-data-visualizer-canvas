@@ -1694,7 +1694,7 @@ export default function FinraGraph() {
 							<p
 								id='fg-session-prompt-body'
 								style={{ margin: 0, color: 'var(--text-muted, var(--text-m))', fontSize: '13px' }}>
-								You have a saved graph from a previous visit. Continue with the full canvas, load selection-log CRDs only, or reset.
+								You have a saved graph from a previous visit or after a crash. Continue with the full canvas, load selection-log CRDs only, or reset.
 							</p>
 							<div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
 								<button

@@ -48,6 +48,9 @@ import {
 	scoreSearchHitCloseness,
 	normalizeDatabaseSearchQueryKey,
 	TEXT_SEARCH_FETCH_LIMIT,
+	wasUncleanSessionExit,
+	markSessionLive,
+	markSessionCleanExit,
 	buildFirmCurrentConnectionGraphBatch,
 	shouldFetchFirmDetailForOwnerEvidence,
 	shouldHydrateExpansionFrontierNodeDetail,
@@ -1804,6 +1807,15 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(ids).toHaveLength(2);
 		expect(ids).not.toContain('2');
 		expect(ids[0]).toBe('3');
+	});
+
+	it('tracks unclean session exit so crash reloads can show restore options', () => {
+		markSessionCleanExit();
+		expect(wasUncleanSessionExit()).toBe(false);
+		markSessionLive();
+		expect(wasUncleanSessionExit()).toBe(true);
+		markSessionCleanExit();
+		expect(wasUncleanSessionExit()).toBe(false);
 	});
 
 	it('buildFirmCurrentConnectionGraphBatch adds current people with employed_by links', () => {

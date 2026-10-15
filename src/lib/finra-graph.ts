@@ -2768,8 +2768,11 @@ const LS_FIRMS_BOLD_KEY = 'finra_firms_bold';
 const SIDEBAR_VIEW_MODE_STORAGE_KEY = 'finra_sidebar_view_mode';
 const SESSION_RESTORE_SLOW_MS = 7000;
 const SESSION_RESTORE_MODE_KEY = 'fg_restore_mode';
+/** Set while a graph session is live; cleared on clean pagehide. Surviving a reload means crash/unclean exit. */
+const SESSION_DIRTY_KEY = 'fg_session_dirty';
 type SessionRecoveryChoice = 'continue' | 'reset' | 'log-list';
-type SessionRecoveryReason = 'fresh' | 'slow';
+type SessionRecoveryReason = 'fresh' | 'slow' | 'crash';
+let sessionCleanExitListenerBound = false;
 const ROUTE_NODE_REQUEST_EVENT = 'finra:route-node-request';
 const SELECTED_NODE_ROUTE_EVENT = 'finra:selected-node-route';
 const FIND_QUERY_EVENT = 'finra:find-query';
@@ -7295,6 +7298,41 @@ async function resetSessionView() {
 	});
 }
 
+export function wasUncleanSessionExit() {
+	try {
+		return sessionStorage.getItem(SESSION_DIRTY_KEY) === '1';
+	} catch {
+		return false;
+	}
+}
+
+export function markSessionLive() {
+	try {
+		sessionStorage.setItem(SESSION_DIRTY_KEY, '1');
+	} catch {
+		/* ignore */
+	}
+}
+
+export function markSessionCleanExit() {
+	try {
+		sessionStorage.removeItem(SESSION_DIRTY_KEY);
+	} catch {
+		/* ignore */
+	}
+}
+
+function bindSessionCleanExitListener() {
+	if (sessionCleanExitListenerBound || typeof window === 'undefined') return;
+	sessionCleanExitListenerBound = true;
+	const onCleanExit = () => {
+		markSessionCleanExit();
+	};
+	// pagehide covers reload/navigation; beforeunload is a backup for older engines.
+	window.addEventListener('pagehide', onCleanExit);
+	window.addEventListener('beforeunload', onCleanExit);
+}
+
 function updateSessionRecoveryCopy(reason: SessionRecoveryReason) {
 	const title = document.getElementById('fg-session-prompt-title');
 	const body = document.getElementById('fg-session-prompt-body');
@@ -7305,9 +7343,17 @@ function updateSessionRecoveryCopy(reason: SessionRecoveryReason) {
 		}
 		return;
 	}
+	if (reason === 'crash') {
+		if (title) title.textContent = 'Session ended unexpectedly';
+		if (body) {
+			body.textContent =
+				'The browser may have crashed or reloaded uncleanly. Continue with the full canvas, load selection-log CRDs only, or reset.';
+		}
+		return;
+	}
 	if (title) title.textContent = 'Resume previous session?';
 	if (body) {
-		body.textContent = 'You have a saved graph from a previous visit (or after a crash). Continue with the full canvas, load selection-log CRDs only, or reset.';
+		body.textContent = 'You have a saved graph from a previous visit. Continue with the full canvas, load selection-log CRDs only, or reset.';
 	}
 }
 
@@ -7482,6 +7528,7 @@ function requestLogListRestoreReload() {
 	} catch {
 		/* ignore */
 	}
+	markSessionCleanExit();
 	clearSession();
 	window.location.reload();
 }
@@ -7492,6 +7539,7 @@ function requestResetContentReload() {
 	} catch {
 		/* ignore */
 	}
+	markSessionCleanExit();
 	clearSession();
 	window.location.reload();
 }
@@ -11582,7 +11630,9 @@ async function loadGraph() {
 		const shouldStartEmptyForCustomProfile = profileName === 'custom' && !pendingRouteNodeId && !profileHasExplicitSeedTargets(profileData) && !hasSavedSessionData;
 
 		const isFreshBrowserSession = !sessionStorage.getItem('fg_session_active');
+		const crashDetected = wasUncleanSessionExit();
 		sessionStorage.setItem('fg_session_active', '1');
+		bindSessionCleanExitListener();
 
 		let sessionRestoreChoice: SessionRecoveryChoice = 'continue';
 		let sessionRestoreFinished = false;
@@ -11618,8 +11668,9 @@ async function loadGraph() {
 		};
 
 		if (hasSavedSessionData && !pendingRouteNodeId && !pendingSelectedNodeIds.length && !pendingCanvasNodeIds.length) {
-			if (isFreshBrowserSession) {
-				sessionRestoreChoice = await promptSessionRecovery('fresh');
+			// Fresh tab OR crash/unclean reload → ask how to load. Normal refresh auto-continues.
+			if (isFreshBrowserSession || crashDetected) {
+				sessionRestoreChoice = await promptSessionRecovery(crashDetected ? 'crash' : 'fresh');
 			} else {
 				sessionRestoreChoice = 'continue';
 			}
@@ -11642,6 +11693,9 @@ async function loadGraph() {
 				armSlowSessionRecoveryPrompt();
 			}
 		}
+
+		// Armed after crash detection so an unclean exit leaves the dirty flag set for the next load.
+		markSessionLive();
 
 		const markSessionRestoreFinished = async () => {
 			sessionRestoreFinished = true;
