@@ -67,7 +67,7 @@ import {
 	subscribeFilterTags,
 	subscribeFilterText,
 } from './filterTags';
-import { readVisited, readVisitedSync, rememberVisited, visitConnectionsKey, visitDetailKey } from './clientVisitCache';
+import { forgetVisited, readVisited, readVisitedSync, rememberVisited, visitConnectionsKey, visitDetailKey } from './clientVisitCache';
 import { createGraphLayoutWorker } from './graphLayoutWorker';
 import {
 	searchHitMatchesActivityFilter,
@@ -17404,34 +17404,58 @@ async function hydrateSidebarDetailsForSelectedNode(node = sidebarSelectedNode) 
 	}
 }
 
-async function ensureFirmConnections(firmNode: any) {
+function countCachedFirmConnectionEntries(payload: any) {
+	const current = Array.isArray(payload?.currentConnections) ? payload.currentConnections.length : 0;
+	const previous = Array.isArray(payload?.previousConnections) ? payload.previousConnections.length : 0;
+	return current + previous;
+}
+
+async function ensureFirmConnections(
+	firmNode: any,
+	options: { force?: boolean; light?: boolean } = {},
+) {
 	if (!firmNode || firmNode.group !== 'firm') return;
 	const match = String(firmNode.id || '').match(/^(?:firm[:_])?(\d+)$/);
 	if (!match) return;
 	const firmId = match[1];
-	if (firmNode._connectionsLoaded) return;
+	const force = Boolean(options.force);
+	const light = Boolean(options.light);
+	const existingCount =
+		(Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections.length : 0) +
+		(Array.isArray(firmNode.previousConnections) ? firmNode.previousConnections.length : 0);
+
+	// Empty "loaded" rosters must not block SEC-only expand retries (CDN/visit-cache misses).
+	if (firmNode._connectionsLoaded && !force && existingCount > 0) return;
+	if (force) {
+		delete firmNode._connectionsLoaded;
+		forgetVisited(visitConnectionsKey(firmId));
+	}
 
 	const existingRequest = firmConnectionsRequestCache.get(firmId);
-	if (existingRequest) {
+	if (existingRequest && !force) {
 		await existingRequest;
 		return;
 	}
 
 	const requestPromise = (async () => {
 		try {
-			const cachedPayload = readVisitedSync<any>(visitConnectionsKey(firmId));
-			if (cachedPayload && cachedPayload.found !== false) {
-				firmNode.currentConnections = Array.isArray(cachedPayload.currentConnections) ? cachedPayload.currentConnections : [];
-				firmNode.previousConnections = Array.isArray(cachedPayload.previousConnections) ? cachedPayload.previousConnections : [];
-				firmNode._connectionsLoaded = true;
-				return;
+			if (!force) {
+				const cachedPayload = readVisitedSync<any>(visitConnectionsKey(firmId));
+				if (cachedPayload && cachedPayload.found !== false && countCachedFirmConnectionEntries(cachedPayload) > 0) {
+					firmNode.currentConnections = Array.isArray(cachedPayload.currentConnections) ? cachedPayload.currentConnections : [];
+					firmNode.previousConnections = Array.isArray(cachedPayload.previousConnections) ? cachedPayload.previousConnections : [];
+					firmNode._connectionsLoaded = true;
+					return;
+				}
 			}
-			
+
 			const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
 			const timer = controller ? window.setTimeout(() => controller.abort(), 30000) : 0;
-			const res = await fetchWithTimeout(`${BASE}/api/finra/firm/${encodeURIComponent(firmId)}/connections`, {
+			const qs = light ? '?light=1' : '';
+			const res = await fetchWithTimeout(`${BASE}/api/finra/firm/${encodeURIComponent(firmId)}/connections${qs}`, {
 				signal: controller?.signal,
 				cache: 'no-store',
+				headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
 			});
 			if (timer) window.clearTimeout(timer);
 			if (res.ok) {
@@ -17440,8 +17464,14 @@ async function ensureFirmConnections(firmNode: any) {
 					// Keep full roster on the node for filters/dashboard; sidebar renders a preview only.
 					firmNode.currentConnections = Array.isArray(payload.currentConnections) ? payload.currentConnections : [];
 					firmNode.previousConnections = Array.isArray(payload.previousConnections) ? payload.previousConnections : [];
-					firmNode._connectionsLoaded = true;
-					rememberVisited(visitConnectionsKey(firmId), payload);
+					const entryCount = countCachedFirmConnectionEntries(firmNode);
+					if (entryCount > 0) {
+						firmNode._connectionsLoaded = true;
+						rememberVisited(visitConnectionsKey(firmId), payload);
+					} else {
+						// Leave unloaded so a later click can retry after Redis/CDN catch up.
+						delete firmNode._connectionsLoaded;
+					}
 				}
 			}
 		} catch (error) {
@@ -17585,12 +17615,16 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 
 	const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
 	updateFetchStatus(`Loading current connections for ${firmLabel}…`, true);
-	await ensureFirmConnections(firmNode);
+	const existingCurrent = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections.length : 0;
+	// Graph expand needs names/scopes only — skip Redis individual enrichment (light=1).
+	// Force refetch when a prior empty/CDN miss stuck `_connectionsLoaded` with no people.
+	await ensureFirmConnections(firmNode, { light: true, force: existingCurrent === 0 });
 
 	const current = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
 	if (!current.length) {
 		updateFetchStatus(`No current connections for ${firmLabel}`);
-		firmNode._secOnlyCurrentConnectionsExpanded = true;
+		// Do not stamp expanded/loaded on empty — allow the next click to retry.
+		delete firmNode._secOnlyCurrentConnectionsExpanded;
 		return { added: 0, linked: 0 };
 	}
 

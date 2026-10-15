@@ -1203,37 +1203,24 @@ export async function upsertIndividualIntoEmployerFirmConnections(
 
     if (link.isCurrent) {
       const existing = currentById.get(normalizedCrd);
-      previousById.delete(normalizedCrd);
-      const entry = mergeConnectionEntry(existing, incoming);
-      if (
-        options.skipUnchanged !== false &&
-        existing &&
-        existing.name === entry.name &&
-        existing.address === entry.address &&
-        existing.startDate === entry.startDate &&
-        existing.endDate === entry.endDate &&
-        existing.isCurrent === entry.isCurrent
-      ) {
+      // Page-load path: only rewrite when this CRD is new to the firm roster (or must
+      // move previous→current). Do not rewrite for name/address refreshes of an
+      // already-listed CRD — FINRA-only people may still be added to SEC-only firms.
+      if (options.skipUnchanged !== false && existing) {
         firmsSkippedUnchanged.push(firmId);
         continue;
       }
+      previousById.delete(normalizedCrd);
+      const entry = mergeConnectionEntry(existing, incoming);
       currentById.set(normalizedCrd, entry);
     } else {
       const existing = previousById.get(normalizedCrd);
-      currentById.delete(normalizedCrd);
-      const entry = mergeConnectionEntry(existing, incoming);
-      if (
-        options.skipUnchanged !== false &&
-        existing &&
-        existing.name === entry.name &&
-        existing.address === entry.address &&
-        existing.startDate === entry.startDate &&
-        existing.endDate === entry.endDate &&
-        existing.isCurrent === entry.isCurrent
-      ) {
+      if (options.skipUnchanged !== false && existing) {
         firmsSkippedUnchanged.push(firmId);
         continue;
       }
+      currentById.delete(normalizedCrd);
+      const entry = mergeConnectionEntry(existing, incoming);
       previousById.set(normalizedCrd, entry);
     }
 
@@ -1278,6 +1265,15 @@ async function persistFirmConnections(
         await setStringIfValid(emptyCacheKey, "1", EMPTY_FIRM_CONNECTIONS_CACHE_TTL_SECONDS);
       } catch {
         // empty result marker is optional
+      }
+    } else {
+      // A new CRD (e.g. FINRA-only person employed at an SEC-only firm) must clear the
+      // empty marker so /connections stops short-circuiting to [].
+      try {
+        const redis = getRedisClient();
+        if (redis) await redis.del(emptyCacheKey).catch(() => null);
+      } catch {
+        // optional
       }
     }
   } catch {

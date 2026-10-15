@@ -70,6 +70,20 @@ describe('firm connections route and deferConnections option', () => {
 		});
 	});
 
+	it('does not CDN-cache empty connection rosters', async () => {
+		getFirmConnectionsFromGraph.mockResolvedValueOnce({
+			currentConnections: [],
+			previousConnections: [],
+		});
+		const request = new NextRequest('http://localhost:3000/api/finra/firm/119682/connections?light=1');
+		const response = await getConnections(request, { params: Promise.resolve({ id: '119682' }) });
+		expect(response.status).toBe(200);
+		expect(response.headers.get('cache-control')).toContain('no-store');
+		const data = await response.json();
+		expect(data.found).toBe(true);
+		expect(data.currentConnections).toEqual([]);
+	});
+
 	it('handles invalid firm id gracefully', async () => {
 		const request = new NextRequest('http://localhost:3000/api/finra/firm/abc/connections');
 		const response = await getConnections(request, { params: Promise.resolve({ id: 'abc' }) });

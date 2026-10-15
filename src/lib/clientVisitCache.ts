@@ -119,6 +119,23 @@ export function rememberVisited(key: string, value: unknown) {
 	})();
 }
 
+/** Drop a visit-cache entry (memory + IndexedDB) so the next read hits the network. */
+export function forgetVisited(key: string) {
+	if (!key) return;
+	if (isConnectionsKey(key)) connectionsMemory.delete(key);
+	else memory.delete(key);
+	void (async () => {
+		const db = await openVisitDb();
+		if (!db) return;
+		try {
+			const tx = db.transaction(IDB_STORE, 'readwrite');
+			tx.objectStore(IDB_STORE).delete(key);
+		} catch {
+			// ignore
+		}
+	})();
+}
+
 export type CachedFirmConnectionsPayload = {
 	found: true;
 	firmId: string;

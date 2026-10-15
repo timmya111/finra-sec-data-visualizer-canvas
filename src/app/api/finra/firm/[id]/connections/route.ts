@@ -27,6 +27,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 		});
 		const current = bucket === 'previous' ? [] : currentConnections || [];
 		const previous = bucket === 'current' ? [] : previousConnections || [];
+		const entryCount = (current?.length || 0) + (previous?.length || 0);
+		// Empty rosters must not sit on the CDN for a week — that blocked SEC-only firm
+		// canvas expand after a transient Redis/official-search miss (e.g. 119682 / 107342).
+		const headers =
+			entryCount > 0 ?
+				sharedCacheHeaders(FIRM_CONNECTIONS_HTTP_CACHE_SECONDS, FIRM_CONNECTIONS_HTTP_CACHE_SECONDS)
+			:	{ 'Cache-Control': 'no-store' };
 
 		return NextResponse.json(
 			{
@@ -36,7 +43,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 				previousConnections: previous,
 				...(light ? { light: true } : {}),
 			},
-			{ headers: sharedCacheHeaders(FIRM_CONNECTIONS_HTTP_CACHE_SECONDS, FIRM_CONNECTIONS_HTTP_CACHE_SECONDS) },
+			{ headers },
 		);
 	} catch (err: any) {
 		logger.warn('Failed to load firm connections from graph route', { id, error: err?.message || String(err) });

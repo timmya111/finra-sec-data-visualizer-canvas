@@ -303,6 +303,62 @@ describe('firm connection merge and cache', () => {
 		expect(setStringIfValid).toHaveBeenCalled();
 	});
 
+	it('adds a FINRA-only person to an empty SEC-only firm roster and skips rewrite when CRD already present', async () => {
+		// DFJ Gotham Management CRD 330745 — SEC-only IA firm; firm= search is empty, so
+		// roster growth comes from individual detail loads (including FINRA BD employment).
+		const firmId = '330745';
+		let roster: any = { currentConnections: [], previousConnections: [] };
+		mockRedis.get.mockImplementation(async (key: string) => {
+			if (key === firmConnectionsCacheKey(firmId)) return JSON.stringify(roster);
+			return null;
+		});
+		mockRedis.del.mockClear();
+		setStringIfValid.mockImplementation(async (key: string, raw: string) => {
+			if (key === firmConnectionsCacheKey(firmId)) {
+				roster = JSON.parse(raw);
+			}
+			return 'written';
+		});
+
+		const finraOnlyDetail = {
+			basicInformation: { firstName: 'Alex', lastName: 'Broker', bcScope: 'Active' },
+			bcScope: 'Active',
+			// No IA employments — FINRA-only individual with BD history at an SEC-only firm.
+			previousEmployments: [
+				{
+					firmId,
+					firmName: 'DRAPER FISHER JURVETSON GOTHAM MANAGEMENT, LLC',
+					registrationBeginDate: '3/1/2018',
+					registrationEndDate: '6/30/2019',
+				},
+			],
+		};
+
+		const first = await upsertIndividualIntoEmployerFirmConnections('9000001', finraOnlyDetail);
+		expect(first.firmsTouched).toEqual([firmId]);
+		expect(first.firmsSkippedUnchanged).toEqual([]);
+		expect(roster.previousConnections).toEqual([
+			expect.objectContaining({
+				individualId: '9000001',
+				name: 'Alex Broker',
+				isCurrent: false,
+			}),
+		]);
+		expect(mockRedis.del).toHaveBeenCalledWith(`${firmConnectionsCacheKey(firmId)}:empty`);
+
+		setStringIfValid.mockClear();
+		mockRedis.del.mockClear();
+		const second = await upsertIndividualIntoEmployerFirmConnections('9000001', {
+			...finraOnlyDetail,
+			basicInformation: { firstName: 'Alexander', lastName: 'Broker', bcScope: 'Active' },
+		});
+		expect(second.firmsTouched).toEqual([]);
+		expect(second.firmsSkippedUnchanged).toEqual([firmId]);
+		expect(setStringIfValid).not.toHaveBeenCalled();
+		// Name stays as first write — page-load does not rewrite for existing CRDs.
+		expect(roster.previousConnections[0].name).toBe('Alex Broker');
+	});
+
 	it('stores current employer on previous-firm upserts', async () => {
 		mockRedis.get.mockImplementation(async (key: string) => {
 			if (key === firmConnectionsCacheKey('7691')) {
