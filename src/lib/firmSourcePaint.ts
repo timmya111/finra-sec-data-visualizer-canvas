@@ -7,23 +7,23 @@ export type FirmSourceCoverage = 'both' | 'sec_only' | 'finra_only' | 'none';
 /** SEC-only firm fill — keep the existing connected-firm green. */
 export const FIRM_SEC_ONLY_FILL = '#14c2bb';
 export const FIRM_SEC_ONLY_STROKE = '#00f5ff';
-export const FIRM_SEC_ONLY_SELECTED_FILL = '#0f766e';
-export const FIRM_SEC_ONLY_SELECTED_STROKE = '#2dd4bf';
+const FIRM_SEC_ONLY_SELECTED_FILL = '#0f766e';
+const FIRM_SEC_ONLY_SELECTED_STROKE = '#2dd4bf';
 
 /**
  * FINRA-only firm fill — purple at roughly the same relative luminance as
  * FIRM_SEC_ONLY_FILL (#14c2bb ≈ 0.42).
  */
 export const FIRM_FINRA_ONLY_FILL = '#e879f9';
-export const FIRM_FINRA_ONLY_STROKE = '#f5d0fe';
-export const FIRM_FINRA_ONLY_SELECTED_FILL = '#a21caf';
-export const FIRM_FINRA_ONLY_SELECTED_STROKE = '#f0abfc';
+const FIRM_FINRA_ONLY_STROKE = '#f5d0fe';
+const FIRM_FINRA_ONLY_SELECTED_FILL = '#a21caf';
+const FIRM_FINRA_ONLY_SELECTED_STROKE = '#f0abfc';
 
 /** Dual-coverage: same purple fill as FINRA-only, green border to signal SEC. */
 export const FIRM_BOTH_FILL = FIRM_FINRA_ONLY_FILL;
 export const FIRM_BOTH_STROKE = FIRM_SEC_ONLY_FILL;
-export const FIRM_BOTH_SELECTED_FILL = FIRM_FINRA_ONLY_SELECTED_FILL;
-export const FIRM_BOTH_SELECTED_STROKE = FIRM_SEC_ONLY_FILL;
+const FIRM_BOTH_SELECTED_FILL = FIRM_FINRA_ONLY_SELECTED_FILL;
+const FIRM_BOTH_SELECTED_STROKE = FIRM_SEC_ONLY_FILL;
 
 function isNotInScopeValue(value: unknown) {
 	return (
@@ -47,15 +47,8 @@ function hasActivitySignal(value: unknown) {
 	return /(active|inactive|approved|current|terminated|revoked|suspended|withdrawn|barred)/.test(normalized);
 }
 
-function firmIdOf(node: any) {
-	return String(node?.firmId || node?.id || '')
-		.replace(/^firm[:_]/i, '')
-		.replace(/^node[:_]/i, '')
-		.trim();
-}
-
 /** Lightweight firm FINRA presence for paint (aligned with graph sidebar signals). */
-export function firmHasFinraSource(node: any): boolean {
+function firmHasFinraSource(node: any): boolean {
 	if (!node || typeof node !== 'object') return false;
 	if (
 		Array.isArray(node.suppressedExternalLinks) &&
@@ -74,7 +67,7 @@ export function firmHasFinraSource(node: any): boolean {
 }
 
 /** Lightweight firm SEC presence for paint. */
-export function firmHasSecSource(node: any): boolean {
+function firmHasSecSource(node: any): boolean {
 	if (!node || typeof node !== 'object') return false;
 	if (
 		Array.isArray(node.suppressedExternalLinks) &&
@@ -275,11 +268,4 @@ export function getFirmSourcePaintStyle(
 	return { coverage, fill: null, stroke: null, className: null };
 }
 
-export function firmSourceCssClass(node: any): string | null {
-	return getFirmSourcePaintStyle(node).className;
-}
 
-/** Debug/helper: whether a numeric firm id is present (unused in paint, kept for tests). */
-export function firmHasNumericId(node: any) {
-	return /^\d+$/.test(firmIdOf(node));
-}

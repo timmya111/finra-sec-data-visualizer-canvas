@@ -224,7 +224,7 @@ function scheduleFlush() {
 	}
 }
 
-export const DASHBOARD_CACHED_CRD_COUNT_KEY = 'dashboard:cached-crd-count';
+const DASHBOARD_CACHED_CRD_COUNT_KEY = 'dashboard:cached-crd-count';
 
 type InventoryRedisClient = {
 	get: (key: string) => Promise<unknown>;

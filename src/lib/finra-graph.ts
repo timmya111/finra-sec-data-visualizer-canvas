@@ -49,7 +49,7 @@ import {
 } from './finra-graph-defaults';
 import { mergeGraphNodesForAppend } from './graphIdentity';
 import { scheduleSelectionExternalRefresh } from './selectionRefreshClient';
-import { isValidLocationStateFilter, isZipLikeLocationQuery, normalizeLocationStateFilter } from './locationSearch';
+import { isValidLocationStateFilter, isZipLikeLocationQuery, normalizeLocationStateFilter, normalizeStateCode } from './locationSearch';
 import { buildParentFirmSummaryLinks } from './finra-graph/externalLinks';
 import { resolveIndividualSourceDetail, hasIndividualSourceCoverage } from './sourceTruth';
 import { normalizeNodeRouteId, buildNodeRouteHref, buildNodeRoutePath } from './node-route';
@@ -148,65 +148,6 @@ const NODE_STROKE_WIDTH_DEFAULT = 'var(--stroke-width-node-default)';
 const NODE_OPACITY_STUB = 'var(--opacity-node-stub)';
 const SOFT_LOCATION_GROUPING_ENABLED = true;
 
-const STATE_NAME_TO_CODE = {
-	'alabama': 'AL',
-	'alaska': 'AK',
-	'arizona': 'AZ',
-	'arkansas': 'AR',
-	'california': 'CA',
-	'colorado': 'CO',
-	'connecticut': 'CT',
-	'delaware': 'DE',
-	'district of columbia': 'DC',
-	'florida': 'FL',
-	'georgia': 'GA',
-	'hawaii': 'HI',
-	'idaho': 'ID',
-	'illinois': 'IL',
-	'indiana': 'IN',
-	'iowa': 'IA',
-	'kansas': 'KS',
-	'kentucky': 'KY',
-	'louisiana': 'LA',
-	'maine': 'ME',
-	'maryland': 'MD',
-	'massachusetts': 'MA',
-	'michigan': 'MI',
-	'minnesota': 'MN',
-	'mississippi': 'MS',
-	'missouri': 'MO',
-	'montana': 'MT',
-	'nebraska': 'NE',
-	'nevada': 'NV',
-	'new hampshire': 'NH',
-	'new jersey': 'NJ',
-	'new mexico': 'NM',
-	'new york': 'NY',
-	'north carolina': 'NC',
-	'north dakota': 'ND',
-	'ohio': 'OH',
-	'oklahoma': 'OK',
-	'oregon': 'OR',
-	'pennsylvania': 'PA',
-	'rhode island': 'RI',
-	'south carolina': 'SC',
-	'south dakota': 'SD',
-	'tennessee': 'TN',
-	'texas': 'TX',
-	'utah': 'UT',
-	'vermont': 'VT',
-	'virginia': 'VA',
-	'washington': 'WA',
-	'west virginia': 'WV',
-	'wisconsin': 'WI',
-	'wyoming': 'WY',
-	'puerto rico': 'PR',
-	'virgin islands': 'VI',
-	'guam': 'GU',
-	'american samoa': 'AS',
-	'northern mariana islands': 'MP',
-};
-
 // Toggle: enable graph-derived connections (layout/graph inference) in the
 // sidebar. Default is disabled to avoid surfacing inferred/derived edges that
 // come from cache/graph artifacts. Enable by setting
@@ -218,8 +159,6 @@ const ENABLE_GRAPH_DERIVED_CONNECTIONS =
 		String(process.env.NEXT_PUBLIC_ENABLE_GRAPH_DERIVED_CONNECTIONS || '')
 			.trim()
 			.toLowerCase() === 'true');
-
-const STATE_CODES = new Set(Object.values(STATE_NAME_TO_CODE));
 
 const LOCATION_REGION_ANCHORS = {
 	west: { x: 0.19, y: 0.43 },
@@ -478,7 +417,7 @@ function getCurrentZoomTransform() {
 	}
 }
 
-export function getSelectionLinkEmphasis(zoomScale = getCurrentGraphZoomScale()) {
+function getSelectionLinkEmphasis(zoomScale = getCurrentGraphZoomScale()) {
 	const normalizedScale = Math.max(0.18, Math.min(1, Number(zoomScale) || 1));
 	const zoomWeight = Math.max(0, Math.min(1, (normalizedScale - 0.18) / 0.82));
 	// Keep selected-line base width modest; zoomed-out visibility comes from
@@ -1752,7 +1691,7 @@ function persistGraphTemplatesSync(templates: Array<GraphTemplateRecord>) {
 	return normalized;
 }
 
-export function loadGraphTemplatesSync() {
+function loadGraphTemplatesSync() {
 	try {
 		const raw = localStorage.getItem(LS_GRAPH_TEMPLATES_KEY);
 		if (!raw) {
@@ -1772,7 +1711,7 @@ export function loadGraphTemplatesSync() {
 	}
 }
 
-export async function loadGraphTemplatesAsync() {
+async function loadGraphTemplatesAsync() {
 	if (graphTemplatesHydrationPromise) return graphTemplatesHydrationPromise;
 	graphTemplatesHydrationPromise = (async () => {
 		try {
@@ -1802,11 +1741,7 @@ export async function loadGraphTemplatesAsync() {
 	return graphTemplatesHydrationPromise;
 }
 
-export function getSavedGraphTemplates() {
-	return savedGraphTemplates.slice();
-}
-
-export function buildGraphTemplateSnapshot() {
+function buildGraphTemplateSnapshot() {
 	const session = buildSessionPayload({ compact: false, extraNodeMode: 'full' });
 	// Templates are intentional bookmarks, never a cleared marker.
 	session.cleared = false;
@@ -1817,7 +1752,7 @@ export function buildGraphTemplateSnapshot() {
 	};
 }
 
-export function saveCurrentGraphTemplate(customName?: string) {
+function saveCurrentGraphTemplate(customName?: string) {
 	// Prefer a live session snapshot. If the graph is empty/not ready, still allow
 	// saving the current selection-log bookmark so templates remain useful after
 	// reset/clear flows.
@@ -1873,7 +1808,7 @@ export function saveCurrentGraphTemplate(customName?: string) {
 	return template;
 }
 
-export function renameGraphTemplate(templateId: string, nextName: string) {
+function renameGraphTemplate(templateId: string, nextName: string) {
 	const normalizedId = String(templateId || '').trim();
 	const trimmedName = String(nextName || '').trim();
 	if (!normalizedId || !trimmedName) return null;
@@ -1891,7 +1826,7 @@ export function renameGraphTemplate(templateId: string, nextName: string) {
 	return updated;
 }
 
-export function deleteGraphTemplate(templateId: string) {
+function deleteGraphTemplate(templateId: string) {
 	const normalizedId = String(templateId || '').trim();
 	if (!normalizedId) return false;
 	const next = savedGraphTemplates.filter((template) => template.id !== normalizedId);
@@ -1946,7 +1881,7 @@ async function applyGraphTemplateSession(session: Record<string, any>) {
 	return true;
 }
 
-export async function applyGraphTemplate(templateId: string) {
+async function applyGraphTemplate(templateId: string) {
 	const normalizedId = String(templateId || '').trim();
 	if (!normalizedId || applyingGraphTemplate) return false;
 	const template = savedGraphTemplates.find((entry) => entry.id === normalizedId);
@@ -2777,7 +2712,6 @@ const ROUTE_NODE_REQUEST_EVENT = 'finra:route-node-request';
 const SELECTED_NODE_ROUTE_EVENT = 'finra:selected-node-route';
 const FIND_QUERY_EVENT = 'finra:find-query';
 const FIND_NEXT_EVENT = 'finra:find-next';
-const FIND_PREV_EVENT = 'finra:find-prev';
 const FIND_MOVE_EVENT = 'finra:find-move';
 const FIND_CLOSE_EVENT = 'finra:find-close';
 const FIND_STATE_EVENT = 'finra:find-state';
@@ -2939,7 +2873,7 @@ export function normalizeDatabaseSearchQueryKey(query: string, searchType = 'all
 	return normalizedQuery ? `${normalizedType}::${normalizedQuery}` : '';
 }
 
-export function getSearchHitGraphDedupeKey(hit: any): string {
+function getSearchHitGraphDedupeKey(hit: any): string {
 	const src = hit?._source || hit || {};
 	const personId = String(src?.basicInformation?.individualId || src?.ind_source_id || src?.ind_crd || '').trim();
 	if (personId) return `person:${personId}`;
@@ -6442,7 +6376,7 @@ function stopNodePulseLoop() {
 	}
 }
 
-export function updateFocusReadout(node) {
+function updateFocusReadout(node) {
 	const el = document.getElementById('fg-focus-readout');
 	if (!el) return;
 
@@ -8827,10 +8761,6 @@ export function init(
 		window.addEventListener(FIND_NEXT_EVENT, ((event: Event) => {
 			const detail = (event as CustomEvent<{ query?: string | null }>).detail || {};
 			cycleToFindMatch(detail.query || activeFindQuery, 1);
-		}) as EventListener);
-		window.addEventListener(FIND_PREV_EVENT, ((event: Event) => {
-			const detail = (event as CustomEvent<{ query?: string | null }>).detail || {};
-			cycleToFindMatch(detail.query || activeFindQuery, -1);
 		}) as EventListener);
 		window.addEventListener(FIND_MOVE_EVENT, ((event: Event) => {
 			const detail = (event as CustomEvent<{ query?: string | null; direction?: string | null }>).detail || {};
@@ -12815,7 +12745,7 @@ function readSidecarKnownConnectionCount(node) {
 }
 
 /** True when the firm has a people roster worth opening on the dashboard. */
-export function firmHasDashboardConnectionRoster(
+function firmHasDashboardConnectionRoster(
 	firmNode: any,
 	graphDerivedEntries: Array<{ group?: string; relationshipLabels?: Iterable<string> | null }> = [],
 ) {
@@ -13064,7 +12994,7 @@ export function applyGraphDerivedNodeMetrics(nodes, links) {
 }
 
 /** People node radius half-size from connection count. Anchors: 1→22.4, 3→28.8, 8→35.2, 20→44.8 (~60% larger). */
-export function computeIndividualVizHalf(connectionCount: number) {
+function computeIndividualVizHalf(connectionCount: number) {
 	const MIN_INDIV = 22.4;
 	const MAX_INDIV = 44.8;
 	const n = Math.max(0, Number(connectionCount) || 0);
@@ -13163,17 +13093,6 @@ export function estimateLocalCrowdFactors(nodes, options: { cellSize?: number } 
 function getNodeCrowdFactor(node) {
 	const value = Number(node?._crowdFactor);
 	return Number.isFinite(value) && value > 0 ? value : 1;
-}
-
-function normalizeStateCode(value) {
-	const text = String(value || '')
-		.replace(/\./g, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-	if (!text) return '';
-	const upper = text.toUpperCase();
-	if (STATE_CODES.has(upper)) return upper;
-	return STATE_NAME_TO_CODE[text.toLowerCase()] || '';
 }
 
 function firstLocationText(...values) {
@@ -19437,7 +19356,7 @@ function pinNodeAndReleaseOthers(pinnedNode) {
 	}, 450);
 }
 
-export async function handleNodeOpen(event, d) {
+async function handleNodeOpen(event, d) {
 	if (isSelectToKeepMode) return;
 	if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
 	pinNodeAndReleaseOthers(d);

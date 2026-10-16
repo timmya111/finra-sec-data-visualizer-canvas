@@ -33,4 +33,4 @@ export function createGraphLayoutWorker() {
 	return { worker, compute, dispose };
 }
 
-export default createGraphLayoutWorker;
+

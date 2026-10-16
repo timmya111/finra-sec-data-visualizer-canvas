@@ -61,7 +61,7 @@ function getNodeIdentityBaseToken(node: any) {
 	return '';
 }
 
-export function getNodeIdentityKey(node: any) {
+function getNodeIdentityKey(node: any) {
 	if (!node || typeof node !== 'object') return '';
 	const explicitId = String(node.id ?? '').trim();
 	const inferredGroup = inferNodeGroup(node);
@@ -81,7 +81,7 @@ export function getNodeIdentityKey(node: any) {
 	return explicitId ? `entity:${explicitId}` : '';
 }
 
-export function mergeGraphNodePayload(targetNode: any, incomingNode: any) {
+function mergeGraphNodePayload(targetNode: any, incomingNode: any) {
 	if (!targetNode || !incomingNode) return targetNode;
 	const inferredGroup = inferNodeGroup(incomingNode) || inferNodeGroup(targetNode);
 	if (!targetNode.group && inferredGroup) targetNode.group = inferredGroup;

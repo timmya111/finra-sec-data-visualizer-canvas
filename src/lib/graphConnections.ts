@@ -59,12 +59,12 @@ export type GraphConnectionEntry = {
  * Redis firm-connections keys persist with no expiry.
  * HTTP/CDN caching for the connections API response is separate (1 week on the route).
  */
-export const FIRM_CONNECTIONS_CACHE_TTL_SECONDS: number | null = null;
+const FIRM_CONNECTIONS_CACHE_TTL_SECONDS: number | null = null;
 const EMPTY_FIRM_CONNECTIONS_CACHE_TTL_SECONDS: number | null = null;
 /** HTTP max-age for GET /api/finra/firm/{id}/connections — 1 week. */
 export const FIRM_CONNECTIONS_HTTP_CACHE_SECONDS = 60 * 60 * 24 * 7;
 // v10: do not treat a thin primed-bundle hit as the full roster (v9 poisoned mega-firms).
-export const FIRM_CONNECTIONS_CACHE_VERSION = 10;
+const FIRM_CONNECTIONS_CACHE_VERSION = 10;
 
 export function firmConnectionsCacheKey(firmId: string): string {
   return `firm-connections:firm:${String(firmId || "").trim()}`;
@@ -104,10 +104,6 @@ function firmConnectionsFullyValidatedCacheKey(firmId: string): string {
   return `firm-connections:firm:${String(firmId || "").trim()}:verified`;
 }
 
-export function firmConnectionsVerifiedCacheKey(firmId: string): string {
-  return firmConnectionsFullyValidatedCacheKey(firmId);
-}
-
 export function countFirmConnectionEntries(
   payload:
     | {
@@ -124,7 +120,7 @@ export function countFirmConnectionEntries(
   );
 }
 
-export function connectionEntryId(
+function connectionEntryId(
   entry: GraphConnectionEntry | null | undefined,
 ): string {
   return firstNonEmpty(entry?.individualId, entry?.firmId, (entry as any)?.crd);

@@ -293,13 +293,4 @@ export async function lookupFirmEmploymentEdgesFromPrimed(firmId: string): Promi
 	}
 }
 
-/** Returns current/previous employment edges for a firm (precomputed adj, then primed bundle). */
-export async function getFirmEmploymentEdgesFromPrimed(firmId: string): Promise<PrimedEmploymentEdge[]> {
-	return (await lookupFirmEmploymentEdgesFromPrimed(firmId)).edges;
-}
 
-/** Test helper — reset warm-instance cache. */
-export function __resetFirmEmploymentFromPrimedCacheForTests() {
-	reverseIndex = null;
-	reverseIndexPromise = null;
-}

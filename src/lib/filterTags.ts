@@ -10,9 +10,9 @@
  * the tab that made the change).
  */
 
-export const FILTER_TAGS_STORAGE_KEY = 'finra_connections_filter_tags';
-export const FILTER_TEXT_STORAGE_KEY = 'finra_connections_filter_text';
-export const FILTER_ENABLED_STORAGE_KEY = 'finra_connections_filter_enabled';
+const FILTER_TAGS_STORAGE_KEY = 'finra_connections_filter_tags';
+const FILTER_TEXT_STORAGE_KEY = 'finra_connections_filter_text';
+const FILTER_ENABLED_STORAGE_KEY = 'finra_connections_filter_enabled';
 const FILTER_TAGS_EVENT = 'finra:filter-tags-changed';
 const FILTER_TEXT_EVENT = 'finra:filter-text-changed';
 const FILTER_ENABLED_EVENT = 'finra:filter-enabled-changed';
@@ -58,19 +58,6 @@ export function setFilterTags(tags: string[]): string[] {
 		}
 	}
 	return deduped;
-}
-
-export function addFilterTag(tag: string): string[] {
-	return setFilterTags([...getFilterTags(), tag]);
-}
-
-export function removeFilterTag(tag: string): string[] {
-	const key = tag.trim().toLowerCase();
-	return setFilterTags(getFilterTags().filter((t) => t.toLowerCase() !== key));
-}
-
-export function clearFilterTags(): string[] {
-	return setFilterTags([]);
 }
 
 export function getFilterText(): string {
@@ -162,7 +149,7 @@ export function subscribeFilterText(cb: (text: string) => void): () => void {
 }
 
 /** Split a filter phrase into tokens. Multi-word phrases require every token (AND). */
-export function tokenizeFilterPhrase(phrase: string): string[] {
+function tokenizeFilterPhrase(phrase: string): string[] {
 	return String(phrase || '')
 		.toLowerCase()
 		.split(/[^a-z0-9#]+/i)
@@ -171,7 +158,7 @@ export function tokenizeFilterPhrase(phrase: string): string[] {
 }
 
 /** True when every token appears somewhere in haystack (order-independent). */
-export function haystackMatchesAllTokens(haystack: string, tokens: string[]): boolean {
+function haystackMatchesAllTokens(haystack: string, tokens: string[]): boolean {
 	if (!tokens.length) return true;
 	const lower = haystack.toLowerCase();
 	return tokens.every((token) => lower.includes(token));
@@ -214,7 +201,7 @@ export function matchesFilterTags(haystack: string, tags: string[], liveText?: s
 }
 
 /** Higher score = better match for sorting filtered connection cards. */
-export function scoreConnectionFilterMatch(haystack: string, tags: string[], liveText?: string): number {
+function scoreConnectionFilterMatch(haystack: string, tags: string[], liveText?: string): number {
 	const lower = haystack.toLowerCase();
 	const live = String(liveText || '').trim().toLowerCase();
 	const liveTokens = tokenizeFilterPhrase(live);

@@ -16,7 +16,7 @@ function unwrapSourceContent(source: unknown, keys: string[]) {
 	return source;
 }
 
-export function countEmploymentRecords(payload: unknown) {
+function countEmploymentRecords(payload: unknown) {
 	if (!isPlainObject(payload)) return 0;
 	return EMPLOYMENT_KEYS.reduce((total, key) => total + (Array.isArray(payload[key]) ? payload[key].length : 0), 0);
 }
@@ -46,7 +46,7 @@ function employmentRecordRichness(row: unknown) {
 	return Object.values(row).filter((value) => value != null && value !== '' && !(Array.isArray(value) && value.length === 0)).length;
 }
 
-export function unionEmploymentRecords(...arrays: unknown[]) {
+function unionEmploymentRecords(...arrays: unknown[]) {
 	const byKey = new Map<string, any>();
 	let anonymous = 0;
 	for (const array of arrays) {
@@ -94,7 +94,7 @@ function datesWithinOneWeek(left: unknown, right: unknown) {
 	return Math.abs(a - b) <= WEEK_MS;
 }
 
-export function employmentFirmCrd(row: unknown) {
+function employmentFirmCrd(row: unknown) {
 	if (!isPlainObject(row)) return '';
 	return String(row.firmId ?? row.firm_id ?? row.crdNumber ?? row.crd ?? '').trim();
 }
@@ -156,7 +156,7 @@ export function mergeEmploymentCardsAcrossSources(input: { finra?: unknown[]; se
 	return merged;
 }
 
-export function isEmptyNotInScopeSourceShell(payload: unknown, source: DashboardSource) {
+function isEmptyNotInScopeSourceShell(payload: unknown, source: DashboardSource) {
 	if (!isPlainObject(payload)) return true;
 	const basic = isPlainObject(payload.basicInformation) ? payload.basicInformation : {};
 	const scope = source === 'finra' ? (payload.bcScope ?? basic.bcScope) : (payload.iaScope ?? basic.iaScope);

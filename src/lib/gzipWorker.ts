@@ -63,11 +63,4 @@ export async function gunzipOffload(b64: string): Promise<string> {
 	}
 }
 
-export function terminateGzipWorker() {
-	if (worker) {
-		try {
-			worker.terminate();
-		} catch {}
-		worker = null;
-	}
-}
+

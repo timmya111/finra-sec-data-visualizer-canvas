@@ -305,53 +305,6 @@ export async function recordFirmReference(reference: OwnerReference): Promise<vo
 	}
 }
 
-/**
- * Records firm-reference entries for every employer with a numeric firmId found in an
- * individual's employment history. Intended to be called (fire-and-forget) whenever an
- * individual detail payload is built, so subsequent firm lookups for these CRDs can resolve
- * as orphan records.
- */
-export async function recordFirmReferencesForIndividual(params: { parentCrd: string; individualName?: string; employments: Array<Record<string, unknown>> }): Promise<void> {
-	const parentCrd = String(params.parentCrd || '').trim();
-	if (!parentCrd || !Array.isArray(params.employments) || !params.employments.length) return;
-
-	const seen = new Set<string>();
-	const writes: Promise<void>[] = [];
-	for (const employment of params.employments) {
-		if (!isPlainObject(employment)) continue;
-		const crd = String((employment as Record<string, unknown>).firmId ?? (employment as Record<string, unknown>).firm_id ?? '').trim();
-		if (!/^\d{1,10}$/.test(crd) || seen.has(crd)) continue;
-		seen.add(crd);
-
-		const branches = (employment as Record<string, unknown>).branchOfficeLocations;
-		const branch = Array.isArray(branches) && isPlainObject(branches[0]) ? (branches[0] as Record<string, unknown>) : null;
-		const officeAddress =
-			branch ?
-				{
-					street1: branch.street1,
-					street2: branch.street2,
-					city: branch.city,
-					state: branch.state,
-					postalCode: branch.zipCode,
-					country: branch.country,
-				}
-			:	undefined;
-
-		writes.push(
-			recordFirmReference({
-				crd,
-				firmName: typeof (employment as Record<string, unknown>).firmName === 'string' ? ((employment as Record<string, unknown>).firmName as string) : undefined,
-				name: params.individualName,
-				parentCrd,
-				parentType: 'individual',
-				officeAddress,
-			}),
-		);
-	}
-
-	await Promise.allSettled(writes);
-}
-
 export async function lookupFirmReference(crd: string): Promise<OwnerReference | null> {
 	const normalizedCrd = String(crd || '').trim();
 	if (!/^\d{1,10}$/.test(normalizedCrd)) return null;
@@ -460,7 +413,7 @@ function ownerNameFromRow(owner: Record<string, unknown>): string {
 }
 
 /** Read Redis firm detail and match this CRD in direct/indirect owners. */
-export async function lookupOwnerFromFirmRedisDetail(
+async function lookupOwnerFromFirmRedisDetail(
 	crd: string,
 	parentFirmId: string,
 ): Promise<OwnerReference | null> {

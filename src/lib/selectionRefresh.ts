@@ -9,15 +9,15 @@ import { DEFAULT_HEADERS } from '@/lib/requestConstants';
 import { canCallExternalApis } from '@/lib/externalApiGate';
 import { isCrdInInventory, rememberInventoryEntitiesDurable } from '@/lib/crdInventorySidecar';
 
-export const SELECTION_REFRESH_BACKOFF_UNTIL_KEY = 'finra:selection-refresh:backoffUntil';
-export const SELECTION_REFRESH_BACKOFF_MS_KEY = 'finra:selection-refresh:backoffMs';
-export const SELECTION_REFRESH_HAD_429_KEY = 'finra:selection-refresh:had429';
+const SELECTION_REFRESH_BACKOFF_UNTIL_KEY = 'finra:selection-refresh:backoffUntil';
+const SELECTION_REFRESH_BACKOFF_MS_KEY = 'finra:selection-refresh:backoffMs';
+const SELECTION_REFRESH_HAD_429_KEY = 'finra:selection-refresh:had429';
 
 export const BACKOFF_MIN_MS = 7 * 60 * 1000;
 export const BACKOFF_MAX_MS = 9 * 60 * 1000;
 export const BACKOFF_FLOOR_MS = 3 * 60 * 1000;
-export const BACKOFF_STEP_MS = 45 * 1000;
-export const PER_NODE_COOLDOWN_SECONDS = 45 * 60;
+const BACKOFF_STEP_MS = 45 * 1000;
+const PER_NODE_COOLDOWN_SECONDS = 45 * 60;
 
 const INDIVIDUAL_QUERY = 'hl=true&includePrevious=true&wt=json';
 const FIRM_QUERY = 'hl=true&wt=json';

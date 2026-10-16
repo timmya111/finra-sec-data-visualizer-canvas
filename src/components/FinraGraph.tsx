@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 
 import ThemeToggle from './ThemeToggle';
 import { applyStickyParamsToUrl, buildNodeRouteHref, buildNodeRoutePath, parseNodeIdFromPathname } from '@/lib/node-route';
-import { RUNTIME_CLICK_EXPANSION_HOPS, RUNTIME_EXPANSION_HOPS, RUNTIME_SELECTION_HOPS } from '@/lib/finra-graph-defaults';
 import { consumeQueueGraphBridgePayload } from '@/lib/queueGraphBridge';
 import {
 	GPU_RENDERER_STORAGE_KEY,
@@ -23,7 +22,6 @@ const ROUTE_NODE_REQUEST_EVENT = 'finra:route-node-request';
 const SELECTED_NODE_ROUTE_EVENT = 'finra:selected-node-route';
 const FIND_QUERY_EVENT = 'finra:find-query';
 const FIND_NEXT_EVENT = 'finra:find-next';
-const FIND_PREV_EVENT = 'finra:find-prev';
 const FIND_MOVE_EVENT = 'finra:find-move';
 const FIND_CLOSE_EVENT = 'finra:find-close';
 const FIND_STATE_EVENT = 'finra:find-state';
@@ -39,26 +37,6 @@ function buildDashboardHrefFromNodeId(nodeId: string | null | undefined) {
 	if (!rawId) return null;
 	if (type === 'person' || type === 'individual') return `/dashboard/individual/${encodeURIComponent(rawId)}`;
 	if (type === 'firm') return `/dashboard/firm/${encodeURIComponent(rawId)}`;
-	return null;
-}
-
-function getLatestDashboardHrefFromSelectionLog() {
-	if (typeof window === 'undefined') return null;
-	try {
-		const raw = localStorage.getItem('finra_selection_log');
-		if (!raw) return null;
-		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed) || !parsed.length) return null;
-
-		for (let index = parsed.length - 1; index >= 0; index -= 1) {
-			const entry = parsed[index];
-			const candidateNodeId = String(entry?.id || '').trim();
-			const href = buildDashboardHrefFromNodeId(candidateNodeId);
-			if (href) return href;
-		}
-	} catch {
-		return null;
-	}
 	return null;
 }
 
@@ -82,6 +60,7 @@ function bindTouchDragClickSuppression(button: HTMLElement | null) {
 			if (event.pointerType !== 'touch') return;
 			activePointerId = event.pointerId;
 			startX = event.clientX;
+			c;
 			startY = event.clientY;
 		},
 		{ passive: true },
@@ -192,12 +171,6 @@ function toggleMobileMenu() {
 	} catch (e) {
 		/* ignore */
 	}
-}
-
-function handleLegendTooltipBlur(event: React.FocusEvent<HTMLDetailsElement>) {
-	const nextTarget = event.relatedTarget;
-	if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-	event.currentTarget.open = false;
 }
 
 function hideSelectionLog() {
@@ -1236,75 +1209,6 @@ export default function FinraGraph() {
 						id='fg-focus-readout'
 						className='fg-focus-readout'></div>
 
-					{/* <div
-						id='fg-hop-controls'
-						className='fg-hop-controls'
-						style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '0 12px' }}>
-						<label style={{ fontSize: '12px', fontWeight: 500 }}>Hops (1-5):</label>
-						<div style={{ display: 'flex', gap: '6px' }}>
-							<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-								<select
-									id='fg-expansion-hops'
-									defaultValue={String(RUNTIME_EXPANSION_HOPS)}
-									style={{ width: '60px', height: '24px' }}
-									title='Expansion hops (API initial load)'
-									onChange={(e) => {
-										const val = parseInt(e.target.value, 10);
-										const cur = (window as any).getRuntimeHopDefaults?.() || { expansion: 1, click: 3, selection: 3 };
-										(window as any).setRuntimeHopDefaults?.(val, cur.click, cur.selection);
-									}}
-								>
-									<option value='1'>1</option>
-									<option value='2'>2</option>
-									<option value='3'>3</option>
-									<option value='4'>4</option>
-									<option value='5'>5</option>
-								</select>
-								<span style={{ fontSize: '10px' }}>Exp</span>
-							</div>
-							<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-								<select
-									id='fg-click-hops'
-									defaultValue={String(RUNTIME_CLICK_EXPANSION_HOPS)}
-									style={{ width: '60px', height: '24px' }}
-									title='Click expansion hops'
-									onChange={(e) => {
-										const val = parseInt(e.target.value, 10);
-										const cur = (window as any).getRuntimeHopDefaults?.() || { expansion: 1, click: 3, selection: 3 };
-										(window as any).setRuntimeHopDefaults?.(cur.expansion, val, cur.selection);
-									}}
-								>
-									<option value='1'>1</option>
-									<option value='2'>2</option>
-									<option value='3'>3</option>
-									<option value='4'>4</option>
-									<option value='5'>5</option>
-								</select>
-								<span style={{ fontSize: '10px' }}>Click</span>
-							</div>
-							<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-								<select
-									id='fg-selection-hops'
-									defaultValue={String(RUNTIME_SELECTION_HOPS)}
-									style={{ width: '60px', height: '24px' }}
-									title='Selection hops'
-									onChange={(e) => {
-										const val = parseInt(e.target.value, 10);
-										const cur = (window as any).getRuntimeHopDefaults?.() || { expansion: 1, click: 3, selection: 3 };
-										(window as any).setRuntimeHopDefaults?.(cur.expansion, cur.click, val);
-									}}
-								>
-									<option value='1'>1</option>
-									<option value='2'>2</option>
-									<option value='3'>3</option>
-									<option value='4'>4</option>
-									<option value='5'>5</option>
-								</select>
-								<span style={{ fontSize: '10px' }}>Sel</span>
-							</div>
-						</div>
-					</div> */}
-
 					<div className='fg-header-right-controls'>
 						<Link
 							href={buildDashboardHrefFromNodeId(routeNodeId) || '/dashboard'}
@@ -1776,16 +1680,12 @@ export default function FinraGraph() {
 
 // Export helpers for unit testing (DOM-only, no browser binaries required)
 export {
-	bindTouchDragClickSuppression,
 	ensureSidebarHintContent,
 	isFindShortcut,
 	isSidebarTemporarilyPinned,
-	isSidebarPersistentlyPinned,
 	syncSidebarPinButton,
 	toggleSidebarPin,
 	hideSidebar,
-	toggleMobileMenu,
-	handleLegendTooltipBlur,
 	hideSelectionLog,
 	focusFetchInputWhenEmpty,
 	routeSidebarNodeSelection,

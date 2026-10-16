@@ -404,7 +404,7 @@ export function createCanvasOverlay(parent: HTMLElement) {
 	return { drawFrame: drawCanvasFrame, resize, destroy: destroyCanvas };
 }
 
-export function destroyCanvas() {
+function destroyCanvas() {
 	if (typeof window !== 'undefined') window.removeEventListener('resize', resize);
 	if (canvas) {
 		canvas.removeEventListener('click', onCanvasClick);
@@ -702,7 +702,7 @@ function getLinkStyle(
 // Margin in world units to draw slightly outside viewport for smooth panning
 const VIEWPORT_MARGIN = 60;
 
-export function drawCanvasFrame(
+function drawCanvasFrame(
 	nodes: Node[],
 	links: Link[],
 	transform: { x: number; y: number; k: number },
@@ -1009,9 +1009,8 @@ export function drawCanvasFrame(
 	syncCanvasFocusTooltip();
 }
 
-export { resize as canvasResize };
 
-export { startForceWorker, stopForceWorker } from './force-worker';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const ROUTE_NODE_REQUEST_EVENT = 'finra:route-node-request';
 const SELECTED_NODE_ROUTE_EVENT = 'finra:selected-node-route';
@@ -1479,7 +1478,7 @@ async function createCanvasRenderer(pixi: any) {
 	}
 }
 
-export async function init(_d3: any, options: { initialRouteNodeId?: string | null } = {}) {
+async function init(_d3: any, options: { initialRouteNodeId?: string | null } = {}) {
 	if (typeof window === 'undefined') return;
 	// init can be called again after route/navigation changes; tear down the
 	// previous RAF, worker, and global listeners before installing new ones.
@@ -1751,7 +1750,7 @@ export async function init(_d3: any, options: { initialRouteNodeId?: string | nu
 	}
 }
 
-export function destroy() {
+function destroy() {
 	if (renderFrameId != null && typeof window !== 'undefined') {
 		window.cancelAnimationFrame(renderFrameId);
 		renderFrameId = null;
@@ -1795,70 +1794,7 @@ export function destroy() {
 	teardownStopAnimationListener();
 }
 
-export let onNodeClickCallback: ((event: any, node: any) => void) | null = null;
+let onNodeClickCallback: ((event: any, node: any) => void) | null = null;
 export function setOnNodeClickCallback(cb: (event: any, node: any) => void) {
 	onNodeClickCallback = cb;
-}
-
-export async function createPixiRenderer(parent: HTMLElement) {
-	const PIXI = await import('pixi.js');
-
-	let canvas = document.getElementById('fg-canvas') as HTMLCanvasElement | null;
-	if (!canvas) {
-		canvas = document.createElement('canvas');
-		canvas.id = 'fg-canvas';
-		canvas.style.position = 'absolute';
-		canvas.style.left = '0';
-		canvas.style.top = '0';
-		canvas.style.width = '100%';
-		canvas.style.height = '100%';
-		canvas.style.zIndex = '0';
-		parent.insertBefore(canvas, parent.firstChild);
-	}
-
-	await createCanvasRenderer(PIXI);
-
-	return {
-		drawFrame: (nodes: any[], links: any[], transform: any, options: any) => {
-			graphNodes = nodes;
-			graphLinks = links;
-
-			// Ensure all nodes have sprites
-			for (const node of graphNodes) {
-				const idStr = String(node.id);
-				if (!nodeSprites.has(idStr)) {
-					const sprite = buildNodeGraphics(node);
-					nodeLayer.addChild(sprite);
-					nodeSprites.set(idStr, sprite);
-				}
-			}
-
-			// Remove sprites for nodes that no longer exist
-			const nodeIds = new Set(graphNodes.map((n) => String(n.id)));
-			for (const [id, sprite] of nodeSprites.entries()) {
-				if (!nodeIds.has(id)) {
-					nodeLayer.removeChild(sprite);
-					sprite.destroy();
-					nodeSprites.delete(id);
-				}
-			}
-
-			if (pixiApp && pixiApp.stage) {
-				pixiApp.stage.position.set(transform.x, transform.y);
-				pixiApp.stage.scale.set(transform.k);
-			}
-
-			updateNodeStyles();
-			drawFrame();
-			if (pixiApp && pixiApp.renderer) {
-				pixiApp.renderer.render(pixiApp.stage);
-			}
-		},
-		destroy: () => {
-			destroy();
-			if (canvas && canvas.parentNode) {
-				canvas.parentNode.removeChild(canvas);
-			}
-		},
-	};
 }

@@ -7,7 +7,7 @@ import type { GraphConnectionEntry } from '@/lib/graphConnections';
 // Type-only import — keep this file free of a runtime cycle with graphConnections.
 
 export const OFFICIAL_FIRM_ROSTER_SOURCE = 'official-search';
-export const OFFICIAL_SEARCH_PAGE_SIZE = 100;
+const OFFICIAL_SEARCH_PAGE_SIZE = 100;
 const OFFICIAL_SEARCH_PAGE_CONCURRENCY = 6;
 
 const SEARCH_HEADERS = {

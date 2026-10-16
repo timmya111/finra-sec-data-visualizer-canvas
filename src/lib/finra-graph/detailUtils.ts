@@ -373,4 +373,4 @@ export function normalizeComparableName(name) {
 		.trim();
 }
 
-export { normalizePersonLabel };
+

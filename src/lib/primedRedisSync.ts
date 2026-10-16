@@ -5,7 +5,7 @@ import zlib from 'node:zlib';
 import { getRedisClientInstance } from '@/lib/redisClient';
 import { DEFAULT_TTL_SECONDS, setStringIfValid } from '@/lib/redisCache';
 
-export const PRIMED_BUNDLE_NAMES = ['finra-individual', 'sec-individual', 'finra-firm', 'sec-firm'] as const;
+const PRIMED_BUNDLE_NAMES = ['finra-individual', 'sec-individual', 'finra-firm', 'sec-firm'] as const;
 
 export type PrimedBundleName = (typeof PRIMED_BUNDLE_NAMES)[number];
 
@@ -126,7 +126,7 @@ function normalizePrimedBundle(bundle: PrimedBundle): PrimedBundle {
 	return normalized;
 }
 
-export async function loadPrimedBundleFromDisk(bundleName: PrimedBundleName): Promise<PrimedBundle | null> {
+async function loadPrimedBundleFromDisk(bundleName: PrimedBundleName): Promise<PrimedBundle | null> {
 	const binPath = path.join(PRIMED_CACHE_DIR, `${bundleName}.bin`);
 	const jsonPath = path.join(PRIMED_CACHE_DIR, `${bundleName}.json`);
 

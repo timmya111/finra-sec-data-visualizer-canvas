@@ -317,7 +317,7 @@ export function collectNodeLocationRecords(node: any) {
 	return records;
 }
 
-export function getHaversineDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function getHaversineDistanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
 	const R = 3958.8; // Earth's radius in miles
 	const dLat = ((lat2 - lat1) * Math.PI) / 180;
 	const dLon = ((lon2 - lon1) * Math.PI) / 180;

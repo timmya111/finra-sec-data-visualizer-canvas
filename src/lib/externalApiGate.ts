@@ -19,7 +19,7 @@ function isExplicitlyDisabled() {
 	return raw !== '' && truthy.has(raw);
 }
 
-export function getExternalApiContext() {
+function getExternalApiContext() {
 	return runtimeExternalApiContext || '';
 }
 

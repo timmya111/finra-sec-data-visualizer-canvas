@@ -781,7 +781,7 @@ export async function hydrateFirmNodeLabelsFromSearchSidecar(nodes: any[] = [], 
 	return list;
 }
 
-export async function lookupIndividualNamesFromSearchSidecar(
+async function lookupIndividualNamesFromSearchSidecar(
 	individualIds: Array<string | number | null | undefined>,
 	options: LocalSearchOptions = {},
 ): Promise<Map<string, string>> {
@@ -810,7 +810,7 @@ export async function lookupIndividualNamesFromSearchSidecar(
 }
 
 /** Stop on Person/Individual placeholders and re-resolve those CRDs from search sidecars. */
-export async function hydrateIndividualNodeLabelsFromSearchSidecar(nodes: any[] = [], options: LocalSearchOptions = {}): Promise<any[]> {
+async function hydrateIndividualNodeLabelsFromSearchSidecar(nodes: any[] = [], options: LocalSearchOptions = {}): Promise<any[]> {
 	const list = Array.isArray(nodes) ? nodes : [];
 	const neededIds: string[] = [];
 	for (const node of list) {

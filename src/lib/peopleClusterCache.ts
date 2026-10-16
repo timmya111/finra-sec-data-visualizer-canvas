@@ -129,7 +129,7 @@ async function loadBundle(baseName: string) {
 	return redis;
 }
 
-export async function getPeopleClusterManifest(): Promise<PeopleClusterManifest | null> {
+async function getPeopleClusterManifest(): Promise<PeopleClusterManifest | null> {
 	if (manifestCache !== undefined) return manifestCache;
 	const loaded = (await loadBundle(MANIFEST_BUNDLE_NAME)) as PeopleClusterManifest | null;
 	manifestCache = loaded || null;

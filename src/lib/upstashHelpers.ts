@@ -15,4 +15,4 @@ export async function zaddRaw(client: UpstashRedis | null, key: string, score: n
 	}
 }
 
-export default zaddRaw;
+

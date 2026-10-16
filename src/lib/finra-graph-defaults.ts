@@ -1,7 +1,7 @@
 // Runtime-configurable hop defaults (range 1-5)
-export let RUNTIME_EXPANSION_HOPS = 1;
-export let RUNTIME_CLICK_EXPANSION_HOPS = 1;
-export let RUNTIME_SELECTION_HOPS = 1;
+let RUNTIME_EXPANSION_HOPS = 1;
+let RUNTIME_CLICK_EXPANSION_HOPS = 1;
+let RUNTIME_SELECTION_HOPS = 1;
 
 export function setRuntimeHopDefaults(expansion: number, click: number, selection: number) {
 	RUNTIME_EXPANSION_HOPS = Math.max(1, Math.min(5, Math.floor(expansion)));

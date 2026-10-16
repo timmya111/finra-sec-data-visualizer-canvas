@@ -22,7 +22,7 @@ const DEFAULT_RETRY_SECONDS = Math.max(60, Number(process.env.FINRA_EXTERNAL_VAL
 const INDIVIDUAL_QUERY = new URLSearchParams({ hl: 'true', includePrevious: 'true', wt: 'json' }).toString();
 const FIRM_QUERY = new URLSearchParams({ hl: 'true', wt: 'json' }).toString();
 /** Firm CRDs above this are treated as pollution (individual IDs leaked into firm lists). */
-export const MAX_VALID_FIRM_CRD = 999_999;
+const MAX_VALID_FIRM_CRD = 999_999;
 
 const DEFAULT_DISCOVERY_BATCH = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_DISCOVERY_BATCH || 3));
 /** Backward gap-scan batch (unknown CRDs only). Kept under the old UPDATE_BATCH env name. */

@@ -30,15 +30,6 @@ vi.mock('@/lib/graphConnections', () => ({
 import { GET as getConnections } from '../../src/app/api/finra/firm/[id]/connections/route';
 import { GET as getFirm } from '../../src/app/api/finra/firm/[id]/route';
 
-vi.mock('@/lib/cache', () => ({
-	redis: {
-		get: vi.fn(async () => null),
-		set: vi.fn(async () => 'OK'),
-	},
-	getFromCache: vi.fn(async () => null),
-	saveToCache: vi.fn(async () => {}),
-}));
-
 describe('firm connections route and deferConnections option', () => {
 	it('returns firm connections from /api/finra/firm/[id]/connections', async () => {
 		const request = new NextRequest('http://localhost:3000/api/finra/firm/13686/connections');

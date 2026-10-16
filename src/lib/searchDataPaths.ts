@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 
-export const SEARCH_INDEX_RELATIVE_FILES = {
+const SEARCH_INDEX_RELATIVE_FILES = {
 	'finra:individual': path.join('data', 'national', 'search-index.finra.individual.json'),
 	'finra:firm': path.join('data', 'national', 'search-index.finra.firm.json'),
 	'sec:individual': path.join('data', 'national', 'search-index.sec.individual.json'),

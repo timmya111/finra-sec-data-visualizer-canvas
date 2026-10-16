@@ -29,7 +29,7 @@ const DEDICATED_INTEL_ARC_RE = /\b(intel\s*arc|arc\s*(a|b)\d)\b/;
 const INTEGRATED_RE =
 	/\b(uhd|iris|hd graphics|radeon\s*graphics|radeon\s*\d{2,3}m|radeonsi|phoenix|rembrandt|raphael|hawk.?point|strix|apple\s*m\d|adreno|mali|xclipse|nvidia\s*graphics)\b/;
 
-export function normalizeGpuBlob(renderer = '', vendor = '') {
+function normalizeGpuBlob(renderer = '', vendor = '') {
 	return `${renderer} ${vendor}`.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
@@ -64,7 +64,7 @@ export function shouldEnableSafeGpuForTier(_tier: GpuCapabilityTier): boolean {
 
 export type SafeGpuOverride = 'force-on' | 'force-off' | null;
 
-export function readSafeGpuOverride(search = '', storageGet?: (key: string) => string | null): SafeGpuOverride {
+function readSafeGpuOverride(search = '', storageGet?: (key: string) => string | null): SafeGpuOverride {
 	try {
 		const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
 		const forced = params.get('safe_gpu') || params.get('safeGpu');

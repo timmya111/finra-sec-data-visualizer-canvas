@@ -15,7 +15,7 @@ function isPlainObject(value: unknown): value is AnyRecord {
 	return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function normalizeScopeValue(value: unknown) {
+function normalizeScopeValue(value: unknown) {
 	return String(value || '')
 		.trim()
 		.toLowerCase()
@@ -26,12 +26,12 @@ export function isNotInScopeValue(value: unknown) {
 	return normalizeScopeValue(value) === 'notinscope';
 }
 
-export function isInScopeValue(value: unknown) {
+function isInScopeValue(value: unknown) {
 	const normalized = normalizeScopeValue(value);
 	return Boolean(normalized) && normalized !== 'notinscope';
 }
 
-export function getEmbeddedContentObject(source: unknown, contentKeys: string[] = ['content', 'iacontent']): AnyRecord | null {
+function getEmbeddedContentObject(source: unknown, contentKeys: string[] = ['content', 'iacontent']): AnyRecord | null {
 	if (!isPlainObject(source)) return null;
 	for (const key of contentKeys) {
 		const raw = source[key];

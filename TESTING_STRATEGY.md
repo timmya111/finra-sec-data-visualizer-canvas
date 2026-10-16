@@ -51,9 +51,9 @@ Use unit tests for pure or mostly-pure modules.
 
 - `src/lib/finra-graph/detailUtils.ts`
 - `src/lib/finra-graph/formatters.ts`
-- `src/lib/dataMerge.ts`
-- `src/lib/cache.ts`
+- `src/lib/simpleCache.ts`
 - `src/lib/httpCache.ts`
+- `src/lib/locationSearch.ts`
 - small extracted helpers from `src/lib/finra-graph.ts`
 
 **What unit tests should cover:**

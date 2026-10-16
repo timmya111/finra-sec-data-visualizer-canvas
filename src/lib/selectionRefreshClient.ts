@@ -22,10 +22,6 @@ export type SelectionRefreshClientResult = {
 let refreshGeneration = 0;
 let clientBackoffUntil = 0;
 
-export function getSelectionRefreshClientBackoffUntil() {
-	return clientBackoffUntil;
-}
-
 export function setSelectionRefreshClientBackoffUntil(ts: number) {
 	clientBackoffUntil = Math.max(0, Number(ts) || 0);
 }

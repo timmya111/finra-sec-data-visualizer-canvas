@@ -5,7 +5,7 @@ export type JsonDisplayNode = {
 	children?: JsonDisplayNode[];
 };
 
-export function safeParseJson(value: unknown) {
+function safeParseJson(value: unknown) {
 	if (typeof value !== 'string') return value;
 	const trimmed = value.trim();
 	if (!trimmed) return value;

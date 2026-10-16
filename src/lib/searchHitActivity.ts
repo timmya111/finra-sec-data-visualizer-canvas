@@ -1,13 +1,7 @@
 export type HeaderSearchType = 'all' | 'people' | 'firms' | 'people-inactive' | 'firms-inactive';
 
-export const HEADER_SEARCH_TYPES: HeaderSearchType[] = ['all', 'people', 'firms', 'people-inactive', 'firms-inactive'];
-
-export function isHeaderSearchType(value: string | null | undefined): value is HeaderSearchType {
-	return HEADER_SEARCH_TYPES.includes(String(value || '').trim().toLowerCase() as HeaderSearchType);
-}
-
 /** Aligns with finra-graph classifyActivityText for search-hit scope/status strings. */
-export function classifySearchActivityText(value: unknown): 'active' | 'inactive' | null {
+function classifySearchActivityText(value: unknown): 'active' | 'inactive' | null {
 	const normalized = String(value || '')
 		.trim()
 		.toLowerCase()

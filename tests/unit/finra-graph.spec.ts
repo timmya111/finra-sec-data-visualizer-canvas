@@ -128,10 +128,10 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		document.body.innerHTML = '';
 	});
 
-	it('loadSelectionLogBoldPreference defaults to bold on for new visitors', () => {
+	it('loadSelectionLogBoldPreference defaults to bold off for new visitors', () => {
 		globalThis.localStorage.removeItem('finra_selection_log_bold');
 
-		expect(loadSelectionLogBoldPreference()).toBe(true);
+		expect(loadSelectionLogBoldPreference()).toBe(false);
 	});
 
 	it('loadSelectionLogBoldPreference preserves a saved off preference', () => {
@@ -1392,8 +1392,10 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(isNodeInactive(node)).toBe(true);
 	});
 
-	it('enlarges log-bold labels and leaves selection at normal size', () => {
-		expect(getNodeLabelFontSize({ isBolded: true, zoomScale: 1.25 })).toBeGreaterThan(getNodeLabelFontSize({ zoomScale: 1.25 }));
+	it('caps log-bold labels in screen space and leaves selection at normal size', () => {
+		// Bold tracks zoom with a ≤44px screen cap; selection/hover do not change base size.
+		expect(getNodeLabelFontSize({ isBolded: true, zoomScale: 1.25 }) * 1.25).toBeLessThanOrEqual(44);
+		expect(getNodeLabelFontSize({ isBolded: true, zoomScale: 4 }) * 4).toBeLessThanOrEqual(44);
 		expect(getNodeLabelFontSize({ isSelected: true, zoomScale: 1.25 })).toBe(getNodeLabelFontSize({ zoomScale: 1.25 }));
 		expect(getNodeLabelFontSize({ isHovered: true, zoomScale: 1.25 })).toBe(getNodeLabelFontSize({ zoomScale: 1.25 }));
 	});

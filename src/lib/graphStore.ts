@@ -13,7 +13,7 @@ import { getRedisClientInstance } from '@/lib/redisClient';
 import { canWriteToRedis, isRedisCacheOnly } from '@/lib/redisAvailability';
 import { setStringIfValid, decompressPayload } from '@/lib/redisCache';
 import { gzipOffload, gunzipOffload } from './gzipWorker';
-import { GRAPH_FILE, RECENT_SEEDS_FILE, SEED_BANK_FILE, SEED_PROFILES_FILE, SEEDS_FILE } from './graphDataPaths';
+import { GRAPH_FILE, RECENT_SEEDS_FILE, SEED_BANK_FILE } from './graphDataPaths';
 
 // Graph runtime state lives under `graph:`. `finra:` / `sec:` are source-record
 // folders only (individual/firm payloads), treated equally.
@@ -48,8 +48,6 @@ type RecentSeeds = {
 	firmIds: string[];
 	updatedAt: string;
 };
-
-export type SeedLookupKind = 'individual' | 'firm';
 
 let _redis: Redis | null = null;
 function getRedis(): Redis | null {
@@ -103,7 +101,7 @@ if (process.env.NODE_ENV !== 'test') {
 		.catch(() => {});
 }
 
-export function getGraphAdjacency(graph: any): Map<string, Set<string>> {
+function getGraphAdjacency(graph: any): Map<string, Set<string>> {
 	if (_graphAdjacency && _graphCache === graph) {
 		return _graphAdjacency;
 	}
@@ -169,10 +167,6 @@ export async function getNeighborsForNodes(nodeIds: string[], hops: number | 'al
 	});
 
 	return { nodes: resultNodes, links: resultLinks };
-}
-
-export async function getNeighborsForNode(nodeId: string, hops: number | 'all' = 1) {
-	return getNeighborsForNodes([nodeId], hops);
 }
 
 function normalizeGraphPayload(data: any) {
@@ -612,7 +606,7 @@ async function saveRecentSeedsToDisk(recentSeeds: RecentSeeds) {
 	await writeJsonFileAtomic(RECENT_SEEDS_FILE, recentSeeds);
 }
 
-export async function saveSeedBankToStore(seedBank: SeedBank): Promise<void> {
+async function saveSeedBankToStore(seedBank: SeedBank): Promise<void> {
 	const redis = getRedis();
 	if (redis) {
 		await setStringIfValid(REDIS_SEED_BANK_KEY, JSON.stringify(seedBank));
@@ -655,15 +649,6 @@ export async function getSeedBankFromStore(): Promise<SeedBank> {
 
 	const graph = await getFullGraph();
 	return syncSeedBankFromGraph(graph);
-}
-
-export async function getSeedNameByNumber(kind: SeedLookupKind, id: string): Promise<string | null> {
-	const normalizedId = String(id || '').trim();
-	if (!/^\d+$/.test(normalizedId)) return null;
-	const seedBank = await getSeedBankFromStore();
-	const lookup = seedBank.nameByNumber?.[kind];
-	const value = lookup && typeof lookup === 'object' ? lookup[normalizedId] : '';
-	return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 export async function getRecentSeedsFromStore(): Promise<RecentSeeds> {
@@ -1028,93 +1013,9 @@ export function toCompactNode(node: any): any {
 	return out;
 }
 
-export function resolveId(ref: any): string | null {
+function resolveId(ref: any): string | null {
 	if (ref && typeof ref === 'object') return ref.id ?? null;
 	return ref ?? null;
 }
 
-let _seedsCache: string[] | null = null;
-let _profilesCache: any = null;
 
-export function getSeedsCache() {
-	return _seedsCache;
-}
-export function setSeedsCache(v: string[]) {
-	_seedsCache = v;
-}
-export function invalidateSeedsCache() {
-	_seedsCache = null;
-}
-
-export function getProfilesCache() {
-	return _profilesCache;
-}
-export function setProfilesCache(v: any) {
-	_profilesCache = v;
-}
-export function invalidateProfilesCache() {
-	_profilesCache = null;
-}
-
-const REDIS_PROFILES_KEY = 'graph:seed-profiles';
-const REDIS_SEEDS_KEY = 'graph:seeds';
-
-export async function getProfilesFromStore(): Promise<any> {
-	const redis = getRedis();
-	if (redis) {
-		try {
-			const raw = await redis.get<string>(REDIS_PROFILES_KEY);
-			if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
-			const data = JSON.parse(await readFile(SEED_PROFILES_FILE, 'utf-8'));
-			await setStringIfValid(REDIS_PROFILES_KEY, JSON.stringify(data));
-			return data;
-		} catch {
-			return { profiles: [] };
-		}
-	}
-	try {
-		return JSON.parse(await readFile(SEED_PROFILES_FILE, 'utf-8'));
-	} catch {
-		return { profiles: [] };
-	}
-}
-
-export async function saveProfilesToStore(data: any): Promise<void> {
-	const redis = getRedis();
-	if (redis) {
-		await setStringIfValid(REDIS_PROFILES_KEY, JSON.stringify(data));
-	} else {
-		await writeJsonFileAtomic(SEED_PROFILES_FILE, data);
-	}
-	invalidateProfilesCache();
-}
-
-export async function getSeedsFromStore(): Promise<string[]> {
-	const redis = getRedis();
-	if (redis) {
-		try {
-			const raw = await redis.get<string>(REDIS_SEEDS_KEY);
-			if (raw) return typeof raw === 'string' ? JSON.parse(raw) : raw;
-			const data = JSON.parse(await readFile(SEEDS_FILE, 'utf-8'));
-			await setStringIfValid(REDIS_SEEDS_KEY, JSON.stringify(data));
-			return data;
-		} catch {
-			return [];
-		}
-	}
-	try {
-		return JSON.parse(await readFile(SEEDS_FILE, 'utf-8'));
-	} catch {
-		return [];
-	}
-}
-
-export async function saveSeedsToStore(seeds: string[]): Promise<void> {
-	const redis = getRedis();
-	if (redis) {
-		await setStringIfValid(REDIS_SEEDS_KEY, JSON.stringify(seeds));
-	} else {
-		await writeJsonFileAtomic(SEEDS_FILE, seeds);
-	}
-	invalidateSeedsCache();
-}

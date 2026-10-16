@@ -70,14 +70,6 @@ async function writeJsonFileAtomic(filePath: string, data: unknown) {
 	await writeTextFileAtomic(filePath, JSON.stringify(data, null, 2));
 }
 
-export function invalidateProfilesCache() {
-	profilesCache = null;
-}
-
-export function invalidateSeedsCache() {
-	seedsCache = null;
-}
-
 export async function getProfilesFromStore(): Promise<any> {
 	if (profilesCache) return profilesCache;
 	const redis = getRedis();
@@ -163,7 +155,7 @@ export async function getRecentSeedsFromStore(): Promise<RecentSeeds> {
 	}
 }
 
-export async function saveRecentSeedsToStore(recentSeeds: RecentSeeds): Promise<void> {
+async function saveRecentSeedsToStore(recentSeeds: RecentSeeds): Promise<void> {
 	const normalized = normalizeRecentSeedsPayload(recentSeeds);
 	const redis = getRedis();
 	if (redis) {

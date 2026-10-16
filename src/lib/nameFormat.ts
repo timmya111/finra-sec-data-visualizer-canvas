@@ -37,7 +37,7 @@ const COMMON_SMALL_WORDS = new Set(['of', 'and', 'the', 'in', 'on', 'at', 'to', 
  * Capitalizes an individual word in a person's name.
  * Handles apostrophes (O'Connor, D'Angelo), hyphens (Smith-Jones), and suffixes (Jr., III).
  */
-export function capitalizePersonWord(rawWord: string): string {
+function capitalizePersonWord(rawWord: string): string {
 	if (!rawWord) return '';
 	const trimmed = rawWord.trim().replace(/^,+|,+$/g, '');
 	if (!trimmed) return '';

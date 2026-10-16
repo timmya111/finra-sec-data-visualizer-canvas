@@ -25,7 +25,6 @@ vi.mock('@/lib/localSearch', async (importOriginal) => {
 
 vi.mock('@/lib/firmEmploymentFromPrimed', () => ({
 	lookupFirmEmploymentEdgesFromPrimed: vi.fn(async () => ({ edges: [], source: 'adj' })),
-	getFirmEmploymentEdgesFromPrimed: vi.fn(async () => []),
 }));
 
 vi.mock('@/lib/officialFirmRoster', async (importOriginal) => {

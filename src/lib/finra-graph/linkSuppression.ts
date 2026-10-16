@@ -106,4 +106,4 @@ export function buildDashboardProfileLinks(entity: 'individual' | 'firm', id: st
 	return links;
 }
 
-export { BROKEN_FINRA_FIRM_IDS, SUPPRESSED_SEC_FIRM_IDS, SUPPRESSED_SEC_INDIV_IDS };
+export { SUPPRESSED_SEC_FIRM_IDS, SUPPRESSED_SEC_INDIV_IDS };

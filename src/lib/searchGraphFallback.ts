@@ -60,7 +60,7 @@ function collectExactAddressValues(node: any) {
 	return collectAliasLikeValues(...exactValues);
 }
 
-export function collectSearchableNodeKeys(node: any) {
+function collectSearchableNodeKeys(node: any) {
 	const basic = node?.basicInformation || {};
 	const group = node?.group || (node?.type === 'firm' || node?.firmId || node?.firm_id ? 'firm' : 'individual');
 	const aliasValues = collectAliasLikeValues(

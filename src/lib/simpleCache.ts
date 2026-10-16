@@ -259,7 +259,7 @@ export async function evictCacheKey(rawKey: string): Promise<void> {
 	getMem().delete(key);
 }
 
-export async function waitExternalFetchLimit(service: string) {
+async function waitExternalFetchLimit(service: string) {
 	if (!service || !canCallExternalApis()) return;
 	const lastFetchAt = lastExternalFetch.get(service) || 0;
 	const now = Date.now();

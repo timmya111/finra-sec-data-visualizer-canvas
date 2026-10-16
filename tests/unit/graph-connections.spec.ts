@@ -28,7 +28,6 @@ vi.mock('@/lib/firmEmploymentFromPrimed', () => ({
 		],
 		source: 'bundle',
 	})),
-	getFirmEmploymentEdgesFromPrimed: vi.fn(async () => []),
 }));
 
 vi.mock('@/lib/officialFirmRoster', async (importOriginal) => {

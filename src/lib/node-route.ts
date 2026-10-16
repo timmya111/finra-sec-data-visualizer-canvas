@@ -68,7 +68,7 @@ export function normalizeNodeRouteId(nodeIdOrSlug: string | null | undefined) {
 }
 
 /** Query params that should survive node-to-node navigation and client history updates. */
-export const STICKY_PARAMS = ['disable_analytics', 'safe_gpu', 'localApi', 'profile'] as const;
+const STICKY_PARAMS = ['disable_analytics', 'safe_gpu', 'localApi', 'profile'] as const;
 
 export function getStickySearch(search = typeof window !== 'undefined' ? window.location.search : ''): string {
 	const current = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
