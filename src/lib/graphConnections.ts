@@ -1787,13 +1787,15 @@ export async function getFirmConnectionsFromGraph(
       }
     }
 
-    // Gzip search-sidecar hydration is cheap (no Redis GETs). light=1 still uses it; only
-    // the Redis individual-detail enrichment pass below is skipped.
+    // light=1 / cache-only: return the Redis roster as-is. Sidecar hydrate looks up the
+    // gzipped search indexes — on Vercel cold start that can exceed the function budget
+    // (prod 127145 connections?light=1 → 504) even for a 4-person roster.
+    if (skipEnrichment || isRedisCacheOnly()) return roster;
+
     const sidecarHydrated = await hydrateFirmConnectionsFromSearchSidecar(
       roster,
       normalizedFirmId,
     );
-    if (skipEnrichment || isRedisCacheOnly()) return sidecarHydrated;
 
     const before = firmConnectionsDisplayFingerprint(sidecarHydrated);
     const incompleteCount = [
