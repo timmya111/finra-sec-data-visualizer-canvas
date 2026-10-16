@@ -16,13 +16,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
 	try {
 		const bucket = String(request.nextUrl.searchParams.get('bucket') || 'all').trim().toLowerCase();
-		const light =
-			String(request.nextUrl.searchParams.get('light') || '').trim() === '1' ||
-			String(request.nextUrl.searchParams.get('skipEnrichment') || '').trim() === '1';
-		// Redis/disk miss must backfill from official FINRA/SEC individual-by-firm search
-		// (e.g. SEC-only firms like 310632 BOS Asset Management with no firm-connections key).
+		// Always skip sidecar/Redis individual enrichment on this route. Enrichment gunzips
+		// search indexes and mgets individuals — that 504/OOMs on Vercel (127145 non-light).
+		// Dashboard already calls ?light=1; names/scopes come from the cached roster itself.
+		const light = true;
+		// Redis/disk miss schedules official firm= backfill in the background (empty → no-store).
+		// Incomplete non-official rosters are expanded from firm detail ensure, not here.
 		const { currentConnections, previousConnections } = await getFirmConnectionsFromGraph(id, {
-			skipEnrichment: light,
+			skipEnrichment: true,
 			computeIfMissing: true,
 		});
 		const current = bucket === 'previous' ? [] : currentConnections || [];

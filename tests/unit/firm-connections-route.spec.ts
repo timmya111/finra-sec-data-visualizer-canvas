@@ -57,9 +57,9 @@ describe('firm connections route and deferConnections option', () => {
 		expect(response.headers.get('cache-control')).toContain('max-age=604800');
 	});
 
-	it('passes skipEnrichment when light=1', async () => {
+	it('always skips enrichment (even without light=1)', async () => {
 		getFirmConnectionsFromGraph.mockClear();
-		const request = new NextRequest('http://localhost:3000/api/finra/firm/13686/connections?light=1');
+		const request = new NextRequest('http://localhost:3000/api/finra/firm/13686/connections');
 		const response = await getConnections(request, { params: Promise.resolve({ id: '13686' }) });
 		expect(response.status).toBe(200);
 		const data = await response.json();
