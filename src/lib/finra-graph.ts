@@ -3937,16 +3937,26 @@ if (typeof window !== 'undefined') {
 }
 
 function flashSelectionLogActionButton(button: HTMLButtonElement, text: string, duration = 1000) {
-	const originalText = button.dataset.originalText || button.textContent || '';
+	// Prefer the inner label span. Assigning button.textContent destroys children and can
+	// detach the original click target so document outside-click handlers miss
+	// `closest('[data-fg-graph-action=clear-non-log]')` and reset stage 2 → 1 on the same click.
+	const label = button.querySelector<HTMLElement>('.fg-sidebar-action-label');
+	const textTarget: HTMLElement = label || button;
+	const originalText = button.dataset.originalText || textTarget.textContent || '';
 	button.dataset.originalText = originalText;
 	button.classList.add('active');
 	button.setAttribute('aria-pressed', 'true');
-	button.textContent = text;
+	textTarget.textContent = text;
 	setTimeout(() => {
+		textTarget.textContent = button.dataset.originalText || originalText;
+		delete button.dataset.originalText;
+		if (button.matches('[data-fg-graph-action="clear-non-log"]')) {
+			// Stage 2 must keep selected/pressed chrome until the second click (or cancel).
+			syncClearNonLogButtonState();
+			return;
+		}
 		button.classList.remove('active');
 		button.setAttribute('aria-pressed', 'false');
-		button.textContent = button.dataset.originalText || originalText;
-		delete button.dataset.originalText;
 	}, duration);
 }
 
@@ -5325,24 +5335,38 @@ function clearPersonSelectionVisualState(nodeId: string) {
 }
 
 /**
- * After keeping log nodes + bridges, remove previous-employment links and drop nodes
- * that are no longer reachable. Mutates graphData only — caller should render once.
+ * Remove previous-employment links, then drop nodes that are no longer reachable from
+ * selection-log terminals over the remaining (non-previous) edges.
+ * Pure helper — does not touch live layout; callers sync canvas/SVG separately.
  */
-function stripPreviousEmploymentLinksAndUnreachable(logIds: Set<string>) {
-	if (!globalState.graphData || !Array.isArray(globalState.graphData.links) || !Array.isArray(globalState.graphData.nodes)) return;
+export function stripPreviousEmploymentGraph(
+	graphData: { nodes?: Array<any>; links?: Array<any> } | null | undefined,
+	logIds: Set<string>,
+	isPreviousLink: (link: any) => boolean = (link) => {
+		const rel = String(link?.relationship || '')
+			.trim()
+			.toLowerCase();
+		if (rel === 'previous_employed_by' || rel === 'previous_registered_by') return true;
+		if (link?.isCurrent === false) return true;
+		if (rel.includes('previous')) return true;
+		return false;
+	},
+): { nodes: Array<any>; links: Array<any>; removedLinkCount: number; removedNodeCount: number } {
+	const nodesIn = Array.isArray(graphData?.nodes) ? graphData!.nodes : [];
+	const linksIn = Array.isArray(graphData?.links) ? graphData!.links : [];
+	const remainingLinks = linksIn.filter((link) => !isPreviousLink(link));
+	const removedLinkCount = linksIn.length - remainingLinks.length;
 
-	const remainingLinks = globalState.graphData.links.filter((link) => !isPreviousEmploymentLink(link));
-	globalState.graphData.links = remainingLinks;
-
-	const adj = buildUndirectedAdjacencyList(globalState.graphData.links);
+	const adj = buildUndirectedAdjacencyList(remainingLinks);
 	const reachable = new Set<string>();
 	const queue: string[] = [];
-	const presentNodeIds = new Set<string>(globalState.graphData.nodes.map((node) => String(node?.id || '').trim()).filter(Boolean));
+	const presentNodeIds = new Set<string>(nodesIn.map((node) => String(node?.id || '').trim()).filter(Boolean));
 
 	for (const logId of logIds) {
-		if (!presentNodeIds.has(logId)) continue;
-		reachable.add(logId);
-		queue.push(logId);
+		const id = String(logId || '').trim();
+		if (!id || !presentNodeIds.has(id)) continue;
+		reachable.add(id);
+		queue.push(id);
 	}
 	while (queue.length > 0) {
 		const current = queue.shift()!;
@@ -5353,25 +5377,109 @@ function stripPreviousEmploymentLinksAndUnreachable(logIds: Set<string>) {
 		}
 	}
 
-	// Isolated log terminals stay; everything else must remain connected via non-previous links.
+	// Isolated log terminals stay even with no remaining edges.
 	for (const logId of logIds) {
-		if (presentNodeIds.has(logId)) reachable.add(logId);
+		const id = String(logId || '').trim();
+		if (id && presentNodeIds.has(id)) reachable.add(id);
 	}
 
-	globalState.graphData.nodes = globalState.graphData.nodes.filter((node) => reachable.has(String(node?.id || '').trim()));
-	globalState.graphData.links = globalState.graphData.links.filter((link) => {
+	const nodes = nodesIn.filter((node) => reachable.has(String(node?.id || '').trim()));
+	const links = remainingLinks.filter((link) => {
 		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
 		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
 		return Boolean(sourceId && targetId && reachable.has(sourceId) && reachable.has(targetId));
 	});
+	return { nodes, links, removedLinkCount, removedNodeCount: nodesIn.length - nodes.length };
+}
+
+/**
+ * After keeping log nodes + bridges, remove previous-employment links and drop nodes
+ * that are no longer reachable. Updates graphData and the live layout so canvas mode
+ * does not keep gray previous lines between surviving endpoints.
+ */
+function stripPreviousEmploymentLinksAndUnreachable(logIds: Set<string>): {
+	removedLinkCount: number;
+	removedNodeCount: number;
+	layoutPreviousLinkCount: number;
+} {
+	const empty = { removedLinkCount: 0, removedNodeCount: 0, layoutPreviousLinkCount: 0 };
+	if (!globalState.graphData || !Array.isArray(globalState.graphData.links) || !Array.isArray(globalState.graphData.nodes)) return empty;
+
+	const layoutPreviousLinkCount = Array.isArray(globalState.layoutLinks)
+		? globalState.layoutLinks.filter((link) => isPreviousEmploymentLink(link)).length
+		: 0;
+	const stripped = stripPreviousEmploymentGraph(globalState.graphData, logIds, isPreviousEmploymentLink);
+	globalState.graphData.nodes = stripped.nodes;
+	globalState.graphData.links = stripped.links;
+
+	// layoutLinks are the live canvas/SVG edges. Pruning by keep-ids alone leaves previous
+	// lines on screen whenever both endpoints survive (logged person + shared firm).
+	if (Array.isArray(globalState.layoutLinks)) {
+		globalState.layoutLinks = globalState.layoutLinks.filter((link) => !isPreviousEmploymentLink(link));
+	}
+	if (Array.isArray(globalState.layoutNodes) && Array.isArray(globalState.layoutLinks)) {
+		const keepIds = new Set<string>(stripped.nodes.map((node) => String(node?.id || '').trim()).filter(Boolean));
+		globalState.layoutNodes = globalState.layoutNodes.filter((node) => keepIds.has(String(node?.id || '').trim()));
+		globalState.layoutLinks = globalState.layoutLinks.filter((link) => {
+			const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+			const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+			return Boolean(sourceId && targetId && keepIds.has(sourceId) && keepIds.has(targetId));
+		});
+		try {
+			// SVG mode keeps <line> nodes bound to old link objects; drop previous lines and
+			// any edge whose endpoint left the keep set.
+			const pruneLineSelection = (selection: any) => {
+				if (!selection) return;
+				selection.each(function (this: Element, d: any) {
+					const sourceId = String(d?.source?.id ?? d?.source ?? '').trim();
+					const targetId = String(d?.target?.id ?? d?.target ?? '').trim();
+					if (!keepIds.has(sourceId) || !keepIds.has(targetId) || isPreviousEmploymentLink(d)) {
+						d3.select(this).remove();
+					}
+				});
+			};
+			if (globalState.nodeGroup) {
+				const nodeJoin = globalState.nodeGroup.selectAll('g.fg-node').data(globalState.layoutNodes, (d: any) => String(d?.id || ''));
+				nodeJoin.exit().remove();
+				globalState.nodeSel = globalState.nodeGroup.selectAll('g.fg-node');
+				pruneLineSelection(globalState.linkBottomGroup?.selectAll('line'));
+				pruneLineSelection(globalState.linkMidGroup?.selectAll('line'));
+				pruneLineSelection(globalState.linkTopGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowBottomGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowMidGroup?.selectAll('line'));
+				pruneLineSelection(globalState.arrowTopGroup?.selectAll('line'));
+				globalState.linkSel = selectRenderedLinkLines();
+				globalState.arrowSel = selectRenderedArrowLines();
+			}
+			resolveLinkEndpoints(globalState.layoutLinks, globalState.layoutNodes);
+			rebuildLayoutLinkIndexes(globalState.layoutLinks);
+			globalState.neighborMap = buildNeighborMap(globalState.layoutNodes, globalState.layoutLinks);
+			if (globalState.simulation) {
+				globalState.simulation.nodes(globalState.layoutNodes);
+				globalState.simulation.force('link')?.links(globalState.layoutLinks);
+			}
+			scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
+		} catch {
+			/* ignore layout sync errors — pruneGraphDataToKeepIds will finish */
+		}
+	}
+	return {
+		removedLinkCount: stripped.removedLinkCount,
+		removedNodeCount: stripped.removedNodeCount,
+		layoutPreviousLinkCount,
+	};
 }
 
 /** Stage for combined Clear non-log: 1 = clear-non-connected, 2 = full clear-non-log. */
 let clearNonLogClickStage: 1 | 2 = 1;
+/** After click 1, ignore node-add stage resets briefly — prune/re-expand must not drop selected chrome. */
+let clearNonLogStageHoldUntil = 0;
 /** Bumped on clear-non-log; in-flight expands capture this and skip re-injecting pruned leaves. */
 let clearNonLogPruneGeneration = 0;
 /** Ids retained by the latest clear-non-log prune. In-flight expands may only re-add these until the user intentionally fetches/clicks again. */
 let clearNonLogKeepIdsGate: Set<string> | null = null;
+/** After click 2, reject previous-employment links from re-inject until the keep gate is released. */
+let clearNonLogBlockPreviousLinks = false;
 
 function armClearNonLogKeepGate(keepIds: Set<string>) {
 	clearNonLogPruneGeneration += 1;
@@ -5380,11 +5488,15 @@ function armClearNonLogKeepGate(keepIds: Set<string>) {
 
 function releaseClearNonLogKeepGate() {
 	clearNonLogKeepIdsGate = null;
+	clearNonLogBlockPreviousLinks = false;
 }
 
 function filterIncomingGraphAgainstClearNonLogGate(newNodes: Array<any> | null | undefined, newLinks: Array<any> | null | undefined) {
 	const nodesIn = Array.isArray(newNodes) ? newNodes : [];
-	const linksIn = Array.isArray(newLinks) ? newLinks : [];
+	let linksIn = Array.isArray(newLinks) ? newLinks : [];
+	if (clearNonLogBlockPreviousLinks) {
+		linksIn = linksIn.filter((link) => !isPreviousEmploymentLink(link));
+	}
 	if (!clearNonLogKeepIdsGate) return { nodes: nodesIn, links: linksIn, blockedAll: false };
 	const nodes = nodesIn.filter((node) => clearNonLogKeepIdsGate!.has(String(node?.id || '').trim()));
 	const nodeIds = new Set(nodes.map((node) => String(node?.id || '').trim()).filter(Boolean));
@@ -5407,6 +5519,9 @@ function filterIncomingGraphAgainstClearNonLogGate(newNodes: Array<any> | null |
 /** Any new nodes on the canvas cancel a pending purple (stage 2) Clear non-log. */
 function resetClearNonLogStageAfterNodesAdded() {
 	if (clearNonLogClickStage === 1) return;
+	const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+	// Hold through post-prune firm re-expand / route inject so click-1 selected chrome stays.
+	if (now < clearNonLogStageHoldUntil) return;
 	clearNonLogClickStage = 1;
 	syncClearNonLogButtonState();
 }
@@ -5414,15 +5529,56 @@ function resetClearNonLogStageAfterNodesAdded() {
 function syncClearNonLogButtonState() {
 	const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-fg-graph-action="clear-non-log"]'));
 	const hasLog = selectedNodesLog.length > 0;
+	const stage: 1 | 2 = !hasLog || clearNonLogClickStage === 1 ? 1 : 2;
+	const armed = hasLog && stage === 2;
+	// Drive selected chrome from <html> so React remounts of the sidebar button
+	// cannot wipe stage-2 purple / pressed look between click 1 and click 2.
+	try {
+		if (typeof document !== 'undefined') {
+			document.documentElement.dataset.clearNonLogStage = String(stage);
+			document.documentElement.classList.toggle('fg-clear-non-log-armed', armed);
+		}
+		if (typeof window !== 'undefined') {
+			const layoutLinks = Array.isArray(globalState.layoutLinks) ? globalState.layoutLinks : [];
+			const relCounts: Record<string, number> = {};
+			for (const link of layoutLinks) {
+				const rel = String(link?.relationship || '(none)').trim() || '(none)';
+				relCounts[rel] = (relCounts[rel] || 0) + 1;
+			}
+			(window as any).__fgClearNonLogDebug = {
+				stage: clearNonLogClickStage,
+				armed,
+				blockPrevious: clearNonLogBlockPreviousLinks,
+				layoutPreviousLinks: layoutLinks.filter((link) => isPreviousEmploymentLink(link)).length,
+				graphPreviousLinks: Array.isArray(globalState.graphData?.links)
+					? globalState.graphData.links.filter((link) => isPreviousEmploymentLink(link)).length
+					: 0,
+				layoutDashedGuess: layoutLinks.filter((link) => {
+					try {
+						return Boolean(getLinkDash(link));
+					} catch {
+						return false;
+					}
+				}).length,
+				layoutNodes: Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.length : 0,
+				graphNodes: Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes.length : 0,
+				relCounts,
+			};
+		}
+	} catch {
+		/* ignore */
+	}
 	for (const button of buttons) {
 		button.disabled = !hasLog;
 		const label = button.querySelector('.fg-sidebar-action-label');
 		if (label) label.textContent = 'Clear non-log';
 		else button.textContent = 'Clear non-log';
 		button.classList.remove('fg-clear-non-log-btn--stage-1', 'fg-clear-non-log-btn--stage-2');
-		const stage = !hasLog || clearNonLogClickStage === 1 ? 1 : 2;
 		button.dataset.clearNonLogStage = String(stage);
 		button.classList.add(stage === 1 ? 'fg-clear-non-log-btn--stage-1' : 'fg-clear-non-log-btn--stage-2');
+		// Stay selected/pressed while armed for click 2 (same idea as Clear Highlight --active).
+		button.classList.toggle('active', armed);
+		button.setAttribute('aria-pressed', armed ? 'true' : 'false');
 		if (!hasLog) {
 			button.title = 'No selection log entries to keep';
 			continue;
@@ -5454,6 +5610,8 @@ function clearNonConnectedAction(button?: HTMLButtonElement) {
 		if (button) flashSelectionLogActionButton(button, 'Empty');
 		return;
 	}
+	// Stage 1 keeps previous-employment bridges; allow those lines until click 2.
+	clearNonLogBlockPreviousLinks = false;
 	const keepIds = collectSelectionLogClearNonLogKeepIds(globalState.graphData, selectedNodesLog);
 	armClearNonLogKeepGate(keepIds);
 	pruneGraphDataToKeepIds(keepIds);
@@ -5490,7 +5648,9 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
 		return Boolean(sourceId && targetId && keepIds.has(sourceId) && keepIds.has(targetId));
 	});
-	stripPreviousEmploymentLinksAndUnreachable(logIds);
+	const stripResult = stripPreviousEmploymentLinksAndUnreachable(logIds);
+	// Keep previous lines from coming back via firm re-expand until the user intentionally expands again.
+	clearNonLogBlockPreviousLinks = true;
 	if (pruneGenerationAtStart !== clearNonLogPruneGeneration) return;
 	const afterStripIds = new Set<string>(
 		(globalState.graphData.nodes || [])
@@ -5500,6 +5660,12 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	armClearNonLogKeepGate(afterStripIds);
 	pruneGraphDataToKeepIds(afterStripIds);
 	resetFirmConnectionExpandFlagsAfterPrune(afterStripIds);
+	const strippedLines = Math.max(stripResult.removedLinkCount, stripResult.layoutPreviousLinkCount);
+	if (strippedLines > 0 || stripResult.removedNodeCount > 0) {
+		updateFetchStatus(`Cleared ${strippedLines} previous connection${strippedLines === 1 ? '' : 's'}, removed ${stripResult.removedNodeCount} node${stripResult.removedNodeCount === 1 ? '' : 's'}`);
+	} else {
+		updateFetchStatus('No previous connections to clear');
+	}
 
 	// Selected people who lost any employment-history links should no longer look selected.
 	for (const personId of selectedPeople) {
@@ -5532,6 +5698,9 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	if (button) flashSelectionLogActionButton(button, 'Step 2');
 }
 
+/** Prevents double-advance when both a legacy button listener and document delegation fire. */
+let clearNonLogCombinedActionLockUntil = 0;
+
 /**
  * Combined Clear non-log:
  * - first click = former clear-non-connected
@@ -5539,6 +5708,10 @@ function clearNonLogAction(button?: HTMLButtonElement) {
  * then reset so the next click is stage 1 again.
  */
 function clearNonLogCombinedAction(button?: HTMLButtonElement) {
+	const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+	if (now < clearNonLogCombinedActionLockUntil) return;
+	clearNonLogCombinedActionLockUntil = now + 250;
+
 	if (selectedNodesLog.length === 0) {
 		updateFetchStatus('Selection log is empty');
 		clearNonLogClickStage = 1;
@@ -5550,11 +5723,21 @@ function clearNonLogCombinedAction(button?: HTMLButtonElement) {
 	if (clearNonLogClickStage === 1) {
 		clearNonConnectedAction(button);
 		clearNonLogClickStage = 2;
+		const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+		clearNonLogStageHoldUntil = now + 4000;
 	} else {
 		clearNonLogAction(button);
 		clearNonLogClickStage = 1;
+		clearNonLogStageHoldUntil = 0;
 	}
 	syncClearNonLogButtonState();
+	// Prune/route updates can remount the React sidebar button; re-apply stage chrome after paint.
+	if (typeof requestAnimationFrame === 'function') {
+		requestAnimationFrame(() => {
+			syncClearNonLogButtonState();
+			requestAnimationFrame(() => syncClearNonLogButtonState());
+		});
+	}
 }
 
 let isSelectToKeepMode = false;
@@ -5989,10 +6172,27 @@ function closeSelectionLogClearLabelsMenu() {
 }
 
 
+/** True when the event originated from the Clear non-log control (including detached flash targets). */
+export function eventPathIncludesClearNonLogControl(event: Event): boolean {
+	const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+	if (
+		path.some(
+			(node) =>
+				node instanceof Element &&
+				Boolean(node.matches?.('[data-fg-graph-action="clear-non-log"]') || node.closest?.('[data-fg-graph-action="clear-non-log"]')),
+		)
+	) {
+		return true;
+	}
+	const target = event.target instanceof Element ? event.target : null;
+	return Boolean(target?.closest('[data-fg-graph-action="clear-non-log"]'));
+}
+
 function handleClearNonLogOutsideClick(event: MouseEvent) {
 	if (clearNonLogClickStage === 1) return;
-	const target = event.target instanceof Element ? event.target : null;
-	if (target?.closest('[data-fg-graph-action="clear-non-log"]')) return;
+	// Use composedPath: flash/prune may detach the original target mid-dispatch, so
+	// `event.target.closest(...)` falsely looks like an outside click on the same gesture.
+	if (eventPathIncludesClearNonLogControl(event)) return;
 	clearNonLogClickStage = 1;
 	syncClearNonLogButtonState();
 }
@@ -8744,20 +8944,35 @@ export function init(
 		clearHighlights();
 	});
 
+	// Delegate Clear non-log the same way — direct button listeners are lost when React remounts the sidebar.
+	// Rebind on HMR by replacing the stable window handler reference.
+	const clearNonLogDelegatedClick = (event: MouseEvent) => {
+		const target =
+			event.target instanceof Element ?
+				event.target.closest<HTMLButtonElement>('[data-fg-graph-action="clear-non-log"], [data-fg-graph-action="clear-non-connected"]')
+			:	null;
+		if (!target || target.disabled) return;
+		target.closest('details')?.removeAttribute('open');
+		clearNonLogCombinedAction(target);
+	};
+	const prevClearNonLogDelegated = (window as any).__fgClearNonLogDelegatedClick as ((event: MouseEvent) => void) | undefined;
+	if (prevClearNonLogDelegated) {
+		document.removeEventListener('click', prevClearNonLogDelegated as EventListener);
+	}
+	(window as any).__fgClearNonLogDelegatedClick = clearNonLogDelegatedClick;
+	document.addEventListener('click', clearNonLogDelegatedClick as EventListener);
+
 	const graphActionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-fg-graph-action]'));
 	graphActionButtons.forEach((button) => bindTouchDragClickSuppression(button));
 	graphActionButtons.forEach((graphActionBtn) => {
 		graphActionBtn.addEventListener('click', () => {
 			const action = graphActionBtn.dataset.fgGraphAction;
+			// clear-non-log / clear-non-connected handled by document delegation above (survives remounts).
+			if (action === 'clear-non-log' || action === 'clear-non-connected') return;
 			graphActionBtn.closest('details')?.removeAttribute('open');
 			switch (action) {
 				case 'clear':
 					clearGraphAction(graphActionBtn);
-					break;
-				case 'clear-non-log':
-				case 'clear-non-connected':
-					// Combined control: click 1 = clear-non-connected, click 2 = clear-non-log.
-					clearNonLogCombinedAction(graphActionBtn);
 					break;
 				case 'select-to-keep':
 					if (isSelectToKeepMode) {

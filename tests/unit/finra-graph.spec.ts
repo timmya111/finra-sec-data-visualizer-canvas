@@ -65,6 +65,8 @@ import {
 	upsertSelectionLogEntry,
 	pruneGraphToSelectionLogEntries,
 	collectSelectionLogClearNonLogKeepIds,
+	eventPathIncludesClearNonLogControl,
+	stripPreviousEmploymentGraph,
 	isForcedGrayConnectionLink,
 	clearSelectionState,
 	buildSessionRenderGraphData,
@@ -493,6 +495,89 @@ describe('FinraGraph DOM helpers (unit)', () => {
 
 		expect(Array.from(keepIds).sort()).toEqual(['firm:A', 'firm:B', 'person:X']);
 		expect(keepIds.has('person:leaf')).toBe(false);
+	});
+
+	it('eventPathIncludesClearNonLogControl still matches when the label span is detached mid-click', () => {
+		const button = document.createElement('button');
+		button.setAttribute('data-fg-graph-action', 'clear-non-log');
+		const label = document.createElement('span');
+		label.className = 'fg-sidebar-action-label';
+		label.textContent = 'Clear non-log';
+		button.appendChild(label);
+		document.body.appendChild(button);
+
+		const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+		Object.defineProperty(event, 'target', { configurable: true, value: label });
+		Object.defineProperty(event, 'composedPath', {
+			configurable: true,
+			value: () => [label, button, document.body, document, window],
+		});
+
+		// Simulate flashSelectionLogActionButton wiping children before outside-click runs.
+		button.textContent = 'Step 1';
+		expect(label.isConnected).toBe(false);
+		expect(eventPathIncludesClearNonLogControl(event)).toBe(true);
+
+		const outside = new MouseEvent('click', { bubbles: true, cancelable: true });
+		Object.defineProperty(outside, 'target', { configurable: true, value: document.body });
+		Object.defineProperty(outside, 'composedPath', {
+			configurable: true,
+			value: () => [document.body, document, window],
+		});
+		expect(eventPathIncludesClearNonLogControl(outside)).toBe(false);
+		button.remove();
+	});
+
+	it('stripPreviousEmploymentGraph drops previous lines and nodes only reachable through them', () => {
+		// Two logged people share current firm F; each also has a previous-only firm leaf.
+		// Stage-1 keep set would retain F as a bridge; stage-2 must remove previous leaves/lines
+		// while keeping the current bridge.
+		const graphData = {
+			nodes: [
+				{ id: 'person:L1', group: 'individual' },
+				{ id: 'person:L2', group: 'individual' },
+				{ id: 'firm:F', group: 'firm' },
+				{ id: 'firm:old1', group: 'firm' },
+				{ id: 'firm:old2', group: 'firm' },
+			],
+			links: [
+				{ source: 'person:L1', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:L2', target: 'firm:F', relationship: 'employed_by' },
+				{ source: 'person:L1', target: 'firm:old1', relationship: 'previous_employed_by' },
+				{ source: 'person:L2', target: 'firm:old2', relationship: 'previous_employed_by', isCurrent: false },
+			],
+		} as any;
+
+		const logIds = new Set(['person:L1', 'person:L2']);
+		const stripped = stripPreviousEmploymentGraph(graphData, logIds);
+
+		expect(stripped.removedLinkCount).toBe(2);
+		expect(stripped.removedNodeCount).toBe(2);
+		expect(stripped.nodes.map((n) => n.id).sort()).toEqual(['firm:F', 'person:L1', 'person:L2']);
+		expect(stripped.links.every((l) => String(l.relationship) === 'employed_by')).toBe(true);
+		expect(stripped.links).toHaveLength(2);
+	});
+
+	it('stripPreviousEmploymentGraph keeps logged previous firms but removes the previous lines', () => {
+		// Logged previous firm stays as a terminal; the previous line to an unlogged person path is gone,
+		// and an unclicked previous-only coworker leaf drops.
+		const graphData = {
+			nodes: [
+				{ id: 'person:L1', group: 'individual' },
+				{ id: 'firm:old', group: 'firm' },
+				{ id: 'person:leaf', group: 'individual' },
+			],
+			links: [
+				{ source: 'person:L1', target: 'firm:old', relationship: 'previous_employed_by' },
+				{ source: 'person:leaf', target: 'firm:old', relationship: 'previous_employed_by' },
+			],
+		} as any;
+
+		const stripped = stripPreviousEmploymentGraph(graphData, new Set(['person:L1', 'firm:old']));
+		expect(stripped.nodes.map((n) => n.id).sort()).toEqual(['firm:old', 'person:L1']);
+		expect(stripped.links).toHaveLength(0);
+		expect(stripped.removedLinkCount).toBe(2);
+		expect(stripped.removedNodeCount).toBe(1);
 	});
 
 	it('ensureSidebarHintContent adds placeholder when empty', () => {
