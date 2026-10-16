@@ -14,6 +14,7 @@ import {
 } from "@/lib/ownerReferenceIndex";
 import { hasFirmSourceCoverage } from "@/lib/sourceTruth";
 import { rememberInventoryEntities } from "@/lib/crdInventorySidecar";
+import { getFirmConnectionsFromGraph } from "@/lib/graphConnections";
 
 // Allow ISR for firm API responses to reduce SSR load and repeated upstream
 // external fetches. Cache for 1 hour by default; individual callers can use
@@ -1006,6 +1007,20 @@ export async function GET(
 
     // Queue background hydration of the external API to ensure cache stays hydrated
     queueHydration("firm", id);
+
+    // Cache firm people roster as part of firm load. Incomplete Redis snapshots
+    // (e.g. prod-dashboard-api 2+3 for 127145) expand via official firm= search when
+    // computeIfMissing is set; write only adds new CRDs. Skip enrichment so firm
+    // detail latency is not blocked on individual Redis GETs.
+    void getFirmConnectionsFromGraph(id, {
+      computeIfMissing: true,
+      skipEnrichment: true,
+    }).catch((err: any) => {
+      logger.warn("failed to ensure firm-connections cache on firm detail", {
+        id,
+        error: err?.message || String(err),
+      });
+    });
 
     // Do not auto-create non-live-crds for owners discovered on this firm page.
     // Those keys are only written when that individual's own detail page resolves as non-live.

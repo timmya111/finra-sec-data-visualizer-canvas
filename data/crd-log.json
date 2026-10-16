@@ -1,6 +1,10 @@
 {
   "firms": [
     {
+      "id": 127145,
+      "name": "SOWELL MANAGEMENT"
+    },
+    {
       "id": 13302,
       "name": "AEGON USA SECURITIES INC."
     },
@@ -2398,6 +2402,10 @@
     }
   ],
   "individuals": [
+    {
+      "id": 8354489,
+      "name": "Antonio Joao Adao"
+    },
     {
       "id": 1634071,
       "name": "LOUIS LORENZO EASTMAN"

@@ -1281,6 +1281,62 @@ async function persistFirmConnections(
   }
 }
 
+function firmConnectionIdSet(payload: FirmConnectionsPayload | null | undefined): Set<string> {
+  const ids = new Set<string>();
+  if (!payload) return ids;
+  for (const entry of [
+    ...(payload.currentConnections || []),
+    ...(payload.previousConnections || []),
+  ]) {
+    const id = connectionEntryId(entry);
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/**
+ * Incomplete crawl / dashboard-primed Redis (or disk) rosters must still expand when the
+ * caller asked for miss backfill (`computeIfMissing`) and the roster is not already the
+ * official FINRA/SEC firm= search result. Persist only when new person CRDs appear.
+ */
+async function mergeOfficialIntoExistingFirmConnections(opts: {
+  existing: FirmConnectionsPayload;
+  localExtras?: FirmConnectionsPayload | null;
+  firmId: string;
+  cacheKey: string;
+  emptyCacheKey: string;
+  localPath: string;
+}): Promise<FirmConnectionsPayload> {
+  const { existing, localExtras, firmId, cacheKey, emptyCacheKey, localPath } = opts;
+  if (isOfficialFirmRoster(existing)) return existing;
+
+  const official = await fetchOfficialFirmRoster(firmId).catch(() => null);
+  if (!official || countFirmConnectionEntries(official) === 0) return existing;
+
+  const beforeIds = firmConnectionIdSet(existing);
+  const beforeCount = countFirmConnectionEntries(existing);
+  const merged = mergeGraphConnectionEntries([
+    official.currentConnections || [],
+    official.previousConnections || [],
+    existing.currentConnections || [],
+    existing.previousConnections || [],
+    localExtras?.currentConnections || [],
+    localExtras?.previousConnections || [],
+  ]);
+  const result: FirmConnectionsPayload = {
+    ...merged,
+    source: OFFICIAL_FIRM_ROSTER_SOURCE,
+    officialTotals: official.officialTotals,
+    fetchedAt: official.fetchedAt,
+  };
+  const afterCount = countFirmConnectionEntries(result);
+  const addedNew = [...firmConnectionIdSet(result)].some((id) => !beforeIds.has(id));
+  if (addedNew || afterCount > beforeCount) {
+    await persistFirmConnections(result, cacheKey, emptyCacheKey, localPath, firmId);
+  }
+  return result;
+}
+
 // Unwraps the raw cached finra:individual:<crd>/sec:individual:<crd> payload, which is stored
 // as the FINRA/SEC search API's response envelope ({hits:{hits:[{_source:{content:"..."}}]}})
 // rather than a flat detail object — mirrors parseDetailPayload() in the individual detail route.
@@ -1651,10 +1707,24 @@ export async function getFirmConnectionsFromGraph(
   // graph expand may backfill that key from scripts (`computeIfMissing`), but they must
   // not add people to the dashboard or sidebar on their own.
   if (redisRoster && countFirmConnectionEntries(redisRoster) > 0) {
+    // Incomplete prod-dashboard / crawl rosters (any non-empty key) used to early-return
+    // and never call official firm= search — e.g. 127145 stuck at 2+3 while SEC has ~268.
+    let roster = redisRoster;
+    if (options?.computeIfMissing && !isOfficialFirmRoster(redisRoster)) {
+      roster = await mergeOfficialIntoExistingFirmConnections({
+        existing: redisRoster,
+        localExtras: local.payload,
+        firmId: normalizedFirmId,
+        cacheKey,
+        emptyCacheKey,
+        localPath: local.path,
+      });
+    }
+
     // Gzip search-sidecar hydration is cheap (no Redis GETs). light=1 still uses it; only
     // the Redis individual-detail enrichment pass below is skipped.
     const sidecarHydrated = await hydrateFirmConnectionsFromSearchSidecar(
-      redisRoster,
+      roster,
       normalizedFirmId,
     );
     if (skipEnrichment || isRedisCacheOnly()) return sidecarHydrated;
@@ -1687,8 +1757,19 @@ export async function getFirmConnectionsFromGraph(
   }
 
   // Cache-only / Redis miss: serve local firm-connections disk file for display.
+  // Same official expand when the disk file is a thin non-official snapshot.
   if (local.payload && countFirmConnectionEntries(local.payload) > 0) {
-    return hydrateFirmConnectionsFromSearchSidecar(local.payload, normalizedFirmId);
+    let diskRoster = local.payload;
+    if (options?.computeIfMissing && !isOfficialFirmRoster(local.payload)) {
+      diskRoster = await mergeOfficialIntoExistingFirmConnections({
+        existing: local.payload,
+        firmId: normalizedFirmId,
+        cacheKey,
+        emptyCacheKey,
+        localPath: local.path,
+      });
+    }
+    return hydrateFirmConnectionsFromSearchSidecar(diskRoster, normalizedFirmId);
   }
 
   if (!options?.computeIfMissing) {

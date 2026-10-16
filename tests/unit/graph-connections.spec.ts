@@ -59,6 +59,9 @@ import {
 	preferRicherPersonName,
 	upsertIndividualIntoEmployerFirmConnections,
 } from '@/lib/graphConnections';
+import { fetchOfficialFirmRoster, OFFICIAL_FIRM_ROSTER_SOURCE } from '@/lib/officialFirmRoster';
+
+const fetchOfficialFirmRosterMock = vi.mocked(fetchOfficialFirmRoster);
 
 describe('firm connection merge and cache', () => {
 	beforeEach(() => {
@@ -68,6 +71,8 @@ describe('firm connection merge and cache', () => {
 		mockRedis.get.mockResolvedValue(null);
 		mockRedis.mget.mockResolvedValue([]);
 		setStringIfValid.mockClear();
+		fetchOfficialFirmRosterMock.mockReset();
+		fetchOfficialFirmRosterMock.mockResolvedValue(null);
 		process.env.UPSTASH_ALLOW_WRITES = '1';
 		delete process.env.REDIS_CACHE_ONLY;
 	});
@@ -154,6 +159,90 @@ describe('firm connection merge and cache', () => {
 		expect(result.currentConnections).toHaveLength(1);
 		expect(result.currentConnections[0]).toMatchObject({ individualId: '999', name: 'Curated only' });
 		expect(result.previousConnections).toHaveLength(0);
+	});
+
+	it('expands incomplete non-official Redis roster when computeIfMissing and writes only new CRDs', async () => {
+		// Synthetic CRD (no data/firm-connections disk file). Mirrors thin prod-dashboard-api
+		// snapshots like 127145 that must grow via official firm= search.
+		const firmId = '900000127';
+		mockRedis.get.mockImplementation(async (key: string) => {
+			if (key === firmConnectionsCacheKey(firmId)) {
+				return JSON.stringify({
+					source: 'prod-dashboard-api',
+					currentConnections: [
+						{ individualId: '8248056', name: 'Jessica Lynn Facey', relationship: 'Current registration', isCurrent: true },
+						{ individualId: '8354489', name: 'Antonio Joao Adao', relationship: 'Current registration', isCurrent: true },
+					],
+					previousConnections: [
+						{ individualId: '10639', name: 'DONALD GLENN BAKER', relationship: 'Previous registration', isCurrent: false },
+					],
+				});
+			}
+			return null;
+		});
+		fetchOfficialFirmRosterMock.mockResolvedValue({
+			source: OFFICIAL_FIRM_ROSTER_SOURCE,
+			officialTotals: { finra: 2, sec: 4 },
+			fetchedAt: '2026-04-01T00:00:00.000Z',
+			currentConnections: [
+				{ individualId: '8248056', name: 'Jessica Lynn Facey', relationship: 'Current registration', isCurrent: true },
+				{ individualId: '9000001', name: 'New Current', relationship: 'Current registration', isCurrent: true },
+			],
+			previousConnections: [
+				{ individualId: '10639', name: 'DONALD GLENN BAKER', relationship: 'Previous registration', isCurrent: false },
+				{ individualId: '9000002', name: 'New Previous', relationship: 'Previous registration', isCurrent: false },
+			],
+		});
+
+		const withoutBackfill = await getFirmConnectionsFromGraph(firmId, { skipEnrichment: true });
+		expect(countFirmConnectionEntries(withoutBackfill)).toBe(3);
+		expect(fetchOfficialFirmRosterMock).not.toHaveBeenCalled();
+
+		setStringIfValid.mockClear();
+		const withBackfill = await getFirmConnectionsFromGraph(firmId, {
+			computeIfMissing: true,
+			skipEnrichment: true,
+		});
+		expect(fetchOfficialFirmRosterMock).toHaveBeenCalledWith(firmId);
+		// Official adds 9000001/9000002; existing 8354489 is kept (superset merge).
+		expect(withBackfill.currentConnections.map((e) => e.individualId).sort()).toEqual([
+			'8248056',
+			'8354489',
+			'9000001',
+		]);
+		expect(withBackfill.previousConnections.map((e) => e.individualId).sort()).toEqual([
+			'10639',
+			'9000002',
+		]);
+		expect(withBackfill.source).toBe(OFFICIAL_FIRM_ROSTER_SOURCE);
+		expect(setStringIfValid).toHaveBeenCalled();
+		const written = JSON.parse(setStringIfValid.mock.calls[0][1]);
+		expect(written.source).toBe(OFFICIAL_FIRM_ROSTER_SOURCE);
+		expect(countFirmConnectionEntries(written)).toBe(5);
+	});
+
+	it('skips official expand when Redis roster is already official-search', async () => {
+		const firmId = '900000128';
+		mockRedis.get.mockImplementation(async (key: string) => {
+			if (key === firmConnectionsCacheKey(firmId)) {
+				return JSON.stringify({
+					source: OFFICIAL_FIRM_ROSTER_SOURCE,
+					officialTotals: { finra: 1, sec: 1 },
+					currentConnections: [
+						{ individualId: '1', name: 'Already Official', relationship: 'Current registration', isCurrent: true },
+					],
+					previousConnections: [],
+				});
+			}
+			return null;
+		});
+		const result = await getFirmConnectionsFromGraph(firmId, {
+			computeIfMissing: true,
+			skipEnrichment: true,
+		});
+		expect(result.currentConnections).toHaveLength(1);
+		expect(fetchOfficialFirmRosterMock).not.toHaveBeenCalled();
+		expect(setStringIfValid).not.toHaveBeenCalled();
 	});
 
 	it('hydrates Redis CRD arrays into connection entries', async () => {
