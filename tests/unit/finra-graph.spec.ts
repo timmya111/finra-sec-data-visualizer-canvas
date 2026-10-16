@@ -48,6 +48,7 @@ import {
 	scoreSearchHitCloseness,
 	normalizeDatabaseSearchQueryKey,
 	TEXT_SEARCH_FETCH_LIMIT,
+	TEXT_SEARCH_DETAIL_HYDRATION_LIMIT,
 	wasUncleanSessionExit,
 	markSessionLive,
 	markSessionCleanExit,
@@ -1902,7 +1903,9 @@ describe('FinraGraph DOM helpers (unit)', () => {
 	});
 
 	it('selectNextTextSearchHits prioritizes closest matches and skips canvas ids', () => {
-		expect(TEXT_SEARCH_FETCH_LIMIT).toBe(200);
+		expect(TEXT_SEARCH_FETCH_LIMIT).toBe(100);
+		expect(TEXT_SEARCH_DETAIL_HYDRATION_LIMIT).toBe(32);
+		expect(TEXT_SEARCH_DETAIL_HYDRATION_LIMIT).toBeLessThanOrEqual(TEXT_SEARCH_FETCH_LIMIT);
 		expect(normalizeDatabaseSearchQueryKey('  Noble ', 'People')).toBe('people::noble');
 		const hits = [
 			{ _source: { ind_source_id: '1', ind_firstname: 'Ann', ind_lastname: 'Smith' } },

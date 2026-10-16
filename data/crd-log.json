@@ -1,6 +1,34 @@
 {
   "firms": [
     {
+      "id": 142261,
+      "name": "EDGE ADVISORS, LLC"
+    },
+    {
+      "id": 297596,
+      "name": "EDGE CAPITAL GROUP, LLC"
+    },
+    {
+      "id": 8209,
+      "name": "MORGAN STANLEY & CO., INCORPORATED"
+    },
+    {
+      "id": 7560,
+      "name": "DONALDSON, LUFKIN & JENRETTE SECURITIES CORPORATION"
+    },
+    {
+      "id": 30613,
+      "name": "INVESTORS CAPITAL CORP."
+    },
+    {
+      "id": 144134,
+      "name": "EDGE CORPORATE FINANCE, LLC"
+    },
+    {
+      "id": 122258,
+      "name": "SCS CAPITAL MANAGEMENT LLC"
+    },
+    {
       "id": 14009,
       "name": "INVESTOR SERVICE CENTER, INC."
     },
@@ -115,10 +143,6 @@
     {
       "id": 5685,
       "name": "PRUCO SECURITIES, LLC."
-    },
-    {
-      "id": 8209,
-      "name": "MORGAN STANLEY & CO., INCORPORATED"
     },
     {
       "id": 19794,
@@ -399,10 +423,6 @@
     {
       "id": 14503,
       "name": "VSR FINANCIAL SERVICES, INC."
-    },
-    {
-      "id": 30613,
-      "name": "INVESTORS CAPITAL CORP."
     },
     {
       "id": 18697,
@@ -1877,10 +1897,6 @@
       "name": "A.G. BECKER PARIBAS INCORPORATED"
     },
     {
-      "id": 7560,
-      "name": "DONALDSON, LUFKIN & JENRETTE SECURITIES CORPORATION"
-    },
-    {
       "id": 4879,
       "name": "INTERPACIFIC INVESTORS SERVICES, INC."
     },
@@ -2478,6 +2494,10 @@
     }
   ],
   "individuals": [
+    {
+      "id": 2478716,
+      "name": "ANNA KATHARYN HENDRIX"
+    },
     {
       "id": 2072006,
       "name": "STEPHAN VLADIMIR STOJANOVIC"

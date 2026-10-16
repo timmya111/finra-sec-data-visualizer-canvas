@@ -932,17 +932,19 @@ const SEED_QUERY_FETCH_CONCURRENCY = 50;
 /**
  * Header Search fetches at most this many closest new matches per click.
  * Searching the same term again continues with the next matches not yet on canvas.
+ * Kept below the old 200 cap — large surnames (e.g. hendrix) were white-screening
+ * when ~200 people + employer hydration hit the canvas at once.
  */
-export const TEXT_SEARCH_FETCH_LIMIT = 200;
+export const TEXT_SEARCH_FETCH_LIMIT = 100;
 // Text-search hits are often slim (name + CRD, no employment arrays). Hydrate like
 // CRD paste import so each person lands with current employer firm(s) already linked.
-// Cap hydration at the same per-click fetch budget; keep concurrency gentle to avoid fetch/paint crashes.
-const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = TEXT_SEARCH_FETCH_LIMIT;
-const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 5;
-const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD = 24;
+// Hydrate only the closest subset per click; click a node (or search again) for more.
+export const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = 32;
+const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 3;
+const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD = 16;
 /** Progressive database-search canvas flushes: coalesce pages so a large on-screen graph is not rebuilt per hit page. */
-const SEARCH_FLUSH_MIN_INTERVAL_MS = 280;
-const SEARCH_FLUSH_NODE_THRESHOLD = 36;
+const SEARCH_FLUSH_MIN_INTERVAL_MS = 320;
+const SEARCH_FLUSH_NODE_THRESHOLD = 24;
 /** Last normalized header Search query — used to detect repeat searches for "next page" messaging. */
 let lastDatabaseSearchQueryKey = '';
 /** Shared-selection / canvas import hydration chunk size. */
@@ -10019,7 +10021,7 @@ export function init(
 						}
 					});
 				} else if (isNameList) {
-					// Share the 200-new-hit budget across comma-separated names; skip ids already on canvas.
+					// Share the per-click new-hit budget across comma-separated names; skip ids already on canvas.
 					const sharedSkipIds = getCanvasSkipIds();
 					let remainingBudget = MAX_TEXT_SEARCH_HITS;
 					for (let nameSearchIndex = 0; nameSearchIndex < nameListTokens.length; nameSearchIndex += 1) {
@@ -10108,7 +10110,13 @@ export function init(
 							}
 						};
 
-						updateFetchStatus(`Linking employers for ${textSearchHydrationTargets.length} search hit${textSearchHydrationTargets.length === 1 ? '' : 's'}…`);
+						const hydrateCapNote =
+							textSearchHydrationCandidates.length > textSearchHydrationTargets.length ?
+								` (closest ${textSearchHydrationTargets.length} of ${textSearchHydrationCandidates.length})`
+							:	'';
+						updateFetchStatus(
+							`Linking employers for ${textSearchHydrationTargets.length} search hit${textSearchHydrationTargets.length === 1 ? '' : 's'}${hydrateCapNote}…`,
+						);
 						await mapWithConcurrency(textSearchHydrationTargets, TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY, async (target) => {
 							const targetId = String(target.nodeId || '').trim();
 							if (!targetId) return null;
