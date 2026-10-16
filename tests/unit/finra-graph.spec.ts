@@ -739,6 +739,33 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(html).not.toContain('FINRA Summary');
 	});
 
+	it('renderFirmDetail omits FINRA links for Fisher Investments even when API left finraDocumentLinks', () => {
+		// CRD 107342 — SEC-only; Redis may still have a finra:firm envelope that used to
+		// attach BrokerCheck links despite hasFinraData:false.
+		const html = renderFirmDetail({
+			id: 'firm:107342',
+			firmId: '107342',
+			label: 'FISHER INVESTMENTS',
+			group: 'firm',
+			hasFinraData: false,
+			hasSecData: true,
+			iaScope: 'ACTIVE',
+			iaSecNumber: '29362',
+			suppressedExternalLinks: ['finra'],
+			finraDocumentLinks: [
+				{ label: 'FINRA BrokerCheck Summary', href: 'https://brokercheck.finra.org/firm/summary/107342' },
+				{ label: 'FINRA Firm Detail (BrokerCheck)', href: 'https://brokercheck.finra.org/firm/summary/107342' },
+			],
+			secDocumentLinks: [{ label: 'SEC AdvisorInfo Summary', href: 'https://adviserinfo.sec.gov/firm/summary/107342' }],
+			basicInformation: { firmId: 107342, firmName: 'FISHER INVESTMENTS', iaScope: 'ACTIVE', isIAFirm: 'Y', iaSECNumber: '29362' },
+		} as any);
+
+		expect(html).toContain('SEC AdvisorInfo Summary');
+		expect(html).not.toContain('brokercheck.finra.org/firm/summary/107342');
+		expect(html).not.toContain('FINRA Summary');
+		expect(html).not.toContain('FINRA BrokerCheck Summary');
+	});
+
 	it('resolves person employment links via SEC firm identifiers when CRD is absent', () => {
 		const employment = {
 			firmId: '',

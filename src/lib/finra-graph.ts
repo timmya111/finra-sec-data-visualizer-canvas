@@ -17893,6 +17893,9 @@ async function ensureFirmDetail(firmNode) {
 			if (detail.hasSecData != null) firmNode.hasSecData = detail.hasSecData;
 			if (detail.hasFinraData === false) {
 				firmNode.hasFinraData = false;
+				firmNode.finraDocumentLinks = [];
+			} else if (Array.isArray(detail.finraDocumentLinks)) {
+				firmNode.finraDocumentLinks = detail.finraDocumentLinks;
 			}
 			// If FINRA explicitly reports no firm data, persist suppression so
 			// sidebar links self-correct during normal browsing.

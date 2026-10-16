@@ -166,6 +166,8 @@ function hasFirmFinraPresence(node: any) {
 		.trim();
 	if (rawFirmId && BROKEN_FINRA_FIRM_IDS.has(rawFirmId)) return false;
 	if (isNotInScopeValue(node?.bcScope) || isNotInScopeValue(node?.basicInformation?.bcScope)) return false;
+	// Explicit API/source flag wins — SEC-only firms must not show BrokerCheck links.
+	if (node.hasFinraData === false) return false;
 	if (node.hasFinraData === true) return true;
 	if (node.isLegacy === 'Y') return true;
 	// If this firm carries a SEC '8-' identifier and we don't have explicit FINRA data,

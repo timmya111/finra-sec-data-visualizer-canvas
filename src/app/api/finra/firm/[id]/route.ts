@@ -986,14 +986,19 @@ export async function GET(
       detail.secDocumentLinks = [];
     }
 
-    // Attach FINRA BrokerCheck links when FINRA content exists so UI can render a FINRA button.
+    // Attach FINRA BrokerCheck links only when this firm actually has FINRA/BD coverage.
+    // SEC-only firms often still have a finra:firm Redis envelope (IA-shaped payload under
+    // the FINRA key) — that must not invent BrokerCheck summary links (e.g. Fisher 107342).
     try {
-      if (
-        bcDetail &&
-        (!Array.isArray(detail.finraDocumentLinks) ||
-          !detail.finraDocumentLinks.length)
-      ) {
-        detail.finraDocumentLinks = buildFinraDocumentLinks(id);
+      if (detail.hasFinraData) {
+        if (
+          !Array.isArray(detail.finraDocumentLinks) ||
+          !detail.finraDocumentLinks.length
+        ) {
+          detail.finraDocumentLinks = buildFinraDocumentLinks(id);
+        }
+      } else {
+        detail.finraDocumentLinks = [];
       }
     } catch (e) {
       // noop
