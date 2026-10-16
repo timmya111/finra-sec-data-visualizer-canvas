@@ -1294,6 +1294,23 @@ function firmConnectionIdSet(payload: FirmConnectionsPayload | null | undefined)
   return ids;
 }
 
+/** Short lock so concurrent firm-detail + connections hits do not stampede official firm=. */
+async function tryAcquireOfficialExpandLock(firmId: string): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis || !canWriteToRedis()) return true;
+  const lockKey = `firm-connections:firm:${String(firmId || "").trim()}:expanding`;
+  try {
+    // ioredis / Upstash: SET key value EX nx
+    const res = await (redis as any).set(lockKey, "1", { nx: true, ex: 120 });
+    if (res === null || res === undefined) return false;
+    if (res === "OK" || res === true || res === "1") return true;
+    // Some clients return null when NX fails
+    return Boolean(res);
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Incomplete crawl / dashboard-primed Redis (or disk) rosters must still expand when the
  * caller asked for miss backfill (`computeIfMissing`) and the roster is not already the
@@ -1309,6 +1326,7 @@ async function mergeOfficialIntoExistingFirmConnections(opts: {
 }): Promise<FirmConnectionsPayload> {
   const { existing, localExtras, firmId, cacheKey, emptyCacheKey, localPath } = opts;
   if (isOfficialFirmRoster(existing)) return existing;
+  if (!(await tryAcquireOfficialExpandLock(firmId))) return existing;
 
   const official = await fetchOfficialFirmRoster(firmId).catch(() => null);
   if (!official || countFirmConnectionEntries(official) === 0) return existing;
@@ -1829,15 +1847,19 @@ export async function getFirmConnectionsFromGraph(
     return attachConnectionDisplayFields(cachedOfficial, normalizedFirmId, redis);
   }
 
-  // Full Redis/disk miss: official firm= search (and graph compute) can exceed the
-  // Vercel function budget (prod 310632 → FUNCTION_INVOCATION_TIMEOUT). Unless the
-  // caller awaits, return empty now (connections route uses no-store for empty) and
-  // fill the roster in the background for the next request.
-  const backfillMissingRoster = async (): Promise<FirmConnectionsPayload> => {
-    const official = await fetchOfficialFirmRoster(normalizedFirmId).catch(
-      () => null,
-    );
-    if (official && countFirmConnectionEntries(official) > 0) {
+  // Full Redis/disk miss: official firm= search can exceed the Vercel function budget
+  // (prod 310632 → FUNCTION_INVOCATION_TIMEOUT). Unless the caller awaits, return empty
+  // now (connections route uses no-store for empty) and fill from official search only
+  // in the background. Never run computeFirmConnectionsFromGraph (primed/search/fullScan)
+  // inside after() — that path OOMs mega indexes on serverless.
+  const backfillMissingFromOfficial =
+    async (): Promise<FirmConnectionsPayload> => {
+      const official = await fetchOfficialFirmRoster(normalizedFirmId).catch(
+        () => null,
+      );
+      if (!official || countFirmConnectionEntries(official) === 0) {
+        return { currentConnections: [], previousConnections: [] };
+      }
       const extras = mergeGraphConnectionEntries([
         official.currentConnections || [],
         official.previousConnections || [],
@@ -1860,51 +1882,68 @@ export async function getFirmConnectionsFromGraph(
         normalizedFirmId,
       );
       return result;
-    }
-
-    const combined = mergeGraphConnectionEntries([
-      redisHit?.currentConnections || [],
-      redisHit?.previousConnections || [],
-      local.payload?.currentConnections || [],
-      local.payload?.previousConnections || [],
-    ]);
-    if (countFirmConnectionEntries(combined) > 0) {
-      return combined;
-    }
-
-    if (redis) {
-      try {
-        const emptyHit = await redis.get(emptyCacheKey);
-        if (emptyHit != null) {
-          return { currentConnections: [], previousConnections: [] };
-        }
-      } catch {
-        // fall through to compute
-      }
-    }
-
-    const computed = await computeFirmConnectionsFromGraph(normalizedFirmId);
-    await persistFirmConnections(
-      computed,
-      cacheKey,
-      emptyCacheKey,
-      local.path,
-      normalizedFirmId,
-    );
-    return computed;
-  };
+    };
 
   if (!options?.awaitOfficialExpand) {
-    scheduleBackgroundFirmConnectionsWork(backfillMissingRoster());
+    scheduleBackgroundFirmConnectionsWork(
+      (async () => {
+        if (!(await tryAcquireOfficialExpandLock(normalizedFirmId))) return;
+        await backfillMissingFromOfficial();
+      })(),
+    );
     return { currentConnections: [], previousConnections: [] };
   }
 
-  const filled = await backfillMissingRoster();
-  if (countFirmConnectionEntries(filled) === 0) {
-    return filled;
+  // Sync path (scripts / tests): official first, then the heavier graph compute.
+  const officialFilled = await backfillMissingFromOfficial();
+  if (countFirmConnectionEntries(officialFilled) > 0) {
+    if (skipEnrichment) {
+      return hydrateFirmConnectionsFromSearchSidecar(
+        officialFilled,
+        normalizedFirmId,
+      );
+    }
+    return attachConnectionDisplayFields(
+      officialFilled,
+      normalizedFirmId,
+      redis,
+    );
   }
+
+  const combined = mergeGraphConnectionEntries([
+    redisHit?.currentConnections || [],
+    redisHit?.previousConnections || [],
+    local.payload?.currentConnections || [],
+    local.payload?.previousConnections || [],
+  ]);
+  if (countFirmConnectionEntries(combined) > 0) {
+    if (skipEnrichment) {
+      return hydrateFirmConnectionsFromSearchSidecar(combined, normalizedFirmId);
+    }
+    return attachConnectionDisplayFields(combined, normalizedFirmId, redis);
+  }
+
+  if (redis) {
+    try {
+      const emptyHit = await redis.get(emptyCacheKey);
+      if (emptyHit != null) {
+        return { currentConnections: [], previousConnections: [] };
+      }
+    } catch {
+      // fall through to compute
+    }
+  }
+
+  const computed = await computeFirmConnectionsFromGraph(normalizedFirmId);
+  await persistFirmConnections(
+    computed,
+    cacheKey,
+    emptyCacheKey,
+    local.path,
+    normalizedFirmId,
+  );
   if (skipEnrichment) {
-    return hydrateFirmConnectionsFromSearchSidecar(filled, normalizedFirmId);
+    return hydrateFirmConnectionsFromSearchSidecar(computed, normalizedFirmId);
   }
-  return attachConnectionDisplayFields(filled, normalizedFirmId, redis);
+  return attachConnectionDisplayFields(computed, normalizedFirmId, redis);
 }
