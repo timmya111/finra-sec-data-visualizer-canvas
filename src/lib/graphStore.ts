@@ -5,6 +5,7 @@ import type { Redis } from '@upstash/redis';
  * Shared by /api/finra/graph, /expand, /nodes-by-ids, /graph-search, /graph-append
  */
 import { readFile, writeFile, access, mkdir, rename, unlink, constants } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -535,7 +536,17 @@ async function ensureGraphFileFromCache() {
 
 	_graphBootstrapPromise = (async () => {
 		try {
-			const scriptPath = path.join(process.cwd(), 'scripts', 'build_graph_from_cache.js');
+			// Script lives under `.local/scripts/` in this repo; older path was `scripts/`.
+			// On Vercel neither ships in the function bundle — skip quietly. The live graph
+			// is session/API driven; a missing mono `finra-graph.json` is not fatal.
+			const scriptCandidates = [
+				path.join(process.cwd(), '.local', 'scripts', 'build_graph_from_cache.js'),
+				path.join(process.cwd(), 'scripts', 'build_graph_from_cache.js'),
+			];
+			const scriptPath = scriptCandidates.find((candidate) => existsSync(candidate));
+			if (!scriptPath) {
+				return false;
+			}
 			const scriptArgs = [scriptPath, '--employment-scope', 'current', '--no-redis'];
 			if (shouldForceFullRebuild) scriptArgs.push('--full');
 			await execFileAsync(process.execPath, scriptArgs, {
