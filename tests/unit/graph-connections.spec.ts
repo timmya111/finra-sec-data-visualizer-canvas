@@ -194,8 +194,12 @@ describe('firm connection merge and cache', () => {
 			],
 		});
 
-		const withoutBackfill = await getFirmConnectionsFromGraph(firmId, { skipEnrichment: true });
+		const withoutBackfill = await getFirmConnectionsFromGraph(firmId, {
+			computeIfMissing: true,
+			skipEnrichment: true,
+		});
 		expect(countFirmConnectionEntries(withoutBackfill)).toBe(3);
+		// Connections-style computeIfMissing alone must not start official firm=.
 		expect(fetchOfficialFirmRosterMock).not.toHaveBeenCalled();
 
 		setStringIfValid.mockClear();
@@ -203,6 +207,7 @@ describe('firm connection merge and cache', () => {
 			computeIfMissing: true,
 			skipEnrichment: true,
 			awaitOfficialExpand: true,
+			backgroundOfficialExpand: true,
 		});
 		expect(fetchOfficialFirmRosterMock).toHaveBeenCalledWith(firmId);
 		// Official adds 9000001/9000002; existing 8354489 is kept (superset merge).

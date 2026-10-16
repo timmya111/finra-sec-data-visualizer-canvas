@@ -1689,22 +1689,27 @@ export async function findIndividualInFirmConnections(
   return { entry, firmId: parentId };
 }
 
-function scheduleBackgroundFirmConnectionsWork(work: Promise<unknown>): void {
+function scheduleBackgroundFirmConnectionsWork(
+  work: Promise<unknown> | (() => Promise<unknown>),
+): void {
   // Prefer Next.js after() so serverless keeps the expand alive past the response.
+  // Pass a thunk when possible so official firm= does not start until after the
+  // response is sent (starting the promise eagerly contended with the request).
   // Outside a request (scripts/tests) after() throws — fall back to fire-and-forget.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { after } = require("next/server") as {
-      after?: (task: Promise<unknown> | (() => Promise<unknown>)) => void;
+      after?: (task: Promise<unknown> | (() => void | Promise<unknown>)) => void;
     };
     if (typeof after === "function") {
-      after(work);
+      after(typeof work === "function" ? work : () => work);
       return;
     }
   } catch {
     // not in a Next request context
   }
-  void work.catch(() => {});
+  const promise = typeof work === "function" ? work() : work;
+  void promise.catch(() => {});
 }
 
 export async function getFirmConnectionsFromGraph(
@@ -1714,6 +1719,12 @@ export async function getFirmConnectionsFromGraph(
     skipEnrichment?: boolean;
     /** Await official firm= expand even when a non-empty non-official roster already exists. Default false (background) so prod does not 504. */
     awaitOfficialExpand?: boolean;
+    /**
+     * When a non-empty non-official roster already exists, schedule official firm=
+     * expand after the response. Connections GET should leave this false — only firm
+     * detail ensure should set it — so listing people never pays for firm= search.
+     */
+    backgroundOfficialExpand?: boolean;
   },
 ): Promise<FirmConnectionsPayload> {
   const normalizedFirmId = String(firmId || "").trim();
@@ -1753,19 +1764,26 @@ export async function getFirmConnectionsFromGraph(
     // Official firm= can take >60s (504 on Vercel). Serve the cached roster now and expand
     // in the background unless the caller explicitly awaits (scripts / unit tests).
     let roster = redisRoster;
-    if (options?.computeIfMissing && !isOfficialFirmRoster(redisRoster)) {
-      const expand = mergeOfficialIntoExistingFirmConnections({
+    // Incomplete non-official expand is opt-in (firm detail ensure). Connections GET
+    // with only computeIfMissing must return the cached roster and never start firm=.
+    if (
+      !isOfficialFirmRoster(redisRoster) &&
+      (options?.awaitOfficialExpand || options?.backgroundOfficialExpand)
+    ) {
+      const expandOpts = {
         existing: redisRoster,
         localExtras: local.payload,
         firmId: normalizedFirmId,
         cacheKey,
         emptyCacheKey,
         localPath: local.path,
-      });
+      };
       if (options?.awaitOfficialExpand) {
-        roster = await expand;
+        roster = await mergeOfficialIntoExistingFirmConnections(expandOpts);
       } else {
-        scheduleBackgroundFirmConnectionsWork(expand);
+        scheduleBackgroundFirmConnectionsWork(() =>
+          mergeOfficialIntoExistingFirmConnections(expandOpts),
+        );
       }
     }
 
@@ -1808,18 +1826,23 @@ export async function getFirmConnectionsFromGraph(
   // Same official expand when the disk file is a thin non-official snapshot.
   if (local.payload && countFirmConnectionEntries(local.payload) > 0) {
     let diskRoster = local.payload;
-    if (options?.computeIfMissing && !isOfficialFirmRoster(local.payload)) {
-      const expand = mergeOfficialIntoExistingFirmConnections({
+    if (
+      !isOfficialFirmRoster(local.payload) &&
+      (options?.awaitOfficialExpand || options?.backgroundOfficialExpand)
+    ) {
+      const expandOpts = {
         existing: local.payload,
         firmId: normalizedFirmId,
         cacheKey,
         emptyCacheKey,
         localPath: local.path,
-      });
+      };
       if (options?.awaitOfficialExpand) {
-        diskRoster = await expand;
+        diskRoster = await mergeOfficialIntoExistingFirmConnections(expandOpts);
       } else {
-        scheduleBackgroundFirmConnectionsWork(expand);
+        scheduleBackgroundFirmConnectionsWork(() =>
+          mergeOfficialIntoExistingFirmConnections(expandOpts),
+        );
       }
     }
     return hydrateFirmConnectionsFromSearchSidecar(diskRoster, normalizedFirmId);
@@ -1885,12 +1908,10 @@ export async function getFirmConnectionsFromGraph(
     };
 
   if (!options?.awaitOfficialExpand) {
-    scheduleBackgroundFirmConnectionsWork(
-      (async () => {
-        if (!(await tryAcquireOfficialExpandLock(normalizedFirmId))) return;
-        await backfillMissingFromOfficial();
-      })(),
-    );
+    scheduleBackgroundFirmConnectionsWork(async () => {
+      if (!(await tryAcquireOfficialExpandLock(normalizedFirmId))) return;
+      await backfillMissingFromOfficial();
+    });
     return { currentConnections: [], previousConnections: [] };
   }
 

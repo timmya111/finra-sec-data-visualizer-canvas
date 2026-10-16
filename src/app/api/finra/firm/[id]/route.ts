@@ -1015,6 +1015,7 @@ export async function GET(
     void getFirmConnectionsFromGraph(id, {
       computeIfMissing: true,
       skipEnrichment: true,
+      backgroundOfficialExpand: true,
     }).catch((err: any) => {
       logger.warn("failed to ensure firm-connections cache on firm detail", {
         id,
