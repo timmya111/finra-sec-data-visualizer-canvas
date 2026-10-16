@@ -60,7 +60,6 @@ function bindTouchDragClickSuppression(button: HTMLElement | null) {
 			if (event.pointerType !== 'touch') return;
 			activePointerId = event.pointerId;
 			startX = event.clientX;
-			c;
 			startY = event.clientY;
 		},
 		{ passive: true },
