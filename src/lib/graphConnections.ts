@@ -1671,9 +1671,32 @@ export async function findIndividualInFirmConnections(
   return { entry, firmId: parentId };
 }
 
+function scheduleBackgroundFirmConnectionsWork(work: Promise<unknown>): void {
+  // Prefer Next.js after() so serverless keeps the expand alive past the response.
+  // Outside a request (scripts/tests) after() throws — fall back to fire-and-forget.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { after } = require("next/server") as {
+      after?: (task: Promise<unknown> | (() => Promise<unknown>)) => void;
+    };
+    if (typeof after === "function") {
+      after(work);
+      return;
+    }
+  } catch {
+    // not in a Next request context
+  }
+  void work.catch(() => {});
+}
+
 export async function getFirmConnectionsFromGraph(
   firmId: string,
-  options?: { computeIfMissing?: boolean; skipEnrichment?: boolean },
+  options?: {
+    computeIfMissing?: boolean;
+    skipEnrichment?: boolean;
+    /** Await official firm= expand even when a non-empty non-official roster already exists. Default false (background) so prod does not 504. */
+    awaitOfficialExpand?: boolean;
+  },
 ): Promise<FirmConnectionsPayload> {
   const normalizedFirmId = String(firmId || "").trim();
   if (!normalizedFirmId)
@@ -1709,9 +1732,11 @@ export async function getFirmConnectionsFromGraph(
   if (redisRoster && countFirmConnectionEntries(redisRoster) > 0) {
     // Incomplete prod-dashboard / crawl rosters (any non-empty key) used to early-return
     // and never call official firm= search — e.g. 127145 stuck at 2+3 while SEC has ~268.
+    // Official firm= can take >60s (504 on Vercel). Serve the cached roster now and expand
+    // in the background unless the caller explicitly awaits (scripts / unit tests).
     let roster = redisRoster;
     if (options?.computeIfMissing && !isOfficialFirmRoster(redisRoster)) {
-      roster = await mergeOfficialIntoExistingFirmConnections({
+      const expand = mergeOfficialIntoExistingFirmConnections({
         existing: redisRoster,
         localExtras: local.payload,
         firmId: normalizedFirmId,
@@ -1719,6 +1744,11 @@ export async function getFirmConnectionsFromGraph(
         emptyCacheKey,
         localPath: local.path,
       });
+      if (options?.awaitOfficialExpand) {
+        roster = await expand;
+      } else {
+        scheduleBackgroundFirmConnectionsWork(expand);
+      }
     }
 
     // Gzip search-sidecar hydration is cheap (no Redis GETs). light=1 still uses it; only
@@ -1761,13 +1791,18 @@ export async function getFirmConnectionsFromGraph(
   if (local.payload && countFirmConnectionEntries(local.payload) > 0) {
     let diskRoster = local.payload;
     if (options?.computeIfMissing && !isOfficialFirmRoster(local.payload)) {
-      diskRoster = await mergeOfficialIntoExistingFirmConnections({
+      const expand = mergeOfficialIntoExistingFirmConnections({
         existing: local.payload,
         firmId: normalizedFirmId,
         cacheKey,
         emptyCacheKey,
         localPath: local.path,
       });
+      if (options?.awaitOfficialExpand) {
+        diskRoster = await expand;
+      } else {
+        scheduleBackgroundFirmConnectionsWork(expand);
+      }
     }
     return hydrateFirmConnectionsFromSearchSidecar(diskRoster, normalizedFirmId);
   }
@@ -1794,81 +1829,82 @@ export async function getFirmConnectionsFromGraph(
     return attachConnectionDisplayFields(cachedOfficial, normalizedFirmId, redis);
   }
 
-  // Incomplete crawl/primed collections are not the roster. Refresh from the
-  // official FINRA/SEC individual-by-firm search and store the result in the
-  // firm-connections collection the UI already reads.
-  const official = await fetchOfficialFirmRoster(normalizedFirmId).catch(
-    () => null,
-  );
-  if (official && countFirmConnectionEntries(official) > 0) {
-    // A connection can also exist purely because an individual's own detail record lists
-    // this firm CRD as a current/previous employer, even if the official firm-roster search
-    // (which can be incomplete/paginated/rate-limited) didn't surface that person. The mono
-    // graph store's employed_by links were previously merged in here as a superset source but
-    // have been removed — validation now comes exclusively from each individual's own cached
-    // employment history via enrichConnectionEntriesFromIndividualCache elsewhere in this file.
-    const extras = mergeGraphConnectionEntries([
-      official.currentConnections || [],
-      official.previousConnections || [],
+  // Full Redis/disk miss: official firm= search (and graph compute) can exceed the
+  // Vercel function budget (prod 310632 → FUNCTION_INVOCATION_TIMEOUT). Unless the
+  // caller awaits, return empty now (connections route uses no-store for empty) and
+  // fill the roster in the background for the next request.
+  const backfillMissingRoster = async (): Promise<FirmConnectionsPayload> => {
+    const official = await fetchOfficialFirmRoster(normalizedFirmId).catch(
+      () => null,
+    );
+    if (official && countFirmConnectionEntries(official) > 0) {
+      const extras = mergeGraphConnectionEntries([
+        official.currentConnections || [],
+        official.previousConnections || [],
+        redisHit?.currentConnections || [],
+        redisHit?.previousConnections || [],
+        local.payload?.currentConnections || [],
+        local.payload?.previousConnections || [],
+      ]);
+      const result: FirmConnectionsPayload = {
+        ...extras,
+        source: OFFICIAL_FIRM_ROSTER_SOURCE,
+        officialTotals: official.officialTotals,
+        fetchedAt: official.fetchedAt,
+      };
+      await persistFirmConnections(
+        result,
+        cacheKey,
+        emptyCacheKey,
+        local.path,
+        normalizedFirmId,
+      );
+      return result;
+    }
+
+    const combined = mergeGraphConnectionEntries([
       redisHit?.currentConnections || [],
       redisHit?.previousConnections || [],
       local.payload?.currentConnections || [],
       local.payload?.previousConnections || [],
     ]);
-    const result: FirmConnectionsPayload = {
-      ...extras,
-      source: OFFICIAL_FIRM_ROSTER_SOURCE,
-      officialTotals: official.officialTotals,
-      fetchedAt: official.fetchedAt,
-    };
+    if (countFirmConnectionEntries(combined) > 0) {
+      return combined;
+    }
+
+    if (redis) {
+      try {
+        const emptyHit = await redis.get(emptyCacheKey);
+        if (emptyHit != null) {
+          return { currentConnections: [], previousConnections: [] };
+        }
+      } catch {
+        // fall through to compute
+      }
+    }
+
+    const computed = await computeFirmConnectionsFromGraph(normalizedFirmId);
     await persistFirmConnections(
-      result,
+      computed,
       cacheKey,
       emptyCacheKey,
       local.path,
       normalizedFirmId,
     );
-    if (skipEnrichment) {
-      return hydrateFirmConnectionsFromSearchSidecar(result, normalizedFirmId);
-    }
-    return attachConnectionDisplayFields(result, normalizedFirmId, redis);
+    return computed;
+  };
+
+  if (!options?.awaitOfficialExpand) {
+    scheduleBackgroundFirmConnectionsWork(backfillMissingRoster());
+    return { currentConnections: [], previousConnections: [] };
   }
 
-  const combined = mergeGraphConnectionEntries([
-    redisHit?.currentConnections || [],
-    redisHit?.previousConnections || [],
-    local.payload?.currentConnections || [],
-    local.payload?.previousConnections || [],
-  ]);
-
-  if (countFirmConnectionEntries(combined) > 0) {
-    if (skipEnrichment) {
-      return hydrateFirmConnectionsFromSearchSidecar(combined, normalizedFirmId);
-    }
-    return attachConnectionDisplayFields(combined, normalizedFirmId, redis);
+  const filled = await backfillMissingRoster();
+  if (countFirmConnectionEntries(filled) === 0) {
+    return filled;
   }
-
-  if (redis) {
-    try {
-      const emptyHit = await redis.get(emptyCacheKey);
-      if (emptyHit != null) {
-        return { currentConnections: [], previousConnections: [] };
-      }
-    } catch {
-      // fall through to compute
-    }
-  }
-
-  const computed = await computeFirmConnectionsFromGraph(normalizedFirmId);
-  await persistFirmConnections(
-    computed,
-    cacheKey,
-    emptyCacheKey,
-    local.path,
-    normalizedFirmId,
-  );
   if (skipEnrichment) {
-    return hydrateFirmConnectionsFromSearchSidecar(computed, normalizedFirmId);
+    return hydrateFirmConnectionsFromSearchSidecar(filled, normalizedFirmId);
   }
-  return attachConnectionDisplayFields(computed, normalizedFirmId, redis);
+  return attachConnectionDisplayFields(filled, normalizedFirmId, redis);
 }

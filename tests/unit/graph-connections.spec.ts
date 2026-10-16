@@ -202,6 +202,7 @@ describe('firm connection merge and cache', () => {
 		const withBackfill = await getFirmConnectionsFromGraph(firmId, {
 			computeIfMissing: true,
 			skipEnrichment: true,
+			awaitOfficialExpand: true,
 		});
 		expect(fetchOfficialFirmRosterMock).toHaveBeenCalledWith(firmId);
 		// Official adds 9000001/9000002; existing 8354489 is kept (superset merge).
@@ -219,6 +220,46 @@ describe('firm connection merge and cache', () => {
 		const written = JSON.parse(setStringIfValid.mock.calls[0][1]);
 		expect(written.source).toBe(OFFICIAL_FIRM_ROSTER_SOURCE);
 		expect(countFirmConnectionEntries(written)).toBe(5);
+	});
+
+	it('returns incomplete Redis roster immediately and does not block on official expand by default', async () => {
+		const firmId = '900000129';
+		mockRedis.get.mockImplementation(async (key: string) => {
+			if (key === firmConnectionsCacheKey(firmId)) {
+				return JSON.stringify({
+					source: 'prod-dashboard-api',
+					currentConnections: [
+						{ individualId: '1', name: 'Thin', relationship: 'Current registration', isCurrent: true },
+					],
+					previousConnections: [],
+				});
+			}
+			return null;
+		});
+		let resolveOfficial: (value: any) => void = () => {};
+		fetchOfficialFirmRosterMock.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveOfficial = resolve;
+				}),
+		);
+		const result = await getFirmConnectionsFromGraph(firmId, {
+			computeIfMissing: true,
+			skipEnrichment: true,
+		});
+		expect(result.currentConnections).toHaveLength(1);
+		expect(result.currentConnections[0].individualId).toBe('1');
+		// Expand may be scheduled; do not leave the hanging promise forever.
+		resolveOfficial({
+			source: OFFICIAL_FIRM_ROSTER_SOURCE,
+			officialTotals: { finra: 0, sec: 1 },
+			fetchedAt: '2026-04-01T00:00:00.000Z',
+			currentConnections: [
+				{ individualId: '2', name: 'Later', relationship: 'Current registration', isCurrent: true },
+			],
+			previousConnections: [],
+		});
+		await Promise.resolve();
 	});
 
 	it('skips official expand when Redis roster is already official-search', async () => {
