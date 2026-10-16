@@ -2705,11 +2705,58 @@ const LS_FIRMS_BOLD_KEY = 'finra_firms_bold';
 const SIDEBAR_VIEW_MODE_STORAGE_KEY = 'finra_sidebar_view_mode';
 const SESSION_RESTORE_SLOW_MS = 7000;
 const SESSION_RESTORE_MODE_KEY = 'fg_restore_mode';
+/**
+ * Paint restored session nodes in batches after Continue. A single full renderGraph of a large
+ * saved canvas climbs RSS and often freezes/crashes the tab on crash-recovery.
+ */
+export const SESSION_RESTORE_NODE_CHUNK_SIZE = 64;
+/** Above this, skip the final deep-copy renderGraph rebuild — layout is already painted via appends. */
+const SESSION_RESTORE_FULL_REBUILD_MAX_NODES = 400;
 /** Set while a graph session is live; cleared on clean pagehide. Surviving a reload means crash/unclean exit. */
 const SESSION_DIRTY_KEY = 'fg_session_dirty';
 type SessionRecoveryChoice = 'continue' | 'reset' | 'log-list';
 type SessionRecoveryReason = 'fresh' | 'slow' | 'crash';
 let sessionCleanExitListenerBound = false;
+
+function yieldToBrowserForSessionRestore(): Promise<void> {
+	return new Promise((resolve) => {
+		if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+			window.requestAnimationFrame(() => resolve());
+			return;
+		}
+		setTimeout(() => resolve(), 0);
+	});
+}
+
+/** Prefer selected / highlighted nodes in the first restore chunks so the canvas feels usable early. */
+export function orderSessionRestoreNodes(nodes: Array<{ id?: string | null }> = [], session: Record<string, any> | null | undefined = null) {
+	const priority = new Set<string>(
+		[session?.selectedNodeId, ...(Array.isArray(session?.highlightedNodes) ? session.highlightedNodes.map((entry) => entry?.id) : [])]
+			.map((value) => String(value || '').trim())
+			.filter(Boolean),
+	);
+	if (!priority.size) return Array.isArray(nodes) ? [...nodes] : [];
+	return [...(Array.isArray(nodes) ? nodes : [])].sort((a, b) => {
+		const aId = String(a?.id || '').trim();
+		const bId = String(b?.id || '').trim();
+		return Number(priority.has(bId)) - Number(priority.has(aId));
+	});
+}
+
+export function collectSessionRestoreLinkChunk(
+	links: Array<any> = [],
+	presentIds: Set<string>,
+	chunkIds: Set<string>,
+) {
+	if (!Array.isArray(links) || !links.length || !presentIds?.size || !chunkIds?.size) return [];
+	return links.filter((link) => {
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		if (!sourceId || !targetId) return false;
+		if (!presentIds.has(sourceId) || !presentIds.has(targetId)) return false;
+		return chunkIds.has(sourceId) || chunkIds.has(targetId);
+	});
+}
 const ROUTE_NODE_REQUEST_EVENT = 'finra:route-node-request';
 const SELECTED_NODE_ROUTE_EVENT = 'finra:selected-node-route';
 const FIND_QUERY_EVENT = 'finra:find-query';
@@ -7187,39 +7234,139 @@ function applyIndividualDetail(targetNode, detail, fallbackCrd = null) {
 	return applyIndividualDetailImpl(targetNode, detail, fallbackCrd);
 }
 
+async function ensureSessionRestoreCanvasShell(session, { clearExistingLayout = false }: { clearExistingLayout?: boolean } = {}) {
+	if (!globalState.graphData || !Array.isArray(globalState.graphData.nodes)) {
+		globalState.graphData = { nodes: [], links: [], meta: {} };
+	}
+	if (!Array.isArray(globalState.layoutNodes) || !Array.isArray(globalState.layoutLinks) || !globalState.canvasApi) {
+		renderGraph(
+			{ nodes: [], links: [], meta: globalState.graphData?.meta || {} },
+			{ freezeLayout: true, skipInitialZoom: Boolean(session?.zoomTransform) },
+		);
+		return;
+	}
+	// Session restore paints a projected subset. Drop leftover baseline layout only when
+	// we are about to progressively append the saved session (not when restore is a no-op).
+	if (clearExistingLayout && globalState.layoutNodes.length) {
+		renderGraph(
+			{ nodes: [], links: [], meta: globalState.graphData?.meta || {} },
+			{ freezeLayout: true, skipInitialZoom: Boolean(session?.zoomTransform) },
+		);
+	}
+}
+
+async function appendSessionRestoreChunks(nodes, links, { statusPrefix = 'Restoring session' }: { statusPrefix?: string } = {}) {
+	const ordered = Array.isArray(nodes) ? nodes : [];
+	const allLinks = Array.isArray(links) ? links : [];
+	if (!ordered.length && !allLinks.length) return 0;
+
+	const presentIds = new Set(
+		(globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean),
+	);
+	const total = ordered.length;
+	let painted = 0;
+
+	for (let i = 0; i < ordered.length; i += SESSION_RESTORE_NODE_CHUNK_SIZE) {
+		const rawChunk = ordered.slice(i, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+		const chunk = rawChunk.filter((node) => {
+			const id = String(node?.id || '').trim();
+			if (!id || presentIds.has(id)) return false;
+			presentIds.add(id);
+			return true;
+		});
+		const chunkIds = new Set(chunk.map((node) => String(node.id)));
+		const linkChunk = collectSessionRestoreLinkChunk(allLinks, presentIds, chunkIds);
+		if (chunk.length || linkChunk.length) {
+			// Never reheat the force sim on session restore — that climbed multi-GB RSS on load.
+			globalState.appendFetched(chunk, linkChunk, {
+				skipPersist: true,
+				skipFindRefresh: true,
+				skipSimRestart: true,
+			});
+		}
+		painted = Math.min(total, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+		updateFetchStatus(`${statusPrefix} ${painted}/${total}…`, true);
+		await yieldToBrowserForSessionRestore();
+	}
+
+	return painted;
+}
+
 async function restoreSavedSession(session) {
 	if (!session || session.cleared) return;
-
-	const renderedIds = new Set(globalState.layoutNodes.map((n) => n.id));
 
 	if (Array.isArray(session.visitedNodeIds)) {
 		globalState.visitedNodeIds = new Set(session.visitedNodeIds);
 	}
 
-	const missingServerIds = (session.renderedServerIds || []).filter((id) => !renderedIds.has(id));
-	if (missingServerIds.length) {
-		injectNodesById(missingServerIds, { skipPersist: true, skipSimRestart: true });
+	const savedPositions = Array.isArray(session.nodePositions) ? session.nodePositions : [];
+	const sessionGraphData = buildSessionRenderGraphData(session, globalState.graphData);
+
+	let restoreNodes: any[] = [];
+	let restoreLinks: any[] = [];
+
+	if (sessionGraphData && Array.isArray(sessionGraphData.nodes) && sessionGraphData.nodes.length) {
+		restoreNodes = sessionGraphData.nodes.map((node) => sanitizePersistedNode(node));
+		restoreLinks = Array.isArray(sessionGraphData.links) ? sessionGraphData.links : [];
+	} else if (session.extraNodes?.length || session.extraLinks?.length) {
+		restoreNodes = (session.extraNodes || []).map((node) => sanitizePersistedNode(node));
+		restoreLinks = session.extraLinks || [];
 	}
 
-	if (session.extraNodes?.length || session.extraLinks?.length) {
-		const restoredExtraNodes = (session.extraNodes || []).map((node) => sanitizePersistedNode(node));
-		restoredExtraNodes.forEach((node) => resetTransientDetailState(node));
-		const normalized = normalizeGraphPayloadByIdentity(restoredExtraNodes, session.extraLinks || []);
-		mergeIntoGraphData(normalized.nodes, normalized.links);
-		// Never reheat the force sim on session restore — that climbed multi-GB RSS on load.
-		globalState.appendFetched(normalized.nodes, normalized.links, {
-			skipPersist: true,
-			skipFindRefresh: true,
-			skipSimRestart: true,
-		});
-	} else if (session.extraNodeIds?.length) {
-		const missingExtraNodeIds = session.extraNodeIds.filter((id) => !globalState.layoutNodes.some((node) => node.id === id));
-		if (missingExtraNodeIds.length) {
-			injectNodesById(missingExtraNodeIds, { skipPersist: true, skipSimRestart: true });
+	const willPaintSessionGraph = Boolean(restoreNodes.length || restoreLinks.length || session.renderedServerIds?.length || session.extraNodeIds?.length);
+	await ensureSessionRestoreCanvasShell(session, { clearExistingLayout: willPaintSessionGraph });
+	if (willPaintSessionGraph) {
+		updateFetchStatus('Restoring previous session…', true);
+	}
+
+	restoreNodes.forEach((node) => resetTransientDetailState(node));
+	if (savedPositions.length && restoreNodes.length) {
+		stampSavedPositionsOntoNodeList(savedPositions, restoreNodes);
+	}
+
+	if (restoreNodes.length || restoreLinks.length) {
+		const normalized = normalizeGraphPayloadByIdentity(restoreNodes, restoreLinks);
+		restoreNodes = normalized.nodes;
+		restoreLinks = normalized.links;
+		mergeIntoGraphData(restoreNodes, restoreLinks);
+
+		globalState.isSubsetMode =
+			Boolean(globalState.graphData?.nodes?.length) && restoreNodes.length < globalState.graphData.nodes.length;
+		if (globalState.isSubsetMode) {
+			updateSubsetInfo(restoreNodes.length, globalState.graphData.nodes.length);
+		} else {
+			clearSubsetInfo();
+		}
+
+		const ordered = orderSessionRestoreNodes(restoreNodes, session);
+		await appendSessionRestoreChunks(ordered, restoreLinks);
+	}
+
+	const renderedIds = new Set((globalState.layoutNodes || []).map((n) => n.id));
+	const missingServerIds = (session.renderedServerIds || []).filter((id) => id && !renderedIds.has(id));
+	if (missingServerIds.length) {
+		for (let i = 0; i < missingServerIds.length; i += SESSION_RESTORE_NODE_CHUNK_SIZE) {
+			const chunk = missingServerIds.slice(i, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+			injectNodesById(chunk, { skipPersist: true, skipSimRestart: true });
+			updateFetchStatus(
+				`Restoring session nodes ${Math.min(i + SESSION_RESTORE_NODE_CHUNK_SIZE, missingServerIds.length)}/${missingServerIds.length}…`,
+				true,
+			);
+			await yieldToBrowserForSessionRestore();
+		}
+	} else if (!restoreNodes.length && session.extraNodeIds?.length) {
+		const missingExtraNodeIds = session.extraNodeIds.filter((id) => id && !renderedIds.has(id));
+		for (let i = 0; i < missingExtraNodeIds.length; i += SESSION_RESTORE_NODE_CHUNK_SIZE) {
+			const chunk = missingExtraNodeIds.slice(i, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+			injectNodesById(chunk, { skipPersist: true, skipSimRestart: true });
+			updateFetchStatus(
+				`Restoring session nodes ${Math.min(i + SESSION_RESTORE_NODE_CHUNK_SIZE, missingExtraNodeIds.length)}/${missingExtraNodeIds.length}…`,
+				true,
+			);
+			await yieldToBrowserForSessionRestore();
 		}
 	}
 
-	const savedPositions = Array.isArray(session.nodePositions) ? session.nodePositions : [];
 	try {
 		applySavedNodePositions(savedPositions);
 	} catch {
@@ -7267,34 +7414,62 @@ async function restoreSavedSession(session) {
 		clearedSelectionLogLabelIds: Array.isArray(session.clearedSelectionLogLabelIds) ? session.clearedSelectionLogLabelIds : null,
 	});
 
-	// Rebuild once with a frozen layout so restore never leaves a cooling sim ticking.
-	// Sync live coords into graphData first — renderGraph deep-copies from graphData and
-	// previously wiped every restored x/y because positions lived only on layoutNodes.
-	try {
-		syncLayoutPositionsIntoGraphDataNodes();
-		if (savedPositions.length) {
-			stampSavedPositionsOntoNodeList(savedPositions, globalState.graphData?.nodes);
-		}
-		const savedZoom = captureCurrentZoomTransform?.() || null;
-		renderGraph(globalState.graphData, { freezeLayout: true, skipInitialZoom: true });
-		// Re-stamp after rebuild — defensive if any node object was replaced without coords.
-		if (savedPositions.length) {
-			applySavedNodePositions(savedPositions);
-		}
-		pinLayoutNodesAtCurrentPositions?.(0);
-		if (savedZoom) {
-			try {
-				restoreCapturedZoomTransform?.(savedZoom);
-			} catch {
-				/* ignore */
+	const layoutCount = globalState.layoutNodes?.length || 0;
+	showEmpty(layoutCount === 0);
+	if (layoutCount > 0) {
+		document.getElementById('finra-app')?.setAttribute('data-graph-empty', 'false');
+		updateMeta(globalState.graphData?.meta);
+	}
+
+	// Large restores are already on the canvas via chunked appendFetched. A final
+	// renderGraph deep-copies every node/link and is a common crash-recovery OOM.
+	if (layoutCount > 0 && layoutCount <= SESSION_RESTORE_FULL_REBUILD_MAX_NODES) {
+		try {
+			syncLayoutPositionsIntoGraphDataNodes();
+			if (savedPositions.length) {
+				stampSavedPositionsOntoNodeList(savedPositions, globalState.graphData?.nodes);
 			}
+			const savedZoom = captureCurrentZoomTransform?.() || null;
+			const rebuildNodes = Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes.map((node) => ({ ...node })) : [];
+			const rebuildLinks = Array.isArray(globalState.layoutLinks) ? globalState.layoutLinks.map((link) => ({ ...link })) : [];
+			renderGraph(
+				{
+					...(globalState.graphData || { meta: {} }),
+					nodes: rebuildNodes,
+					links: rebuildLinks,
+				},
+				{ freezeLayout: true, skipInitialZoom: true },
+			);
+			if (savedPositions.length) {
+				applySavedNodePositions(savedPositions);
+			}
+			pinLayoutNodesAtCurrentPositions?.(0);
+			if (savedZoom) {
+				try {
+					restoreCapturedZoomTransform?.(savedZoom);
+				} catch {
+					/* ignore */
+				}
+			}
+			globalState.simulation?.alpha?.(0);
+			globalState.simulation?.alphaTarget?.(0);
+			globalState.simulation?.stop?.();
+			stopNodePulseLoop?.();
+		} catch {
+			/* non-critical */
 		}
-		globalState.simulation?.alpha?.(0);
-		globalState.simulation?.alphaTarget?.(0);
-		globalState.simulation?.stop?.();
-		stopNodePulseLoop?.();
-	} catch {
-		/* non-critical */
+	} else if (layoutCount > SESSION_RESTORE_FULL_REBUILD_MAX_NODES) {
+		try {
+			syncLayoutPositionsIntoGraphDataNodes();
+			pinLayoutNodesAtCurrentPositions?.(0);
+			globalState.simulation?.alpha?.(0);
+			globalState.simulation?.alphaTarget?.(0);
+			globalState.simulation?.stop?.();
+			stopNodePulseLoop?.();
+			scheduleGraphTickPositions(null, null, null);
+		} catch {
+			/* non-critical */
+		}
 	}
 
 	// After crash/refresh restore, force a clean link paint pass so zoom + selection
@@ -7304,6 +7479,7 @@ async function restoreSavedSession(session) {
 		if (globalState.linkSel) {
 			highlightLinks(computeHighlightState());
 		}
+		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 	} catch {
 		/* non-critical */
 	}
@@ -7536,7 +7712,11 @@ function hideSessionRestoreChrome() {
 		document.getElementById('finra-app')?.setAttribute('data-graph-empty', 'false');
 		const canvas = document.getElementById('fg-canvas');
 		if (canvas) canvas.style.visibility = 'visible';
-		if (globalState.activeFetchStatusMessage === 'Restoring previous session…') {
+		const restoreStatus = String(globalState.activeFetchStatusMessage || '');
+		if (
+			restoreStatus === 'Restoring previous session…' ||
+			/^Restoring session(?: nodes)? \d+\/\d+…$/.test(restoreStatus)
+		) {
 			updateFetchStatus('Session restored');
 		}
 		return;
@@ -7849,40 +8029,45 @@ export function buildSessionRenderGraphData(session, baseGraphData = globalState
 	};
 }
 
+function sessionHasRestorableGraph(session) {
+	if (!session || session.cleared) return false;
+	if (Array.isArray(session.extraNodes) && session.extraNodes.length) return true;
+	if (Array.isArray(session.extraNodeIds) && session.extraNodeIds.length) return true;
+	if (Array.isArray(session.renderedServerIds) && session.renderedServerIds.length) return true;
+	if (session.selectedNodeId) return true;
+	if (Array.isArray(session.highlightedNodes) && session.highlightedNodes.length) return true;
+	return false;
+}
+
+/**
+ * Legacy entry used by loadGraph before progressive restore. Kept as a cheap
+ * "does this session have canvas content?" probe — it no longer dumps the full
+ * saved graph through renderGraph (that froze crash-recovery tabs).
+ */
 function renderSavedSessionGraph(session) {
-	if (!globalState.graphData || !Array.isArray(globalState.graphData.nodes) || !Array.isArray(globalState.graphData.links)) return false;
+	if (!sessionHasRestorableGraph(session)) return false;
+	if (!globalState.graphData || !Array.isArray(globalState.graphData.nodes) || !Array.isArray(globalState.graphData.links)) {
+		globalState.graphData = globalState.graphData || { nodes: [], links: [], meta: {} };
+		if (!Array.isArray(globalState.graphData.nodes)) globalState.graphData.nodes = [];
+		if (!Array.isArray(globalState.graphData.links)) globalState.graphData.links = [];
+	}
 
 	const sessionGraphData = buildSessionRenderGraphData(session, globalState.graphData);
-	if (!sessionGraphData || !Array.isArray(sessionGraphData.nodes) || !Array.isArray(sessionGraphData.links)) return false;
-
-	const sessionNodes = sessionGraphData.nodes;
-	if (!sessionNodes.length) return false;
-
-	// Stamp persisted coords before the first paint so freezeLayout can pin them
-	// instead of letting the force sim assign fresh random positions.
-	if (Array.isArray(session?.nodePositions) && session.nodePositions.length) {
-		stampSavedPositionsOntoNodeList(session.nodePositions, sessionNodes);
-		stampSavedPositionsOntoNodeList(session.nodePositions, globalState.graphData.nodes);
+	if (sessionGraphData && Array.isArray(sessionGraphData.nodes) && sessionGraphData.nodes.length) {
+		if (Array.isArray(session?.nodePositions) && session.nodePositions.length) {
+			stampSavedPositionsOntoNodeList(session.nodePositions, sessionGraphData.nodes);
+			stampSavedPositionsOntoNodeList(session.nodePositions, globalState.graphData.nodes);
+		}
+		globalState.isSubsetMode = sessionGraphData.nodes.length < globalState.graphData.nodes.length;
+		if (globalState.isSubsetMode) {
+			updateSubsetInfo(sessionGraphData.nodes.length, globalState.graphData.nodes.length);
+		} else {
+			clearSubsetInfo();
+		}
+		return true;
 	}
 
-	globalState.isSubsetMode = sessionNodes.length < globalState.graphData.nodes.length;
-	if (globalState.isSubsetMode) {
-		updateSubsetInfo(sessionNodes.length, globalState.graphData.nodes.length);
-	} else {
-		clearSubsetInfo();
-	}
-
-	renderGraph(
-		{
-			...globalState.graphData,
-			nodes: sessionNodes,
-			links: sessionGraphData.links,
-		},
-		{ freezeLayout: true, skipInitialZoom: Boolean(session?.zoomTransform) },
-	);
-	showEmpty(false);
-	updateMeta(globalState.graphData.meta);
-	return true;
+	return Boolean(session.extraNodes?.length || session.extraNodeIds?.length || session.renderedServerIds?.length);
 }
 
 function getViewportSize() {
@@ -11901,8 +12086,8 @@ async function loadGraph() {
 			}
 
 			if (session) {
-				const renderedSavedSession = renderSavedSessionGraph(session);
-				if (!renderedSavedSession) {
+				const hasRestorableSession = renderSavedSessionGraph(session);
+				if (!hasRestorableSession) {
 					// Avoid showEmpty(true) here — that hides the SVG under the restore chrome
 					// and can leave the canvas grayed out / unclickable if restore is slow.
 					const hasBaselineContent = Boolean((globalState.graphData?.nodes?.length || 0) > 0 || (globalState.graphData?.links?.length || 0) > 0);
@@ -11914,6 +12099,8 @@ async function loadGraph() {
 						showEmpty(false);
 					}
 				}
+				// Progressive chunked restore after Continue — never dump the full saved graph
+				// through a single renderGraph (that froze/crashed crash-recovery tabs).
 				await restoreSavedSession(session);
 				if ((globalState.layoutNodes?.length || 0) > 0 || (globalState.graphData?.nodes?.length || 0) > 0) {
 					showEmpty(false);

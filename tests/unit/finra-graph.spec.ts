@@ -71,6 +71,9 @@ import {
 	isForcedGrayConnectionLink,
 	clearSelectionState,
 	buildSessionRenderGraphData,
+	orderSessionRestoreNodes,
+	collectSessionRestoreLinkChunk,
+	SESSION_RESTORE_NODE_CHUNK_SIZE,
 	filterSelectionLogLabelNodeIdsByScope,
 	generateGraphTemplateName,
 	isSelectionLogPeopleEntry,
@@ -1295,6 +1298,30 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(projected).not.toBeNull();
 		expect(projected.nodes.map((node) => node.id)).toContain('person:999');
 		expect(projected.links.some((link) => link.source === 'person:999' && link.target === 'firm:1')).toBe(true);
+	});
+
+	it('orderSessionRestoreNodes puts selected and highlighted nodes first for progressive restore', () => {
+		const ordered = orderSessionRestoreNodes(
+			[{ id: 'person:1' }, { id: 'person:2' }, { id: 'firm:9' }, { id: 'person:3' }],
+			{ selectedNodeId: 'person:3', highlightedNodes: [{ id: 'firm:9' }] },
+		);
+		expect(ordered.map((node) => node.id).slice(0, 2).sort()).toEqual(['firm:9', 'person:3']);
+		expect(SESSION_RESTORE_NODE_CHUNK_SIZE).toBeGreaterThan(0);
+		expect(SESSION_RESTORE_NODE_CHUNK_SIZE).toBeLessThanOrEqual(128);
+	});
+
+	it('collectSessionRestoreLinkChunk only includes links whose endpoints are already present', () => {
+		const presentIds = new Set(['person:1', 'firm:1', 'person:2']);
+		const chunkIds = new Set(['person:2']);
+		const links = [
+			{ source: 'person:2', target: 'firm:1', relationship: 'employed_by' },
+			{ source: 'person:2', target: 'firm:99', relationship: 'employed_by' },
+			{ source: 'person:1', target: 'firm:1', relationship: 'employed_by' },
+		];
+		const chunk = collectSessionRestoreLinkChunk(links, presentIds, chunkIds);
+		expect(chunk).toHaveLength(1);
+		expect(chunk[0].source).toBe('person:2');
+		expect(chunk[0].target).toBe('firm:1');
 	});
 
 	it('normalizeNodeLabelInPlace upgrades Node person placeholders to fetched individual names', () => {
