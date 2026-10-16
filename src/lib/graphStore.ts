@@ -536,9 +536,13 @@ async function ensureGraphFileFromCache() {
 
 	_graphBootstrapPromise = (async () => {
 		try {
-			// Script lives under `.local/scripts/` in this repo; older path was `scripts/`.
-			// On Vercel neither ships in the function bundle — skip quietly. The live graph
-			// is session/API driven; a missing mono `finra-graph.json` is not fatal.
+			// Never spawn the local rebuild script on Vercel/Lambda. Even when
+			// `.local/scripts/build_graph_from_cache.js` is present in the bundle, running it
+			// fails (`Cannot find module '@upstash/redis'`) and spams logs. Prod graph is
+			// session/API driven; missing mono `finra-graph.json` (`graphExists: false`) is OK.
+			if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+				return false;
+			}
 			const scriptCandidates = [
 				path.join(process.cwd(), '.local', 'scripts', 'build_graph_from_cache.js'),
 				path.join(process.cwd(), 'scripts', 'build_graph_from_cache.js'),
