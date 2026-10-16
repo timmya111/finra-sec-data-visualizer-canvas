@@ -119,8 +119,14 @@ describe('firm connections sidecar hydration', () => {
 			return null;
 		});
 
-		const result = await getFirmConnectionsFromGraph('7691', { skipEnrichment: true });
-		expect(result.previousConnections[0].name).toBe('Timothy Dale Register');
+		// light/skipEnrichment must not touch search sidecars (Vercel cold gunzip 504s).
+		const light = await getFirmConnectionsFromGraph('7691', { skipEnrichment: true });
+		expect(light.previousConnections[0].name).toBe('Tim');
+		expect(lookupLocalSearchHitsByIds).not.toHaveBeenCalled();
+
+		lookupLocalSearchHitsByIds.mockClear();
+		const full = await getFirmConnectionsFromGraph('7691', { skipEnrichment: false });
+		expect(full.previousConnections[0].name).toBe('Timothy Dale Register');
 		expect(lookupLocalSearchHitsByIds).toHaveBeenCalled();
 	});
 });
