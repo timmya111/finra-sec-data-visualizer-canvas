@@ -127,20 +127,17 @@ export async function GET(request: NextRequest) {
 		}
 		// Surname/text people search: merge fuzzy-filtered BrokerCheck hits so local
 		// sidecars (active/connected subset) still reach live Hopper/Hooper-scale coverage.
+		// Do NOT re-query local with limit:1000 — that rescored the full sidecar and OOMed
+		// cold Vercel instances (~358MB gunzip). Merge external into the page we already have.
 		if (entity === 'individual' && !/^\d{1,10}$/.test(query) && !rawQuery.includes(',')) {
 			try {
 				setExternalApiContext('search');
-				const localFull = await searchLocalIndexMany('finra', entity, query, { limit: 1000, offset: 0, baseUrl });
-				const external = await searchExternalNameSupplement('finra', entity, query, { limit: 1000, offset: 0 });
+				const external = await searchExternalNameSupplement('finra', entity, query, {
+					limit: 200,
+					offset: 0,
+				});
 				if (external && (external.total || 0) > 0) {
-					data = mergeLocalSearchResponses([localFull, external], {
-						bucket: `finra:${entity}`,
-						limit,
-						offset,
-						repage: true,
-					});
-				} else if ((localFull?.total || 0) > 0) {
-					data = mergeLocalSearchResponses([localFull], {
+					data = mergeLocalSearchResponses([data, external], {
 						bucket: `finra:${entity}`,
 						limit,
 						offset,
