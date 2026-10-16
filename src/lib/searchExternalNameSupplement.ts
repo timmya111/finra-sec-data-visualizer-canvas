@@ -2,8 +2,32 @@ import type { LocalSearchResponse } from './localSearch';
 import { canCallExternalSearchApis } from './externalApiGate';
 
 const EXTERNAL_PAGE_SIZE = 100;
-const EXTERNAL_MAX_PAGES = 10;
+/** Hard cap on BrokerCheck/IAPD pages. Was 10 and dominated warm search latency (~2–3s). */
+export const EXTERNAL_NAME_SUPPLEMENT_MAX_PAGES = 3;
 const EXTERNAL_EMPTY_PAGE_STOP = 2;
+
+/**
+ * Await live BrokerCheck/IAPD name supplement only when the local sidecar could not
+ * fill the requested page. Common surnames (smith, …) already have full local pages —
+ * blocking on external paging there made warm prod search ~2.5–3s.
+ */
+export function shouldAwaitExternalNameSupplement(options: {
+	entity?: string | null;
+	query?: string | null;
+	rawQuery?: string | null;
+	localHitCount?: number;
+	limit?: number;
+}): boolean {
+	const entity = String(options.entity || '').trim();
+	const query = String(options.query || '').trim();
+	const rawQuery = String(options.rawQuery || query).trim();
+	if (entity !== 'individual') return false;
+	if (!query || /^\d{1,10}$/.test(query)) return false;
+	if (rawQuery.includes(',')) return false;
+	const limit = Math.max(1, Number(options.limit) || 12);
+	const localHitCount = Math.max(0, Number(options.localHitCount) || 0);
+	return localHitCount < limit;
+}
 
 function normalizeToken(value: unknown) {
 	return String(value || '')
@@ -163,7 +187,8 @@ export async function searchExternalNameSupplement(
 
 	const limit = Math.max(0, Math.min(options.limit ?? 1000, 1000));
 	const offset = Math.max(0, options.offset ?? 0);
-	const maxPages = Math.max(1, Math.min(options.maxPages ?? EXTERNAL_MAX_PAGES, 20));
+	const maxPages = Math.max(1, Math.min(options.maxPages ?? EXTERNAL_NAME_SUPPLEMENT_MAX_PAGES, 20));
+	const neededMatches = offset + Math.max(limit, 1);
 	const encoded = encodeURIComponent(trimmed);
 	const fetchOptions = {
 		headers: {
@@ -180,6 +205,8 @@ export async function searchExternalNameSupplement(
 
 	try {
 		for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+			if (matched.length >= neededMatches) break;
+
 			const start = pageIndex * EXTERNAL_PAGE_SIZE;
 			const queryParams =
 				entity === 'individual' ?
@@ -210,6 +237,7 @@ export async function searchExternalNameSupplement(
 						{ ind_source_id: sourceDoc.ind_source_id || crd, ind_crd: sourceDoc.ind_crd || crd, id: crd }
 					:	{ firm_source_id: sourceDoc.firm_source_id || crd, firm_id: sourceDoc.firm_id || crd, id: crd }),
 				});
+				if (matched.length >= neededMatches) break;
 			}
 
 			if (pageMatches === 0) {

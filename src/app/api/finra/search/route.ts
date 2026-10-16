@@ -4,7 +4,11 @@ import { logger } from '@/lib/logger';
 import { searchGraphFallback } from '@/lib/searchGraphFallback';
 import { searchDirectRedisFallback } from '@/lib/searchDirectFallback';
 import { searchExternalFallback } from '@/lib/searchExternalFallback';
-import { searchExternalNameSupplement } from '@/lib/searchExternalNameSupplement';
+import {
+	EXTERNAL_NAME_SUPPLEMENT_MAX_PAGES,
+	searchExternalNameSupplement,
+	shouldAwaitExternalNameSupplement,
+} from '@/lib/searchExternalNameSupplement';
 import { setExternalApiContext } from '@/lib/externalApiGate';
 
 export const dynamic = 'force-dynamic';
@@ -125,16 +129,31 @@ export async function GET(request: NextRequest) {
 				data = emptyResponse;
 			}
 		}
-		// Surname/text people search: merge fuzzy-filtered BrokerCheck hits so local
-		// sidecars (active/connected subset) still reach live Hopper/Hooper-scale coverage.
-		// Do NOT re-query local with limit:1000 — that rescored the full sidecar and OOMed
-		// cold Vercel instances (~358MB gunzip). Merge external into the page we already have.
-		if (entity === 'individual' && !/^\d{1,10}$/.test(query) && !rawQuery.includes(',')) {
+		// Surname/text people search: only await BrokerCheck when local could not fill the
+		// requested page. Blocking on external paging for common surnames (local already full)
+		// made warm prod search ~2.5–3s. Do NOT re-query local with limit:1000 — that OOMed
+		// cold Vercel instances (~358MB gunzip).
+		const localHitCount = Array.isArray(data?.hits?.hits)
+			? data.hits.hits.length
+			: Array.isArray(data?.results)
+				? data.results.length
+				: 0;
+		if (
+			shouldAwaitExternalNameSupplement({
+				entity,
+				query,
+				rawQuery,
+				localHitCount,
+				limit,
+			})
+		) {
 			try {
 				setExternalApiContext('search');
 				const external = await searchExternalNameSupplement('finra', entity, query, {
-					limit: 200,
+					// Only need enough matches to fill / enrich the current page.
+					limit: Math.max(limit, Math.min(60, limit * 3)),
 					offset: 0,
+					maxPages: EXTERNAL_NAME_SUPPLEMENT_MAX_PAGES,
 				});
 				if (external && (external.total || 0) > 0) {
 					data = mergeLocalSearchResponses([data, external], {
@@ -152,7 +171,7 @@ export async function GET(request: NextRequest) {
 		}
 
 		const total = data?.total || 0;
-		// Prefer the local search index (plus optional external name supplement). Fallbacks
+		// Prefer the local search index (plus optional thin-page external supplement). Fallbacks
 		// only run when local found nothing (e.g. CRD inventory short-circuit, missing sidecar).
 		if (total > 0) return jsonNoStore(data);
 
