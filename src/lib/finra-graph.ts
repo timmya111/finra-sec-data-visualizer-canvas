@@ -7260,8 +7260,10 @@ async function appendSessionRestoreChunks(nodes, links, { statusPrefix = 'Restor
 	const allLinks = Array.isArray(links) ? links : [];
 	if (!ordered.length && !allLinks.length) return 0;
 
-	const presentIds = new Set(
-		(globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean),
+	const presentIds = new Set<string>(
+		(globalState.layoutNodes || [])
+			.map((node) => String(node?.id || '').trim())
+			.filter((id): id is string => Boolean(id)),
 	);
 	const total = ordered.length;
 	let painted = 0;
@@ -7274,7 +7276,7 @@ async function appendSessionRestoreChunks(nodes, links, { statusPrefix = 'Restor
 			presentIds.add(id);
 			return true;
 		});
-		const chunkIds = new Set(chunk.map((node) => String(node.id)));
+		const chunkIds = new Set<string>(chunk.map((node) => String(node.id)));
 		const linkChunk = collectSessionRestoreLinkChunk(allLinks, presentIds, chunkIds);
 		if (chunk.length || linkChunk.length) {
 			// Never reheat the force sim on session restore — that climbed multi-GB RSS on load.
