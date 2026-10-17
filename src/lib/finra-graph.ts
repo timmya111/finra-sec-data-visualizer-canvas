@@ -1635,7 +1635,7 @@ function formatGraphTemplateTimestamp(value: number) {
 	});
 }
 
-function sanitizeSelectionLogEntries(entries: unknown): Array<{ id: string; label: string; secondaryId: string; group: string }> {
+export function sanitizeSelectionLogEntries(entries: unknown): Array<{ id: string; label: string; secondaryId: string; group: string }> {
 	if (!Array.isArray(entries)) return [];
 	return entries
 		.map((entry) => {
@@ -1650,14 +1650,89 @@ function sanitizeSelectionLogEntries(entries: unknown): Array<{ id: string; labe
 				if (idLower.startsWith('firm:') || idLower.startsWith('firm_')) group = 'firm';
 				else if (idLower.startsWith('person:') || idLower.startsWith('person_')) group = 'individual';
 			}
+			const label = String((entry as any).label || id).trim();
+			// Unresolved stubs ("Node person:9014") are restore/test noise — never keep them in the log.
+			if (isGenericOrPlaceholderLabel(label, group || undefined)) return null;
 			return {
 				id,
-				label: String((entry as any).label || id),
+				label,
 				secondaryId: String((entry as any).secondaryId || ''),
 				group,
 			};
 		})
 		.filter(Boolean) as Array<{ id: string; label: string; secondaryId: string; group: string }>;
+}
+
+/** Drop unresolved Node person:/Node firm: rows from the in-memory selection log and persist. */
+function pruneGenericPlaceholderSelectionLogEntries(): number {
+	const before = selectedNodesLog.length;
+	const next = sanitizeSelectionLogEntries(selectedNodesLog);
+	const removed = before - next.length;
+	selectedNodesLog = next;
+	// Always persist so stale localStorage/IDB copies of generic stubs are rewritten.
+	invalidateSelectionLogLabelNodeIdCache();
+	saveSelectionLog();
+	if (removed > 0) {
+		scheduleSelectionLogUI();
+		syncSelectionLogAuxiliaryRenderers();
+	}
+	return removed;
+}
+
+/**
+ * Remove canvas stubs that still show generic "Node person:/firm:" labels after restore/hydration.
+ * Real named nodes stay; unresolved test/missing CRDs are dropped with their links.
+ */
+export function pruneGenericPlaceholderStubNodes(
+	nodes: Array<any> = globalState.layoutNodes || globalState.graphData?.nodes || [],
+): { removedIds: string[]; keepIds: Set<string> } {
+	const pool = Array.isArray(nodes) ? nodes : [];
+	const removedIds: string[] = [];
+	const keepIds = new Set<string>();
+	for (const node of pool) {
+		const id = String(node?.id || '').trim();
+		if (!id) continue;
+		const group = String(node?.group || '').trim();
+		if (isGenericOrPlaceholderLabel(node?.label, group || undefined)) {
+			removedIds.push(id);
+			continue;
+		}
+		keepIds.add(id);
+	}
+	return { removedIds, keepIds };
+}
+
+function pruneUnresolvedGenericStubsFromLiveGraph(): number {
+	const pool = globalState.layoutNodes?.length ? globalState.layoutNodes : globalState.graphData?.nodes || [];
+	const { removedIds, keepIds } = pruneGenericPlaceholderStubNodes(pool);
+	if (!removedIds.length || !keepIds.size) {
+		// If everything was generic, clear the graph instead of keeping an empty keep set no-op.
+		if (removedIds.length && !keepIds.size) {
+			clearGraphData();
+			pruneGenericPlaceholderSelectionLogEntries();
+			return removedIds.length;
+		}
+		pruneGenericPlaceholderSelectionLogEntries();
+		return 0;
+	}
+	pruneGraphDataToKeepIds(keepIds);
+	pruneGenericPlaceholderSelectionLogEntries();
+	return removedIds.length;
+}
+
+function schedulePruneUnresolvedGenericRestoreStubs() {
+	if (typeof window === 'undefined' || typeof window.setTimeout !== 'function') return;
+	// Wait for capped sidecar label hydration to finish (or give up), then drop leftovers.
+	window.setTimeout(() => {
+		try {
+			const removed = pruneUnresolvedGenericStubsFromLiveGraph();
+			if (removed > 0) {
+				updateFetchStatus(`Removed ${removed} unresolved stub node${removed === 1 ? '' : 's'}`, false);
+			}
+		} catch {
+			/* non-critical */
+		}
+	}, 9000);
 }
 
 function sanitizeGraphTemplateRecord(raw: unknown): GraphTemplateRecord | null {
@@ -4658,7 +4733,13 @@ function loadSelectionLog() {
 	try {
 		const raw = localStorage.getItem(LS_LOG_KEY);
 		if (raw) {
-			selectedNodesLog = sanitizeSelectionLogEntries(JSON.parse(raw));
+			const parsed = JSON.parse(raw);
+			const cleaned = sanitizeSelectionLogEntries(parsed);
+			selectedNodesLog = cleaned;
+			// Rewrite storage when sanitize drops unresolved Node person:/firm: stubs.
+			if (!Array.isArray(parsed) || cleaned.length !== parsed.length) {
+				saveSelectionLog();
+			}
 			return;
 		}
 	} catch (e) {
@@ -4667,7 +4748,8 @@ function loadSelectionLog() {
 
 	void loadSelectionLogFromIndexedDB().then((entries) => {
 		if (entries.length) {
-			selectedNodesLog = entries;
+			const cleaned = sanitizeSelectionLogEntries(entries);
+			selectedNodesLog = cleaned;
 			saveSelectionLog();
 			updateSelectionLogUI();
 		}
@@ -4730,10 +4812,15 @@ function addToSelectionLog(
 		skipPaint?: boolean;
 	} = {},
 ) {
+	const preferredLabel = String(getPreferredNodeLabel(d) || d?.label || '').trim();
+	const group = String(d?.group || '').trim();
+	// Keep unresolved stubs off the selection log (e.g. "Node person:9014" from synthetic restores).
+	if (isGenericOrPlaceholderLabel(preferredLabel, group || undefined)) return;
+
 	const secondaryId = getSecondaryId(d);
 	const entry = {
 		id: d.id,
-		label: d.label,
+		label: preferredLabel || d.label,
 		secondaryId: secondaryId,
 		group: d.group,
 	};
@@ -7607,6 +7694,13 @@ async function restoreSavedSession(session) {
 	}
 	} finally {
 		sessionRestoreInProgress = false;
+		// Strip generic selection-log rows immediately; prune unresolved canvas stubs after hydration.
+		try {
+			pruneGenericPlaceholderSelectionLogEntries();
+		} catch {
+			/* non-critical */
+		}
+		schedulePruneUnresolvedGenericRestoreStubs();
 	}
 }
 
@@ -12571,10 +12665,11 @@ async function hydratePendingNodeIds(
 		}
 	}
 
-	if (!resolvedEntries.length) return;
+	const logWorthyEntries = sanitizeSelectionLogEntries(resolvedEntries);
+	if (!logWorthyEntries.length) return;
 	if (addToLog) {
 		let nextLog = selectedNodesLog;
-		for (const entry of resolvedEntries) {
+		for (const entry of logWorthyEntries) {
 			nextLog = upsertSelectionLogEntry(nextLog, entry);
 			const clickedLogId = String(entry.id || '').trim();
 			clearedSelectionLogLabelNodeIds.add(clickedLogId);
@@ -19365,7 +19460,14 @@ function normalizeNodeLabelsInPlace(nodes = []) {
 	return nodes;
 }
 
-export { isNodeInactive, loadPersistedSidebarViewMode, loadSelectionLogBoldPreference, normalizeNodeLabelInPlace, upsertSelectionLogEntry };
+export {
+	isNodeInactive,
+	isGenericOrPlaceholderLabel,
+	loadPersistedSidebarViewMode,
+	loadSelectionLogBoldPreference,
+	normalizeNodeLabelInPlace,
+	upsertSelectionLogEntry,
+};
 
 function mergeExpansionNodeIntoExistingNode(targetNodeId, incomingNode) {
 	if (!targetNodeId || !incomingNode) return;

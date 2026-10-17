@@ -79,6 +79,9 @@ import {
 	generateGraphTemplateName,
 	isSelectionLogPeopleEntry,
 	isSelectionLogFirmEntry,
+	isGenericOrPlaceholderLabel,
+	sanitizeSelectionLogEntries,
+	pruneGenericPlaceholderStubNodes,
 	resolveSelectionLogEntryGroupClass,
 	resolveLinkEndpoints,
 	rebindLinksToNodes,
@@ -1344,6 +1347,31 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		}
 		const coords = new Set(nodes.slice(1).map((node) => `${node.x},${node.y}`));
 		expect(coords.size).toBe(3);
+	});
+
+	it('sanitizeSelectionLogEntries drops unresolved Node person/firm placeholders', () => {
+		expect(isGenericOrPlaceholderLabel('Node person:9014', 'individual')).toBe(true);
+		expect(isGenericOrPlaceholderLabel('John Smith', 'individual')).toBe(false);
+		const cleaned = sanitizeSelectionLogEntries([
+			{ id: 'person:9014', label: 'Node person:9014', secondaryId: 'CRD# 9014', group: 'individual' },
+			{ id: 'person:4753871', label: 'John Thomas Grady', secondaryId: 'CRD# 4753871', group: 'individual' },
+			{ id: 'firm:8040', label: 'Node firm:8040', secondaryId: 'CRD# 8040', group: 'firm' },
+			{ id: 'firm:107342', label: 'FISHER INVESTMENTS', secondaryId: 'CRD# 107342', group: 'firm' },
+			{ id: '', label: 'orphan', group: 'individual' },
+		]);
+		expect(cleaned.map((e) => e.id)).toEqual(['person:4753871', 'firm:107342']);
+	});
+
+	it('pruneGenericPlaceholderStubNodes keeps named nodes and lists generic stub ids', () => {
+		const nodes = [
+			{ id: 'person:9014', label: 'Node person:9014', group: 'individual' },
+			{ id: 'person:4753871', label: 'John Thomas Grady', group: 'individual' },
+			{ id: 'firm:8040', label: 'J K R & COMPANY, INC.', group: 'firm' },
+			{ id: 'firm:8004', label: 'Node firm:8004', group: 'firm' },
+		];
+		const { removedIds, keepIds } = pruneGenericPlaceholderStubNodes(nodes);
+		expect(removedIds.sort()).toEqual(['firm:8004', 'person:9014']);
+		expect([...keepIds].sort()).toEqual(['firm:8040', 'person:4753871']);
 	});
 
 	it('normalizeNodeLabelInPlace upgrades Node person placeholders to fetched individual names', () => {
