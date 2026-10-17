@@ -1,6 +1,38 @@
 {
   "firms": [
     {
+      "id": 283390,
+      "name": "TRUIST ADVISORY SERVICES, INC."
+    },
+    {
+      "id": 109843,
+      "name": "C F PARKS INC"
+    },
+    {
+      "id": 4095,
+      "name": "METROPOLITAN LIFE INSURANCE COMPANY"
+    },
+    {
+      "id": 14251,
+      "name": "METLIFE SECURITIES INC."
+    },
+    {
+      "id": 7452,
+      "name": "VANGUARD MARKETING CORPORATION"
+    },
+    {
+      "id": 20472,
+      "name": "TIAA-CREF INDIVIDUAL & INSTITUTIONAL SERVICES, LLC"
+    },
+    {
+      "id": 17499,
+      "name": "TRUIST INVESTMENT SERVICES, INC."
+    },
+    {
+      "id": 117949,
+      "name": "NOVARE CAPITAL MANAGEMENT"
+    },
+    {
       "id": 134139,
       "name": "CAMBRIDGE INVESTMENT RESEARCH ADVISORS, INC."
     },
@@ -453,10 +485,6 @@
       "name": "UBS FINANCIAL SERVICES INC."
     },
     {
-      "id": 20472,
-      "name": "TIAA-CREF INDIVIDUAL & INSTITUTIONAL SERVICES, LLC"
-    },
-    {
       "id": 17344,
       "name": "FIRST CLEARING, LLC"
     },
@@ -487,14 +515,6 @@
     {
       "id": 3978,
       "name": "LINCOLN FINANCIAL ADVISORS CORPORATION"
-    },
-    {
-      "id": 4095,
-      "name": "METROPOLITAN LIFE INSURANCE COMPANY"
-    },
-    {
-      "id": 14251,
-      "name": "METLIFE SECURITIES INC."
     },
     {
       "id": 46173,
@@ -2433,10 +2453,6 @@
       "name": "PIMCO INVESTMENTS LLC"
     },
     {
-      "id": 7452,
-      "name": "VANGUARD MARKETING CORPORATION"
-    },
-    {
       "id": 44430,
       "name": "FIRST CITIZENS INVESTOR SERVICES, INC."
     },
@@ -2613,10 +2629,6 @@
       "name": "RITHOLTZ WEALTH MANAGEMENT"
     },
     {
-      "id": 283390,
-      "name": "TRUIST ADVISORY SERVICES, INC."
-    },
-    {
       "id": 319484,
       "name": "49 FINANCIAL"
     },
@@ -2722,6 +2734,10 @@
     }
   ],
   "individuals": [
+    {
+      "id": 4818198,
+      "name": "ANDREW EDWARD FISHER"
+    },
     {
       "id": 2249811,
       "name": "SEVAG HRATCH VARTANIAN"
@@ -3797,6 +3813,25 @@
     {
       "id": 4317416,
       "name": "ROGER J MASON"
+    },
+    {
+      "id": 322591,
+      "name": "DAVID JAMES MASON"
+    },
+    {
+      "id": 2320473,
+      "name": "EUGENE ARTHUR MASON"
+    },
+    {
+      "id": 2257293,
+      "name": "Lewis Brent Mason"
+    },
+    {
+      "id": 2212832,
+      "name": "CALVIN BOYD MASON"
+    }
+  ]
+}": "ROGER J MASON"
     },
     {
       "id": 322591,

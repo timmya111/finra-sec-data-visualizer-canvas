@@ -73,6 +73,7 @@ import {
 	buildSessionRenderGraphData,
 	orderSessionRestoreNodes,
 	collectSessionRestoreLinkChunk,
+	assignFallbackSessionRestorePositions,
 	SESSION_RESTORE_NODE_CHUNK_SIZE,
 	filterSelectionLogLabelNodeIdsByScope,
 	generateGraphTemplateName,
@@ -1322,6 +1323,27 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(chunk).toHaveLength(1);
 		expect(chunk[0].source).toBe('person:2');
 		expect(chunk[0].target).toBe('firm:1');
+	});
+
+	it('assignFallbackSessionRestorePositions spreads nodes that lack coordinates instead of stacking at origin', () => {
+		const nodes = [
+			{ id: 'person:1', x: 100, y: 200 },
+			{ id: 'person:2' },
+			{ id: 'firm:3', x: Number.NaN, y: Number.NaN },
+			{ id: 'person:4' },
+		] as any[];
+		const assigned = assignFallbackSessionRestorePositions(nodes, { width: 800, height: 600 });
+		expect(assigned).toBe(3);
+		expect(nodes[0].x).toBe(100);
+		expect(nodes[0].y).toBe(200);
+		for (const node of nodes.slice(1)) {
+			expect(Number.isFinite(node.x)).toBe(true);
+			expect(Number.isFinite(node.y)).toBe(true);
+			expect(node.fx).toBe(node.x);
+			expect(node.fy).toBe(node.y);
+		}
+		const coords = new Set(nodes.slice(1).map((node) => `${node.x},${node.y}`));
+		expect(coords.size).toBe(3);
 	});
 
 	it('normalizeNodeLabelInPlace upgrades Node person placeholders to fetched individual names', () => {

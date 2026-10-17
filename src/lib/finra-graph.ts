@@ -1307,11 +1307,53 @@ function getPersistedNodePositions({ compact = false } = {}) {
 	if (!Array.isArray(globalState.layoutNodes) || !globalState.layoutNodes.length) return [];
 	if (!compact) return globalState.layoutNodes.map((node) => buildPersistedNodePosition(node));
 
-	const focusIds = new Set(
-		[globalState.selectedId, ...globalState.highlightedSelections.map((entry) => entry?.id), ...Array.from(globalState.persistentSelectedIds)].map((value) => String(value || '').trim()).filter(Boolean),
-	);
-	if (!focusIds.size) return [];
-	return globalState.layoutNodes.filter((node) => focusIds.has(String(node.id))).map((node) => buildPersistedNodePosition(node));
+	// Compact used to keep only the selected/highlighted nodes. Large Continue restores then
+	// stacked every other node at the origin. Keep id+x+y for the full canvas (drop fx/fy).
+	return globalState.layoutNodes.map((node) => ({
+		id: node.id,
+		x: Number.isFinite(node.x) ? node.x : null,
+		y: Number.isFinite(node.y) ? node.y : null,
+	}));
+}
+
+/** Spread any restore nodes that still lack coordinates so Continue does not stack them at (0,0). */
+export function assignFallbackSessionRestorePositions(
+	nodes: Array<{ id?: string; x?: number; y?: number; fx?: number | null; fy?: number | null; vx?: number; vy?: number }> = [],
+	options: { width?: number; height?: number } = {},
+) {
+	const list = Array.isArray(nodes) ? nodes : [];
+	const missing = list.filter((node) => node && (!Number.isFinite(node.x) || !Number.isFinite(node.y)));
+	if (!missing.length) return 0;
+
+	const positioned = list.filter((node) => node && Number.isFinite(node.x) && Number.isFinite(node.y));
+	const width = Math.max(400, Number(options.width) || document.getElementById('fg-main')?.clientWidth || 1200);
+	const height = Math.max(300, Number(options.height) || document.getElementById('fg-main')?.clientHeight || 800);
+	let originX = width / 2;
+	let originY = height / 2;
+	if (positioned.length) {
+		originX = positioned.reduce((sum, node) => sum + Number(node.x), 0) / positioned.length;
+		originY = positioned.reduce((sum, node) => sum + Number(node.y), 0) / positioned.length;
+	}
+
+	const cols = Math.max(1, Math.ceil(Math.sqrt(missing.length)));
+	const gap = 56;
+	const gridWidth = (cols - 1) * gap;
+	const rows = Math.ceil(missing.length / cols);
+	const gridHeight = (rows - 1) * gap;
+	const startX = originX - gridWidth / 2;
+	const startY = originY - gridHeight / 2;
+
+	missing.forEach((node, index) => {
+		const col = index % cols;
+		const row = Math.floor(index / cols);
+		node.x = startX + col * gap;
+		node.y = startY + row * gap;
+		node.fx = node.x;
+		node.fy = node.y;
+		node.vx = 0;
+		node.vy = 0;
+	});
+	return missing.length;
 }
 
 function buildSessionPayload({ compact = false, extraNodeMode = 'full' }: { compact?: boolean; extraNodeMode?: 'full' | 'ids' | 'none' } = {}) {
@@ -2709,23 +2751,40 @@ const SESSION_RESTORE_MODE_KEY = 'fg_restore_mode';
  * Paint restored session nodes in batches after Continue. A single full renderGraph of a large
  * saved canvas climbs RSS and often freezes/crashes the tab on crash-recovery.
  */
-export const SESSION_RESTORE_NODE_CHUNK_SIZE = 64;
+export const SESSION_RESTORE_NODE_CHUNK_SIZE = 48;
 /** Above this, skip the final deep-copy renderGraph rebuild — layout is already painted via appends. */
-const SESSION_RESTORE_FULL_REBUILD_MAX_NODES = 400;
+const SESSION_RESTORE_FULL_REBUILD_MAX_NODES = 200;
+/** Rebuild indexes / paint this often during lean bulk restore (not every chunk). */
+const SESSION_RESTORE_INDEX_EVERY_CHUNKS = 4;
+let sessionRestoreInProgress = false;
 /** Set while a graph session is live; cleared on clean pagehide. Surviving a reload means crash/unclean exit. */
 const SESSION_DIRTY_KEY = 'fg_session_dirty';
 type SessionRecoveryChoice = 'continue' | 'reset' | 'log-list';
 type SessionRecoveryReason = 'fresh' | 'slow' | 'crash';
 let sessionCleanExitListenerBound = false;
 
-function yieldToBrowserForSessionRestore(): Promise<void> {
+function yieldToBrowserForSessionRestore(heavy = false): Promise<void> {
 	return new Promise((resolve) => {
+		const finish = () => resolve();
 		if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-			window.requestAnimationFrame(() => resolve());
+			window.requestAnimationFrame(() => {
+				if (!heavy) {
+					finish();
+					return;
+				}
+				// Extra turn for multi-thousand-node restores so the tab can paint/GC.
+				window.requestAnimationFrame(() => setTimeout(finish, 0));
+			});
 			return;
 		}
-		setTimeout(() => resolve(), 0);
+		setTimeout(finish, heavy ? 16 : 0);
 	});
+}
+
+function getSessionRestoreChunkSize(totalNodes: number) {
+	if (totalNodes > 4000) return 24;
+	if (totalNodes > 1500) return 32;
+	return SESSION_RESTORE_NODE_CHUNK_SIZE;
 }
 
 /** Prefer selected / highlighted nodes in the first restore chunks so the canvas feels usable early. */
@@ -7255,21 +7314,52 @@ async function ensureSessionRestoreCanvasShell(session, { clearExistingLayout = 
 	}
 }
 
+function finalizeSessionRestoreLayoutPaint() {
+	if (!Array.isArray(globalState.layoutNodes) || !Array.isArray(globalState.layoutLinks)) return;
+	resolveLinkEndpoints(globalState.layoutLinks, globalState.layoutNodes);
+	rebuildLayoutLinkIndexes(globalState.layoutLinks);
+	applyGraphDerivedNodeMetrics(globalState.layoutNodes, globalState.layoutLinks);
+	setGraphLabelRenderMode(globalState.layoutNodes.length);
+	globalState.neighborMap = buildNeighborMap(globalState.layoutNodes, globalState.layoutLinks);
+	try {
+		globalState.simulation?.nodes?.(globalState.layoutNodes);
+		globalState.simulation?.force?.('link')?.links?.(globalState.layoutLinks);
+		globalState.simulation?.alpha?.(0);
+		globalState.simulation?.alphaTarget?.(0);
+		globalState.simulation?.stop?.();
+	} catch {
+		/* non-critical */
+	}
+	if (globalState.layoutNodes.length || globalState.layoutLinks.length) showEmpty(false);
+	scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
+}
+
 async function appendSessionRestoreChunks(nodes, links, { statusPrefix = 'Restoring session' }: { statusPrefix?: string } = {}) {
 	const ordered = Array.isArray(nodes) ? nodes : [];
 	const allLinks = Array.isArray(links) ? links : [];
 	if (!ordered.length && !allLinks.length) return 0;
 
-	const presentIds = new Set<string>(
-		(globalState.layoutNodes || [])
-			.map((node) => String(node?.id || '').trim())
-			.filter((id): id is string => Boolean(id)),
-	);
-	const total = ordered.length;
-	let painted = 0;
+	if (!Array.isArray(globalState.layoutNodes)) globalState.layoutNodes = [];
+	if (!Array.isArray(globalState.layoutLinks)) globalState.layoutLinks = [];
 
-	for (let i = 0; i < ordered.length; i += SESSION_RESTORE_NODE_CHUNK_SIZE) {
-		const rawChunk = ordered.slice(i, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+	const presentIds = new Set<string>(
+		globalState.layoutNodes.map((node) => String(node?.id || '').trim()).filter((id): id is string => Boolean(id)),
+	);
+	const presentLinkKeys = new Set<string>();
+	for (const link of globalState.layoutLinks) {
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		if (sourceId && targetId) presentLinkKeys.add(`${sourceId}|${targetId}`);
+	}
+
+	const total = ordered.length;
+	const chunkSize = getSessionRestoreChunkSize(total);
+	const heavy = total > 1500;
+	let painted = 0;
+	let chunkIndex = 0;
+
+	for (let i = 0; i < ordered.length; i += chunkSize) {
+		const rawChunk = ordered.slice(i, i + chunkSize);
 		const chunk = rawChunk.filter((node) => {
 			const id = String(node?.id || '').trim();
 			if (!id || presentIds.has(id)) return false;
@@ -7277,26 +7367,49 @@ async function appendSessionRestoreChunks(nodes, links, { statusPrefix = 'Restor
 			return true;
 		});
 		const chunkIds = new Set<string>(chunk.map((node) => String(node.id)));
-		const linkChunk = collectSessionRestoreLinkChunk(allLinks, presentIds, chunkIds);
-		if (chunk.length || linkChunk.length) {
-			// Never reheat the force sim on session restore — that climbed multi-GB RSS on load.
-			globalState.appendFetched(chunk, linkChunk, {
-				skipPersist: true,
-				skipFindRefresh: true,
-				skipSimRestart: true,
-			});
+		const linkChunk = collectSessionRestoreLinkChunk(allLinks, presentIds, chunkIds).filter((link) => {
+			const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+			const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+			if (!sourceId || !targetId) return false;
+			const key = `${sourceId}|${targetId}`;
+			if (presentLinkKeys.has(key)) return false;
+			presentLinkKeys.add(key);
+			return true;
+		});
+
+		if (chunk.length) {
+			resetClearNonLogStageAfterNodesAdded();
+			globalState.layoutNodes.push(...chunk);
 		}
-		painted = Math.min(total, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
+		if (linkChunk.length) {
+			globalState.layoutLinks.push(...linkChunk);
+		}
+
+		painted = Math.min(total, i + chunkSize);
+		chunkIndex += 1;
 		updateFetchStatus(`${statusPrefix} ${painted}/${total}…`, true);
-		await yieldToBrowserForSessionRestore();
+
+		const isLast = painted >= total;
+		if (isLast || chunkIndex % SESSION_RESTORE_INDEX_EVERY_CHUNKS === 0) {
+			// Lean path: no appendFetched sidecar hydration, no outer-edge placement, no persist.
+			finalizeSessionRestoreLayoutPaint();
+		}
+		await yieldToBrowserForSessionRestore(heavy);
 	}
 
+	finalizeSessionRestoreLayoutPaint();
+	if (typeof window !== 'undefined') {
+		(window as any).__FINRA_GRAPH_NODES = globalState.layoutNodes;
+		(window as any).__FINRA_GRAPH_LINKS = globalState.layoutLinks;
+	}
 	return painted;
 }
 
 async function restoreSavedSession(session) {
 	if (!session || session.cleared) return;
 
+	sessionRestoreInProgress = true;
+	try {
 	if (Array.isArray(session.visitedNodeIds)) {
 		globalState.visitedNodeIds = new Set(session.visitedNodeIds);
 	}
@@ -7322,15 +7435,20 @@ async function restoreSavedSession(session) {
 	}
 
 	restoreNodes.forEach((node) => resetTransientDetailState(node));
-	if (savedPositions.length && restoreNodes.length) {
-		stampSavedPositionsOntoNodeList(savedPositions, restoreNodes);
-	}
 
 	if (restoreNodes.length || restoreLinks.length) {
 		const normalized = normalizeGraphPayloadByIdentity(restoreNodes, restoreLinks);
 		restoreNodes = normalized.nodes;
 		restoreLinks = normalized.links;
+		// Stamp AFTER normalize — identity merge clones nodes and must keep saved coords.
+		if (savedPositions.length && restoreNodes.length) {
+			stampSavedPositionsOntoNodeList(savedPositions, restoreNodes);
+		}
+		assignFallbackSessionRestorePositions(restoreNodes);
 		mergeIntoGraphData(restoreNodes, restoreLinks);
+		if (savedPositions.length) {
+			stampSavedPositionsOntoNodeList(savedPositions, globalState.graphData?.nodes);
+		}
 
 		globalState.isSubsetMode =
 			Boolean(globalState.graphData?.nodes?.length) && restoreNodes.length < globalState.graphData.nodes.length;
@@ -7370,7 +7488,8 @@ async function restoreSavedSession(session) {
 	}
 
 	try {
-		applySavedNodePositions(savedPositions);
+		if (savedPositions.length) applySavedNodePositions(savedPositions);
+		assignFallbackSessionRestorePositions(globalState.layoutNodes || []);
 	} catch {
 		// non-critical
 	}
@@ -7381,6 +7500,7 @@ async function restoreSavedSession(session) {
 		globalState.simulation?.alpha?.(0);
 		globalState.simulation?.alphaTarget?.(0);
 		globalState.simulation?.stop?.();
+		finalizeSessionRestoreLayoutPaint();
 	} catch {
 		/* non-critical */
 	}
@@ -7484,6 +7604,9 @@ async function restoreSavedSession(session) {
 		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 	} catch {
 		/* non-critical */
+	}
+	} finally {
+		sessionRestoreInProgress = false;
 	}
 }
 
@@ -15577,20 +15700,27 @@ function scheduleSidecarIndividualLabelHydration(nodes) {
 				const name = String(node?.label || node?.name || '').trim();
 				if (id && name && !isGenericOrPlaceholderLabel(name, 'individual')) names.set(id, name);
 			}
-			// Any CRD still unresolved: fetch individual detail for that CRD only.
-			for (const id of ids) {
-				if (names.has(id)) continue;
-				try {
-					const detailRes = await fetchWithTimeout(`${BASE}/api/finra/individual/${encodeURIComponent(id)}`);
-					if (!detailRes.ok) continue;
-					const detail = await detailRes.json();
-					const basic = detail?.basicInformation || detail || {};
-					const composed = [basic.firstName, basic.middleName, basic.lastName].filter(Boolean).join(' ').trim();
-					const name = composed || String(basic.name || detail?.name || '').trim();
-					if (name && !isGenericOrPlaceholderLabel(name, 'individual')) names.set(id, name);
-				} catch {
-					/* per-CRD check is best-effort */
-				}
+			// Any CRD still unresolved: fetch individual detail, but never stampede.
+			// Unbounded parallel/sequential storms after Continue OOM'd large restored canvases.
+			const unresolvedIds = ids.filter((id) => !names.has(id)).slice(0, 40);
+			for (let i = 0; i < unresolvedIds.length; i += 4) {
+				if (sessionRestoreInProgress) break;
+				const batch = unresolvedIds.slice(i, i + 4);
+				await Promise.all(
+					batch.map(async (id) => {
+						try {
+							const detailRes = await fetchWithTimeout(`${BASE}/api/finra/individual/${encodeURIComponent(id)}`);
+							if (!detailRes.ok) return;
+							const detail = await detailRes.json();
+							const basic = detail?.basicInformation || detail || {};
+							const composed = [basic.firstName, basic.middleName, basic.lastName].filter(Boolean).join(' ').trim();
+							const name = composed || String(basic.name || detail?.name || '').trim();
+							if (name && !isGenericOrPlaceholderLabel(name, 'individual')) names.set(id, name);
+						} catch {
+							/* per-CRD check is best-effort */
+						}
+					}),
+				);
 			}
 			if (!names.size) return;
 			const applyName = (node) => {
@@ -15636,9 +15766,20 @@ function scheduleSidecarIndividualLabelHydration(nodes) {
 function appendFetchedImpl(
 	newNodes,
 	newLinks,
-	options: { skipPersist?: boolean; skipFindRefresh?: boolean; skipSimRestart?: boolean } = {},
+	options: {
+		skipPersist?: boolean;
+		skipFindRefresh?: boolean;
+		skipSimRestart?: boolean;
+		skipSidecarHydration?: boolean;
+	} = {},
 ) {
-	const { skipPersist = false, skipFindRefresh = false, skipSimRestart = false } = options;
+	const {
+		skipPersist = false,
+		skipFindRefresh = false,
+		skipSimRestart = false,
+		skipSidecarHydration = false,
+	} = options;
+	const suppressSidecarHydration = skipSidecarHydration || sessionRestoreInProgress;
 	if (!Array.isArray(newNodes)) newNodes = [];
 	if (!Array.isArray(newLinks)) newLinks = [];
 	const gatedIncoming = filterIncomingGraphAgainstClearNonLogGate(newNodes, newLinks);
@@ -15648,9 +15789,11 @@ function appendFetchedImpl(
 	if (!globalState.layoutNodes || !globalState.layoutLinks) {
 		if (globalState.graphData && Array.isArray(newNodes) && Array.isArray(newLinks)) {
 			mergeIntoGraphData(newNodes, newLinks);
-			scheduleSidecarFirmLabelHydration(globalState.graphData.nodes);
-			scheduleSidecarIndividualLabelHydration(globalState.graphData.nodes);
-			scheduleFirmConnectionCountHydration(globalState.graphData.nodes);
+			if (!suppressSidecarHydration) {
+				scheduleSidecarFirmLabelHydration(globalState.graphData.nodes);
+				scheduleSidecarIndividualLabelHydration(globalState.graphData.nodes);
+				scheduleFirmConnectionCountHydration(globalState.graphData.nodes);
+			}
 		}
 		return;
 	}
@@ -15714,9 +15857,11 @@ function appendFetchedImpl(
 	}
 
 	globalState.layoutNodes = mergedNodes;
-	scheduleSidecarFirmLabelHydration(mergedNodes);
-	scheduleSidecarIndividualLabelHydration(mergedNodes);
-	scheduleFirmConnectionCountHydration(mergedNodes);
+	if (!suppressSidecarHydration) {
+		scheduleSidecarFirmLabelHydration(mergedNodes);
+		scheduleSidecarIndividualLabelHydration(mergedNodes);
+		scheduleFirmConnectionCountHydration(mergedNodes);
+	}
 	// Rebind any pre-existing links to the merged node objects so the visualization
 	// keeps them attached after a fetch updates the node list.
 	resolveLinkEndpoints(globalState.layoutLinks, globalState.layoutNodes);
