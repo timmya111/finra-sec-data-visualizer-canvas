@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { getSearchIndexFilePaths } from './searchDataPaths';
 import { isValidCrd } from '@/lib/crd';
 import { isGenericFirmDisplayName as isGenericFirmDisplayNameShared, isGenericPersonDisplayName } from '@/lib/displayNameGuards';
+import { applyFirmSourceFieldsToNode } from './firmSourcePaint';
 import { enrichFirmSearchHitSource } from './searchHitActivity';
 
 export type LocalSearchSource = 'finra' | 'sec';
@@ -781,6 +782,70 @@ export async function hydrateFirmNodeLabelsFromSearchSidecar(nodes: any[] = [], 
 	return list;
 }
 
+function firmNodeNeedsSourcePaintFields(node: any): boolean {
+	if (!node || typeof node !== 'object') return false;
+	return typeof node.hasFinraData !== 'boolean' || typeof node.hasSecData !== 'boolean';
+}
+
+function mergeFirmSearchHitsForPaint(finraHit: LocalSearchHit | undefined, secHit: LocalSearchHit | undefined): LocalSearchHit | null {
+	if (!finraHit && !secHit) return null;
+	if (finraHit && !secHit) return finraHit;
+	if (!finraHit && secHit) return secHit;
+	// Present in both indexes → dual coverage; keep non-empty scopes/numbers from either hit.
+	return {
+		...secHit,
+		...finraHit,
+		firm_bc_scope: finraHit?.firm_bc_scope || secHit?.firm_bc_scope || finraHit?.bcScope || secHit?.bcScope,
+		firm_ia_scope: finraHit?.firm_ia_scope || secHit?.firm_ia_scope || finraHit?.iaScope || secHit?.iaScope,
+		iaSecNumber: finraHit?.iaSecNumber || finraHit?.iaSECNumber || secHit?.iaSecNumber || secHit?.iaSECNumber,
+		bdSecNumber: finraHit?.bdSecNumber || finraHit?.bdSECNumber || secHit?.bdSecNumber || secHit?.bdSECNumber,
+		hasFinraData: true,
+		hasSecData: true,
+	};
+}
+
+/**
+ * Stamp FINRA/SEC paint fields (hasFinraData, hasSecData, scopes, SEC numbers) onto firm
+ * stubs from search sidecars. Expand/cluster payloads often only have id + label.
+ */
+export async function hydrateFirmNodeSourceFieldsFromSearchSidecar(
+	nodes: any[] = [],
+	options: LocalSearchOptions = {},
+): Promise<any[]> {
+	const list = Array.isArray(nodes) ? nodes : [];
+	const neededIds: string[] = [];
+	for (const node of list) {
+		const group = String(node?.group || (String(node?.id || '').startsWith('firm:') ? 'firm' : '')).toLowerCase();
+		if (group !== 'firm') continue;
+		if (!firmNodeNeedsSourcePaintFields(node)) continue;
+		const firmId = String(node?.firmId || node?.id || '')
+			.replace(/^firm:/i, '')
+			.trim();
+		if (firmId) neededIds.push(firmId);
+	}
+	if (!neededIds.length) return list;
+
+	const [finraHits, secHits] = await Promise.all([
+		lookupLocalSearchHitsByIds('finra', 'firm', neededIds, options),
+		lookupLocalSearchHitsByIds('sec', 'firm', neededIds, options),
+	]);
+
+	for (const node of list) {
+		const group = String(node?.group || (String(node?.id || '').startsWith('firm:') ? 'firm' : '')).toLowerCase();
+		if (group !== 'firm') continue;
+		if (!firmNodeNeedsSourcePaintFields(node)) continue;
+		const firmId = String(node?.firmId || node?.id || '')
+			.replace(/^firm:/i, '')
+			.trim();
+		if (!firmId) continue;
+		const src = mergeFirmSearchHitsForPaint(finraHits.get(firmId), secHits.get(firmId));
+		if (!src) continue;
+		if (!node.firmId) node.firmId = firmId;
+		applyFirmSourceFieldsToNode(node, src);
+	}
+	return list;
+}
+
 async function lookupIndividualNamesFromSearchSidecar(
 	individualIds: Array<string | number | null | undefined>,
 	options: LocalSearchOptions = {},
@@ -937,10 +1002,11 @@ export function attachFirmConnectionCountsFromFlatfiles(nodes: any[] = []): any[
 	return list;
 }
 
-/** Labels + known connection counts from search sidecars / firm-connections flatfiles. */
+/** Labels + FINRA/SEC paint fields + known connection counts from search sidecars / flatfiles. */
 export async function hydrateGraphNodesFromSearchSidecar(nodes: any[] = [], options: LocalSearchOptions = {}): Promise<any[]> {
 	const list = Array.isArray(nodes) ? nodes : [];
 	await hydrateFirmNodeLabelsFromSearchSidecar(list, options);
+	await hydrateFirmNodeSourceFieldsFromSearchSidecar(list, options);
 	await hydrateIndividualNodeLabelsFromSearchSidecar(list, options);
 	await hydrateNodeConnectionCountsFromSearchSidecar(list, options);
 	attachFirmConnectionCountsFromFlatfiles(list);

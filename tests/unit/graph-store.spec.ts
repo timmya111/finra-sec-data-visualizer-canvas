@@ -177,4 +177,54 @@ describe('graphStore recent seed ordering', () => {
 		expect(compact.currentIAEmployments).toBeUndefined();
 		expect(compact.previousIAEmployments).toBeUndefined();
 	});
+
+	it('toCompactNode keeps firm paint identity fields for FINRA/SEC coloring', () => {
+		const firmNode = {
+			id: 'firm:250',
+			label: 'EDWARD JONES',
+			group: 'firm',
+			firmId: '250',
+			bcScope: 'ACTIVE',
+			iaScope: 'ACTIVE',
+			hasFinraData: true,
+			hasSecData: true,
+			iaSecNumber: '3297',
+			bdSecNumber: '759',
+			x: 1,
+			y: 2,
+			basicInformation: {
+				firmId: '250',
+				firmName: 'EDWARD JONES',
+				bcScope: 'ACTIVE',
+				iaScope: 'ACTIVE',
+				iaSECNumber: '3297',
+				bdSECNumber: '759',
+				extraNoise: 'drop-me',
+			},
+			currentEmployments: [{ firmId: '1' }],
+		};
+
+		const compact = toCompactNode(firmNode);
+		expect(compact).toEqual({
+			id: 'firm:250',
+			label: 'EDWARD JONES',
+			group: 'firm',
+			firmId: '250',
+			bcScope: 'ACTIVE',
+			iaScope: 'ACTIVE',
+			hasFinraData: true,
+			hasSecData: true,
+			iaSecNumber: '3297',
+			bdSecNumber: '759',
+			basicInformation: {
+				firmId: '250',
+				firmName: 'EDWARD JONES',
+				bcScope: 'ACTIVE',
+				iaScope: 'ACTIVE',
+				iaSECNumber: '3297',
+				bdSECNumber: '759',
+			},
+		});
+		expect(compact.currentEmployments).toBeUndefined();
+	});
 });

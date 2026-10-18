@@ -10,12 +10,14 @@ import {
 	extractSearchQueries,
 	searchQueriesSequentially,
 	hydrateFirmNodeLabelsFromSearchSidecar,
+	hydrateFirmNodeSourceFieldsFromSearchSidecar,
 	hydrateNodeConnectionCountsFromSearchSidecar,
 	countIndividualConnectionsFromSearchHit,
 	attachFirmConnectionCountsFromFlatfiles,
 	lookupFirmNamesFromSearchSidecar,
 	clearSearchIndexCache,
 } from '@/lib/localSearch';
+import { getFirmSourceCoverage } from '@/lib/firmSourcePaint';
 import { getSearchIndexFilePath } from '@/lib/searchDataPaths';
 
 async function withTempSearchIndex(fileName: string, content: string | Buffer, run: (root: string) => Promise<void>) {
@@ -123,6 +125,91 @@ describe('local search indexes', () => {
 			expect(nodes[0].label).toBe('RBC CAPITAL MARKETS, LLC');
 			expect(nodes[0].firmName).toBe('RBC CAPITAL MARKETS, LLC');
 		});
+	});
+
+	it('stamps FINRA/SEC paint fields onto firm stubs from the search sidecar', async () => {
+		const finraPayload = JSON.stringify({
+			generatedAt: '2026-01-01T00:00:00.000Z',
+			bucket: 'finra:firm',
+			docs: [
+				{
+					id: 'finra:firm:250',
+					type: 'firm',
+					source: 'finra',
+					nameSearchText: 'edward jones',
+					strictSearchText: 'edward jones 250',
+					searchText: '250 edward jones',
+					hit: {
+						firm_id: '250',
+						firmId: '250',
+						firm_name: 'EDWARD JONES',
+						firm_bc_scope: 'ACTIVE',
+						firm_ia_scope: 'ACTIVE',
+						iaSecNumber: '3297',
+						bdSecNumber: '759',
+					},
+				},
+				{
+					id: 'finra:firm:8217',
+					type: 'firm',
+					source: 'finra',
+					nameSearchText: 'transamerica capital',
+					strictSearchText: 'transamerica capital 8217',
+					searchText: '8217 transamerica capital',
+					hit: {
+						firm_id: '8217',
+						firmId: '8217',
+						firm_name: 'TRANSAMERICA CAPITAL, LLC',
+						firm_bc_scope: 'ACTIVE',
+						firmStatus: 'Approved',
+						bdSecNumber: '24829',
+					},
+				},
+			],
+		});
+		const secPayload = JSON.stringify({
+			generatedAt: '2026-01-01T00:00:00.000Z',
+			bucket: 'sec:firm',
+			docs: [
+				{
+					id: 'sec:firm:107319',
+					type: 'firm',
+					source: 'sec',
+					nameSearchText: 'sec only advisors',
+					strictSearchText: 'sec only advisors 107319',
+					searchText: '107319 sec only advisors',
+					hit: {
+						firm_id: '107319',
+						firmId: '107319',
+						firm_name: 'SEC ONLY ADVISORS',
+						firm_ia_scope: 'ACTIVE',
+						iaSECNumber: '42910',
+					},
+				},
+			],
+		});
+
+		const root = await mkdtemp(path.join(os.tmpdir(), 'finra-search-index-'));
+		const indexDir = path.join(root, 'data', 'national');
+		await mkdir(indexDir, { recursive: true });
+		await writeFile(path.join(indexDir, 'search-index.finra.firm.json.gz'), gzipSync(Buffer.from(finraPayload)));
+		await writeFile(path.join(indexDir, 'search-index.sec.firm.json.gz'), gzipSync(Buffer.from(secPayload)));
+		try {
+			const nodes: any[] = [
+				{ id: 'firm:250', group: 'firm', label: 'EDWARD JONES' },
+				{ id: 'firm:8217', group: 'firm', label: 'TRANSAMERICA CAPITAL, LLC' },
+				{ id: 'firm:107319', group: 'firm', label: 'SEC ONLY ADVISORS' },
+			];
+			await hydrateFirmNodeSourceFieldsFromSearchSidecar(nodes, { seedRoots: [root] });
+			expect(nodes[0]).toMatchObject({ firmId: '250', hasFinraData: true, hasSecData: true, bcScope: 'ACTIVE', iaScope: 'ACTIVE' });
+			expect(getFirmSourceCoverage(nodes[0])).toBe('both');
+			expect(nodes[1]).toMatchObject({ firmId: '8217', hasFinraData: true, hasSecData: false, bcScope: 'ACTIVE' });
+			expect(getFirmSourceCoverage(nodes[1])).toBe('finra_only');
+			expect(nodes[2]).toMatchObject({ firmId: '107319', hasFinraData: false, hasSecData: true, iaScope: 'ACTIVE', iaSecNumber: '42910' });
+			expect(getFirmSourceCoverage(nodes[2])).toBe('sec_only');
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it('counts unique current firm connections from individual search hits', () => {
