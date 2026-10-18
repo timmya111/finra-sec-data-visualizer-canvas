@@ -942,6 +942,9 @@ export const TEXT_SEARCH_FETCH_LIMIT = 100;
 export const TEXT_SEARCH_DETAIL_HYDRATION_LIMIT = 32;
 const TEXT_SEARCH_DETAIL_HYDRATION_CONCURRENCY = 3;
 const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD = 16;
+/** When the canvas is already dense, flush hydration sooner so each append stays small. */
+const TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD_DENSE = 8;
+const TEXT_SEARCH_DENSE_CANVAS_NODE_COUNT = 250;
 /** Progressive database-search canvas flushes: coalesce pages so a large on-screen graph is not rebuilt per hit page. */
 const SEARCH_FLUSH_MIN_INTERVAL_MS = 320;
 const SEARCH_FLUSH_NODE_THRESHOLD = 24;
@@ -1481,7 +1484,14 @@ let applyingGraphTemplate = false;
 let isCrdPasteImportOpen = false;
 let pasteCrdImportText = '';
 let crdPasteImportBusy = false;
+let crdPasteImportStartedAt = 0;
 let crdPasteImportStatus = '';
+let crdPasteImportGeneration = 0;
+/** If an import stays busy longer than this, treat it as stuck and allow a retry. */
+const CRD_PASTE_IMPORT_STALE_MS = 20_000;
+/** Hard cap for one paste-import run (partial results are kept). */
+const CRD_PASTE_IMPORT_OVERALL_TIMEOUT_MS = 120_000;
+let selectionLogTemplateActionsBound = false;
 
 function openSessionDatabase() {
 	return new Promise<IDBDatabase>((resolve, reject) => {
@@ -2183,64 +2193,94 @@ function ensureSelectionLogTemplateMounts() {
 	return hosts;
 }
 
-function bindSelectionLogTemplateHost(host: HTMLElement) {
-	if (host.dataset.templatesBound === 'true') return;
-	host.dataset.templatesBound = 'true';
+function readPasteCrdImportTextFromDom(preferredHost?: HTMLElement | null) {
+	const scope = preferredHost || document;
+	const textareas = Array.from(scope.querySelectorAll<HTMLTextAreaElement>('[data-fg-template-action="paste-textarea"]'));
+	for (const textarea of textareas) {
+		const value = String(textarea.value || '');
+		if (value.trim()) return value;
+	}
+	return pasteCrdImportText;
+}
 
-	host.addEventListener('click', (event) => {
+function resetCrdPasteImportBusy(reason?: string) {
+	if (reason) console.warn('CRD paste import reset:', reason);
+	crdPasteImportBusy = false;
+	crdPasteImportStartedAt = 0;
+	crdPasteImportGeneration += 1;
+}
+
+function handleSelectionLogTemplateAction(target: HTMLElement) {
+	const action = target.getAttribute('data-fg-template-action');
+	const templateId = target.getAttribute('data-template-id') || '';
+
+	if (action === 'toggle-panel') {
+		isSelectionLogTemplatesOpen = !isSelectionLogTemplatesOpen;
+		updateSelectionLogTemplatesUI();
+		return;
+	}
+
+	if (action === 'save-current') {
+		const template = saveCurrentGraphTemplate();
+		if (template) {
+			flashSelectionLogActionButton(target as HTMLButtonElement, 'Saved!');
+		}
+		return;
+	}
+
+	if (action === 'load' && templateId) {
+		void applyGraphTemplate(templateId).then((ok) => {
+			if (ok) flashSelectionLogActionButton(target as HTMLButtonElement, 'Loaded!');
+		});
+		return;
+	}
+
+	if (action === 'delete' && templateId) {
+		if (deleteGraphTemplate(templateId)) {
+			flashSelectionLogActionButton(target as HTMLButtonElement, 'Deleted!');
+		}
+		return;
+	}
+
+	if (action === 'toggle-paste-panel') {
+		isCrdPasteImportOpen = !isCrdPasteImportOpen;
+		updateSelectionLogTemplatesUI();
+		return;
+	}
+
+	if (action === 'paste-import') {
+		const host = target.closest('.fg-selection-log-templates-host') as HTMLElement | null;
+		const text = readPasteCrdImportTextFromDom(host);
+		pasteCrdImportText = text;
+		void importPastedCrdList(text, target as HTMLButtonElement);
+	}
+}
+
+/** Document-level delegation — survives sidebar/log host recreation without a refresh. */
+function bindSelectionLogTemplateActions() {
+	if (selectionLogTemplateActionsBound || typeof document === 'undefined') return;
+	selectionLogTemplateActionsBound = true;
+
+	document.addEventListener('click', (event) => {
 		const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-fg-template-action]') : null;
-		if (!target || !host.contains(target)) return;
+		if (!target) return;
 		const action = target.getAttribute('data-fg-template-action');
-		const templateId = target.getAttribute('data-template-id') || '';
-
-		if (action === 'toggle-panel') {
-			isSelectionLogTemplatesOpen = !isSelectionLogTemplatesOpen;
-			updateSelectionLogTemplatesUI();
-			return;
-		}
-
-		if (action === 'save-current') {
-			const template = saveCurrentGraphTemplate();
-			if (template) {
-				flashSelectionLogActionButton(target as HTMLButtonElement, 'Saved!');
-			}
-			return;
-		}
-
-		if (action === 'load' && templateId) {
-			void applyGraphTemplate(templateId).then((ok) => {
-				if (ok) flashSelectionLogActionButton(target as HTMLButtonElement, 'Loaded!');
-			});
-			return;
-		}
-
-		if (action === 'delete' && templateId) {
-			if (deleteGraphTemplate(templateId)) {
-				flashSelectionLogActionButton(target as HTMLButtonElement, 'Deleted!');
-			}
-			return;
-		}
-
-		if (action === 'toggle-paste-panel') {
-			isCrdPasteImportOpen = !isCrdPasteImportOpen;
-			updateSelectionLogTemplatesUI();
-			return;
-		}
-
-		if (action === 'paste-import') {
-			const textarea = host.querySelector<HTMLTextAreaElement>('[data-fg-template-action="paste-textarea"]');
-			const text = textarea ? textarea.value : pasteCrdImportText;
-			void importPastedCrdList(text);
-		}
+		// Textarea/rename inputs use input/change handlers; ignore bare clicks on them.
+		if (action === 'paste-textarea' || action === 'rename') return;
+		handleSelectionLogTemplateAction(target);
 	});
 
-	host.addEventListener('input', (event) => {
+	document.addEventListener('input', (event) => {
 		const target = event.target instanceof HTMLTextAreaElement ? event.target : null;
 		if (!target || target.getAttribute('data-fg-template-action') !== 'paste-textarea') return;
 		pasteCrdImportText = target.value;
+		// Keep sibling hosts (sidebar + drawer) in sync without a full rebuild.
+		document.querySelectorAll<HTMLTextAreaElement>('[data-fg-template-action="paste-textarea"]').forEach((textarea) => {
+			if (textarea !== target && textarea.value !== pasteCrdImportText) textarea.value = pasteCrdImportText;
+		});
 	});
 
-	host.addEventListener('change', (event) => {
+	document.addEventListener('change', (event) => {
 		const target = event.target instanceof HTMLInputElement ? event.target : null;
 		if (!target || target.getAttribute('data-fg-template-action') !== 'rename') return;
 		const templateId = target.getAttribute('data-template-id') || '';
@@ -2253,7 +2293,7 @@ function bindSelectionLogTemplateHost(host: HTMLElement) {
 		target.value = renamed.name;
 	});
 
-	host.addEventListener('keydown', (event) => {
+	document.addEventListener('keydown', (event) => {
 		const target = event.target instanceof HTMLInputElement ? event.target : null;
 		if (!target || target.getAttribute('data-fg-template-action') !== 'rename') return;
 		if (event.key === 'Enter') {
@@ -2264,11 +2304,11 @@ function bindSelectionLogTemplateHost(host: HTMLElement) {
 }
 
 function updateSelectionLogTemplatesUI() {
+	bindSelectionLogTemplateActions();
 	const hosts = ensureSelectionLogTemplateMounts();
 	if (!hosts.length) return;
 	const markup = renderSelectionLogTemplatesMarkup();
 	hosts.forEach((host) => {
-		bindSelectionLogTemplateHost(host);
 		host.innerHTML = markup;
 	});
 }
@@ -2780,8 +2820,62 @@ let isSelectionLogBold = false;
 let isSelectionLogEditMode = false;
 
 let selectionLogFilterText = '';
+let selectionLogFilterApplyTimer: ReturnType<typeof setTimeout> | null = null;
+type SelectionLogFilterFocusState = {
+	value: string;
+	selectionStart: number | null;
+	selectionEnd: number | null;
+	inSidebar: boolean;
+};
 let logGroupFirmsExpanded = true;
 let logGroupIndividualsExpanded = false;
+
+function captureSelectionLogFilterFocus(): SelectionLogFilterFocusState | null {
+	const active = typeof document !== 'undefined' ? (document.activeElement as HTMLInputElement | null) : null;
+	if (!active || !active.classList?.contains('fg-selection-log-filter')) return null;
+	return {
+		value: String(active.value || ''),
+		selectionStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+		selectionEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
+		inSidebar: Boolean(active.closest('#fg-sidebar')),
+	};
+}
+
+function restoreSelectionLogFilterFocus(state: SelectionLogFilterFocusState | null) {
+	if (!state || typeof document === 'undefined') return;
+	selectionLogFilterText = state.value;
+	const prefer = state.inSidebar ? '#fg-sidebar .fg-selection-log-filter' : '#fg-selection-log .fg-selection-log-filter';
+	const input =
+		(document.querySelector(prefer) as HTMLInputElement | null) ||
+		(document.querySelector('.fg-selection-log-filter') as HTMLInputElement | null);
+	if (!input) return;
+	if (input.value !== state.value) input.value = state.value;
+	const run = () => {
+		if (document.activeElement === input) {
+			try {
+				const start = state.selectionStart ?? state.value.length;
+				const end = state.selectionEnd ?? state.value.length;
+				input.setSelectionRange(start, end);
+			} catch {
+				/* ignore */
+			}
+			return;
+		}
+		input.focus({ preventScroll: true });
+		try {
+			const start = state.selectionStart ?? state.value.length;
+			const end = state.selectionEnd ?? state.value.length;
+			input.setSelectionRange(start, end);
+		} catch {
+			/* ignore */
+		}
+	};
+	run();
+	if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+		window.requestAnimationFrame(run);
+	}
+}
+
 let forceFirmsBold = false;
 // Node ids whose large label is off while Log Bold is on. The inverse of the
 // per-CRD Bold toggles in the selection log. Re-selecting a node turns Bold on.
@@ -6087,15 +6181,24 @@ function updateSelectionLogUI() {
 
 	const filterInputs = Array.from(document.querySelectorAll<HTMLInputElement>('.fg-selection-log-filter'));
 	filterInputs.forEach((input) => {
+		if (input.value !== selectionLogFilterText) input.value = selectionLogFilterText;
 		if (input.dataset.bound !== 'true') {
 			input.dataset.bound = 'true';
-			input.value = selectionLogFilterText;
 			input.addEventListener('input', (e) => {
-				selectionLogFilterText = (e.target as HTMLInputElement).value || '';
-				filterInputs.forEach((fi) => {
-					if (fi !== input) fi.value = selectionLogFilterText;
+				const target = e.target as HTMLInputElement;
+				selectionLogFilterText = target.value || '';
+				document.querySelectorAll<HTMLInputElement>('.fg-selection-log-filter').forEach((fi) => {
+					if (fi !== target && fi.value !== selectionLogFilterText) fi.value = selectionLogFilterText;
 				});
-				updateSelectionLogUI();
+				// Debounce the heavy list rebuild so keystrokes stay responsive and a concurrent
+				// renderSidebar() is less likely to race the focused filter input mid-edit.
+				if (selectionLogFilterApplyTimer) clearTimeout(selectionLogFilterApplyTimer);
+				selectionLogFilterApplyTimer = setTimeout(() => {
+					selectionLogFilterApplyTimer = null;
+					const focus = captureSelectionLogFilterFocus();
+					updateSelectionLogUI();
+					restoreSelectionLogFilterFocus(focus);
+				}, 120);
 			});
 		}
 	});
@@ -9206,6 +9309,7 @@ export function init(
 	document.addEventListener('click', handleDelegatedButtonClicks);
 	document.addEventListener('click', handleSelectionLogClearLabelsOutsideClick);
 	document.addEventListener('click', handleClearNonLogOutsideClick);
+	bindSelectionLogTemplateActions();
 	// Fetch/search status stays until the close button (#fg-subset-info-pin) is used.
 	// Do not dismiss on click-outside or focus changes.
 	syncSelectionLogActionButtonStates();
@@ -9961,7 +10065,10 @@ export function init(
 						setTimeout(() => resolve(), 0);
 					});
 
-				const flushSearchProgressNow = (statusLabel?: string, { persist = false }: { persist?: boolean } = {}) => {
+				const flushSearchProgressNow = (
+					statusLabel?: string,
+					{ persist = false }: { persist?: boolean } = {},
+				) => {
 					if (searchFlushBusy) {
 						pendingForcedFlush = { statusLabel, persist: Boolean(persist || pendingForcedFlush?.persist) };
 						return;
@@ -9983,14 +10090,34 @@ export function init(
 					lastSearchFlushAt = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
 					searchFlushBusy = true;
 					try {
+						// Never reheat the force sim on progressive search flushes. Warm surname
+						// searches return ~100 hits quickly; restarting layout on every chunk was
+						// crashing the tab even when API latency looked fine.
 						if (nodesToFlush.length || linksToFlush.length) {
-							globalState.appendFetched(nodesToFlush, linksToFlush, { skipPersist: !persist, skipFindRefresh: true });
-							mergeIntoGraphData(nodesToFlush, linksToFlush);
+							try {
+								globalState.appendFetched(nodesToFlush, linksToFlush, {
+									skipPersist: !persist,
+									skipFindRefresh: true,
+									skipSimRestart: true,
+								});
+								mergeIntoGraphData(nodesToFlush, linksToFlush);
+							} catch (flushErr) {
+								console.warn('Search canvas flush failed; continuing with remaining hits', flushErr);
+								try {
+									emergencyStopLayoutPaintStorm('search-flush-error');
+								} catch {
+									/* ignore */
+								}
+							}
 						}
 						if (existingIds.length) {
-							rerenderGraphNodesByIds(existingIds);
-							refreshGraphColors();
-							refreshTraceState();
+							try {
+								rerenderGraphNodesByIds(existingIds);
+								refreshGraphColors();
+								refreshTraceState();
+							} catch (styleErr) {
+								console.warn('Search style refresh failed', styleErr);
+							}
 						}
 						updateFetchStatus(
 							statusLabel ||
@@ -10003,7 +10130,10 @@ export function init(
 						const queued = pendingForcedFlush;
 						pendingForcedFlush = null;
 						if (queued || batchAllNodes.length || batchAllLinks.length || updatedExistingNodeIds.size) {
-							flushSearchProgressNow(queued?.statusLabel, { persist: Boolean(queued?.persist) });
+							// Async continue — sync recursion here stacked overflows on bursty warm searches.
+							setTimeout(() => {
+								flushSearchProgressNow(queued?.statusLabel, { persist: Boolean(queued?.persist) });
+							}, 0);
 						}
 					}
 				};
@@ -10025,6 +10155,25 @@ export function init(
 						searchFlushTimer = null;
 						flushSearchProgressNow(statusLabel);
 					}, SEARCH_FLUSH_MIN_INTERVAL_MS);
+				};
+
+				const finishSearchLayout = () => {
+					if (!progressiveAddedTotal) return;
+					try {
+						scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
+						reheatLayoutLikeRefresh({
+							newNodes: [],
+							eventName: 'search-complete',
+							light: true,
+						});
+					} catch (layoutErr) {
+						console.warn('Search layout finish failed', layoutErr);
+						try {
+							emergencyStopLayoutPaintStorm('search-layout-finish');
+						} catch {
+							/* ignore */
+						}
+					}
 				};
 
 				function addIndividualFromSource(src) {
@@ -10487,6 +10636,9 @@ export function init(
 						const pendingHydrateNodes: any[] = [];
 						const pendingHydrateLinks: any[] = [];
 						let hydrateFlushBusy = false;
+						const denseCanvas = (globalState.layoutNodes?.length || 0) >= TEXT_SEARCH_DENSE_CANVAS_NODE_COUNT;
+						const hydrateFlushThreshold =
+							denseCanvas ? TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD_DENSE : TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD;
 
 						const flushHydrationBatch = (options: { final?: boolean } = {}) => {
 							if (hydrateFlushBusy) return;
@@ -10495,8 +10647,7 @@ export function init(
 							if (!nodes.length && !links.length) return;
 							hydrateFlushBusy = true;
 							try {
-								// Match CRD paste import: coalesce detail+employer appends and skip sim
-								// reheat on intermediate chunks so large name searches crash less.
+								// Always skip sim reheat on hydration chunks — one finishSearchLayout() at the end.
 								const existingIds = new Set((globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
 								const newNodeCount = nodes.reduce((count, node) => {
 									const id = String(node?.id || '').trim();
@@ -10506,9 +10657,16 @@ export function init(
 								globalState.appendFetched(nodes, links, {
 									skipPersist: true,
 									skipFindRefresh: true,
-									skipSimRestart: !options.final,
+									skipSimRestart: true,
 								});
 								mergeIntoGraphData(nodes, links);
+							} catch (hydrateFlushErr) {
+								console.warn('Search hydration flush failed; continuing', hydrateFlushErr);
+								try {
+									emergencyStopLayoutPaintStorm('search-hydrate-flush-error');
+								} catch {
+									/* ignore */
+								}
 							} finally {
 								hydrateFlushBusy = false;
 							}
@@ -10528,6 +10686,7 @@ export function init(
 							if (!rawId) return null;
 							try {
 								// Same fetch as CRD paste import: individual/firm detail + current employers only.
+								// People search must not pull firm employee rosters (that fans out dozens of stubs).
 								const batch =
 									target.group === 'firm' ?
 										await fetchFirmBatch(rawId)
@@ -10561,10 +10720,29 @@ export function init(
 								}
 								// Drop previous_* links if a batch ever includes them — search fetch is current-only.
 								const currentOnlyLinks = (batch?.links || []).filter((link) => isAutoExpansionLink(link) || isControlRelationship(link));
-								if (batch?.nodes?.length) pendingHydrateNodes.push(...batch.nodes);
-								if (currentOnlyLinks.length) pendingHydrateLinks.push(...currentOnlyLinks);
+								// For firm targets during text search, keep the firm + control owners only.
+								// Employee roster stubs from fetchFirmBatch explode common surname/firm searches.
+								let nodesForFlush = batch?.nodes || [];
+								let linksForFlush = currentOnlyLinks;
+								if (target.group === 'firm') {
+									const controlPersonIds = new Set<string>();
+									for (const link of currentOnlyLinks) {
+										if (!isControlRelationship(link)) continue;
+										const sourceId = String(link?.source?.id ?? link?.source ?? '');
+										const targetLinkId = String(link?.target?.id ?? link?.target ?? '');
+										if (sourceId.startsWith('person:')) controlPersonIds.add(sourceId);
+										if (targetLinkId.startsWith('person:')) controlPersonIds.add(targetLinkId);
+									}
+									nodesForFlush = (batch?.nodes || []).filter((node) => {
+										const id = String(node?.id || '');
+										return id === targetId || controlPersonIds.has(id);
+									});
+									linksForFlush = currentOnlyLinks.filter((link) => isControlRelationship(link));
+								}
+								if (nodesForFlush.length) pendingHydrateNodes.push(...nodesForFlush);
+								if (linksForFlush.length) pendingHydrateLinks.push(...linksForFlush);
 								hydratedTargetIds.push(targetId);
-								if (pendingHydrateNodes.length + pendingHydrateLinks.length >= TEXT_SEARCH_HYDRATION_FLUSH_NODE_THRESHOLD) {
+								if (pendingHydrateNodes.length + pendingHydrateLinks.length >= hydrateFlushThreshold) {
 									flushHydrationBatch();
 									updateFetchStatus(`Linked employers for ${hydratedTargetIds.length} of ${textSearchHydrationTargets.length}…`);
 									await yieldToBrowser();
@@ -10580,6 +10758,9 @@ export function init(
 							refreshGraphColors();
 							refreshTraceState();
 						}
+						finishSearchLayout();
+				} else {
+					finishSearchLayout();
 				}
 
 				// Persist only for direct CRD lookups (text search stays session-local).
@@ -11866,30 +12047,49 @@ function parsePastedCrdList(text: string): Array<{ crd: string; name: string; li
 // format "Name :: CRD# 123" is the same for both). We guess which endpoint to try first from the
 // name (e.g. "INC", "LLC", "& CO", "SECURITIES" ⇒ firm), then fall back to the other endpoint if
 // the first guess 404s — this lets a single paste box handle person lists, firm lists, or a mix.
-async function importPastedCrdList(rawText: string) {
-	if (crdPasteImportBusy) return { added: 0, skipped: 0, failed: 0 };
-	const parsed = parsePastedCrdList(rawText);
+async function importPastedCrdList(rawText: string, triggerButton?: HTMLButtonElement | null) {
+	if (crdPasteImportBusy) {
+		const ageMs = crdPasteImportStartedAt ? Date.now() - crdPasteImportStartedAt : 0;
+		if (ageMs >= CRD_PASTE_IMPORT_STALE_MS) {
+			resetCrdPasteImportBusy(`stale after ${ageMs}ms — allowing retry`);
+		} else {
+			crdPasteImportStatus = 'Still importing…';
+			updateSelectionLogTemplatesUI();
+			if (triggerButton) flashSelectionLogActionButton(triggerButton, 'Still importing…');
+			return { added: 0, skipped: 0, failed: 0, busy: true };
+		}
+	}
+
+	const text = String(rawText || '').trim() ? rawText : readPasteCrdImportTextFromDom();
+	pasteCrdImportText = text;
+	const parsed = parsePastedCrdList(text);
 	if (!parsed.length) {
 		crdPasteImportStatus = 'No CRD numbers found in pasted text';
 		updateSelectionLogTemplatesUI();
+		if (triggerButton) flashSelectionLogActionButton(triggerButton, 'No CRDs');
 		return { added: 0, skipped: 0, failed: 0 };
 	}
 
+	const generation = ++crdPasteImportGeneration;
 	crdPasteImportBusy = true;
+	crdPasteImportStartedAt = Date.now();
 	crdPasteImportStatus = `Importing ${parsed.length} CRD${parsed.length === 1 ? '' : 's'}…`;
+	isCrdPasteImportOpen = true;
 	updateSelectionLogTemplatesUI();
 	updateFetchStatus(crdPasteImportStatus);
 
 	let added = 0;
 	let skipped = 0;
 	let failed = 0;
+	let timedOut = false;
 	const failedEntries: Array<{ crd: string; name: string }> = [];
 	const allNodes = [];
 	const allLinks = [];
 	const addedNodeIds: Array<string> = [];
 
-	try {
+	const runImport = async () => {
 		const results = await mapWithConcurrency(parsed, PROFILE_SEED_FETCH_CONCURRENCY, async (entry) => {
+			if (generation !== crdPasteImportGeneration) throw new Error('import cancelled');
 			const personId = `person:${entry.crd}`;
 			const firmId = `firm:${entry.crd}`;
 			if (globalState.layoutNodes.some((n) => n.id === personId)) return { entry, existed: true, nodeId: personId, nodes: [], links: [] };
@@ -11918,6 +12118,8 @@ async function importPastedCrdList(rawText: string) {
 				}
 			}
 		});
+
+		if (generation !== crdPasteImportGeneration) return;
 
 		results.forEach((r, index) => {
 			if (r.status !== 'fulfilled') {
@@ -11967,17 +12169,46 @@ async function importPastedCrdList(rawText: string) {
 					.join('; ')}${failedEntries.length > 5 ? '…' : ''}`
 			:	'';
 		crdPasteImportStatus = `Added ${added}${skipped ? `, ${skipped} already on canvas` : ''}${failed ? failedSummary : ''}`;
+	};
+
+	try {
+		await Promise.race([
+			runImport(),
+			new Promise<void>((_, reject) => {
+				window.setTimeout(() => reject(new Error('import overall timeout')), CRD_PASTE_IMPORT_OVERALL_TIMEOUT_MS);
+			}),
+		]);
 	} catch (err) {
-		console.warn('Bulk CRD paste import failed:', err);
-		crdPasteImportStatus = 'Import failed — see console for details';
+		if (generation !== crdPasteImportGeneration) {
+			return { added, skipped, failed, failedEntries, cancelled: true };
+		}
+		const message = err instanceof Error ? err.message : String(err || '');
+		if (message.includes('overall timeout')) {
+			timedOut = true;
+			console.warn('Bulk CRD paste import timed out; keeping partial results');
+			crdPasteImportStatus =
+				`Timed out after ${Math.round(CRD_PASTE_IMPORT_OVERALL_TIMEOUT_MS / 1000)}s` +
+				(added || skipped ? ` — added ${added}${skipped ? `, ${skipped} already on canvas` : ''}. Retry for the rest.` : '. Retry import.');
+			// Invalidate the in-flight worker so a late completion cannot wipe retry state.
+			crdPasteImportGeneration += 1;
+		} else {
+			console.warn('Bulk CRD paste import failed:', err);
+			crdPasteImportStatus = 'Import failed — see console for details';
+		}
 	} finally {
-		crdPasteImportBusy = false;
-		pasteCrdImportText = '';
-		updateFetchStatus(crdPasteImportStatus);
-		updateSelectionLogTemplatesUI();
+		const stillOwner = generation === crdPasteImportGeneration || timedOut;
+		if (stillOwner) {
+			crdPasteImportBusy = false;
+			crdPasteImportStartedAt = 0;
+			// Keep pasted text on failure/timeout so retry does not require re-paste.
+			const importSucceeded = !timedOut && failed === 0 && !/failed|timed out/i.test(crdPasteImportStatus);
+			if (importSucceeded) pasteCrdImportText = '';
+			updateFetchStatus(crdPasteImportStatus);
+			updateSelectionLogTemplatesUI();
+		}
 	}
 
-	return { added, skipped, failed, failedEntries };
+	return { added, skipped, failed, failedEntries, timedOut };
 }
 
 async function fetchFirmBatch(firmId, queryLabel = null) {
@@ -21481,6 +21712,38 @@ function renderConnectionsFilterTagsHtml() {
 	</div>`;
 }
 
+function bindSidebarChromeInteractions(el: HTMLElement) {
+	const mobileToggle = el.querySelector('.fg-sidebar-mobile-summary-toggle') as HTMLButtonElement | null;
+	if (mobileToggle) {
+		bindSidebarToggleInteraction(mobileToggle, () => (sidebarViewMode === 'info' ? 'none' : 'info'));
+	}
+	const logToggleButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.fg-sb-log-toggle'));
+	logToggleButtons.forEach((button) => {
+		bindSidebarToggleInteraction(button, () => (sidebarViewMode === 'log' ? 'none' : 'log'));
+	});
+	const touchGuardButtons = Array.from(
+		document.querySelectorAll<HTMLElement>('#fg-sidebar button, #fg-selection-log button, #fg-sidebar details.fg-mobile-legend-tooltip > summary, [data-fg-trace-mode-button]'),
+	);
+	touchGuardButtons.forEach((button) => bindTouchDragClickSuppression(button));
+}
+
+/** Keep the Log-tab filter input mounted across node selections / detail refreshes. */
+function refreshSidebarLogView(el: HTMLElement, d: any | null) {
+	const existingLogBody = el.querySelector('.fg-sb-body--log');
+	const temp = document.createElement('div');
+	temp.innerHTML = d ? renderCollapsedSidebarChrome(d) : renderNoSelectionSidebar();
+	const newHeader = temp.querySelector('.fg-sb-header');
+	const oldHeader = el.querySelector('.fg-sb-header');
+	if (existingLogBody && newHeader) {
+		if (oldHeader) oldHeader.replaceWith(newHeader);
+		else el.insertBefore(newHeader, el.firstChild);
+		return;
+	}
+	el.innerHTML = d ? renderCollapsedSidebarChrome(d) : renderNoSelectionSidebar();
+	const body = el.querySelector('.fg-sb-body');
+	if (body) body.outerHTML = renderSidebarSelectionLogBody();
+}
+
 function renderSidebar(d, options: { reveal?: boolean } = {}) {
 	const el = document.getElementById('fg-sidebar-inner');
 	const side = document.getElementById('fg-sidebar');
@@ -21488,16 +21751,15 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 		return;
 	}
 	const reveal = shouldRevealSidebarPanel(options);
+	const filterFocus = captureSelectionLogFilterFocus();
 	// Support rendering a minimal default sidebar when no node is selected.
 	if (!d) {
 		sidebarSelectedNode = null;
 		const preserveExpandedState = sidebarViewMode !== 'none';
-		el.innerHTML = renderNoSelectionSidebar();
 		if (sidebarViewMode === 'log') {
-			const body = el.querySelector('.fg-sb-body');
-			if (body) {
-				body.outerHTML = renderSidebarSelectionLogBody();
-			}
+			refreshSidebarLogView(el, null);
+		} else {
+			el.innerHTML = renderNoSelectionSidebar();
 		}
 		if (reveal) {
 			side.classList.remove('hidden');
@@ -21506,20 +21768,10 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 		side.dataset.displayedId = '';
 		side.dataset.viewMode = sidebarViewMode;
 		syncMobileSidebarExpandedState(preserveExpandedState);
-		const mobileToggle = el.querySelector('.fg-sidebar-mobile-summary-toggle') as HTMLButtonElement | null;
-		if (mobileToggle) {
-			bindSidebarToggleInteraction(mobileToggle, () => (sidebarViewMode === 'info' ? 'none' : 'info'));
-		}
-		const logToggleButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.fg-sb-log-toggle'));
-		logToggleButtons.forEach((button) => {
-			bindSidebarToggleInteraction(button, () => (sidebarViewMode === 'log' ? 'none' : 'log'));
-		});
-		const touchGuardButtons = Array.from(
-			document.querySelectorAll<HTMLElement>('#fg-sidebar button, #fg-selection-log button, #fg-sidebar details.fg-mobile-legend-tooltip > summary, [data-fg-trace-mode-button]'),
-		);
-		touchGuardButtons.forEach((button) => bindTouchDragClickSuppression(button));
+		bindSidebarChromeInteractions(el);
 		updateSelectionLogUI();
 		updateSelectionLogChrome();
+		restoreSelectionLogFilterFocus(filterFocus);
 		const focusBtn = document.getElementById('fg-focus-btn') as HTMLButtonElement | null;
 		if (focusBtn) focusBtn.disabled = false;
 		try {
@@ -21549,6 +21801,10 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 	// Collapsed Info: thin header only — skip heavy firm/person detail HTML + fetches.
 	if (sidebarViewMode === 'none') {
 		el.innerHTML = renderCollapsedSidebarChrome(d);
+	} else if (sidebarViewMode === 'log') {
+		// Reuse the existing Log body so the filter input keeps DOM identity + focus while
+		// graph selection / detail hydration re-renders the sidebar header.
+		refreshSidebarLogView(el, d);
 	} else {
 		el.innerHTML =
 			d.group === 'firm' ? renderFirmDetail(d)
@@ -21561,12 +21817,6 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 				applyConnectionsFilterToScope(scope, sidebarConnectionsFilterTags, sidebarConnectionsFilterQuery);
 			});
 		}
-		if (sidebarViewMode === 'log') {
-			const body = el.querySelector('.fg-sb-body');
-			if (body) {
-				body.outerHTML = renderSidebarSelectionLogBody();
-			}
-		}
 	}
 	// Only reveal the panel when the hamburger is open (or pinned); node select stays canvas-only.
 	if (reveal) {
@@ -21576,21 +21826,10 @@ function renderSidebar(d, options: { reveal?: boolean } = {}) {
 	side.dataset.displayedId = d?.id || '';
 	side.dataset.viewMode = sidebarViewMode;
 	syncMobileSidebarExpandedState(preserveExpandedState);
-	const mobileToggle = el.querySelector('.fg-sidebar-mobile-summary-toggle') as HTMLButtonElement | null;
-	if (mobileToggle) {
-		bindSidebarToggleInteraction(mobileToggle, () => (sidebarViewMode === 'info' ? 'none' : 'info'));
-	}
-	const logToggleButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.fg-sb-log-toggle'));
-	logToggleButtons.forEach((button) => {
-		bindSidebarToggleInteraction(button, () => (sidebarViewMode === 'log' ? 'none' : 'log'));
-	});
-
-	const touchGuardButtons = Array.from(
-		document.querySelectorAll<HTMLElement>('#fg-sidebar button, #fg-selection-log button, #fg-sidebar details.fg-mobile-legend-tooltip > summary, [data-fg-trace-mode-button]'),
-	);
-	touchGuardButtons.forEach((button) => bindTouchDragClickSuppression(button));
+	bindSidebarChromeInteractions(el);
 	updateSelectionLogUI();
 	updateSelectionLogChrome();
+	restoreSelectionLogFilterFocus(filterFocus);
 	const focusBtn = document.getElementById('fg-focus-btn') as HTMLButtonElement | null;
 	if (focusBtn) focusBtn.disabled = false;
 	try {
