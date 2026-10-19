@@ -1211,6 +1211,7 @@ export default function FinraGraph() {
 					<div className='fg-header-right-controls'>
 						<Link
 							href={buildDashboardHrefFromNodeId(routeNodeId) || '/dashboard'}
+							prefetch={false}
 							className='fg-ghost-btn'
 							title='Open dashboard'
 							aria-label='Open dashboard'>

@@ -2605,6 +2605,9 @@ async function applyPendingRouteNodeSelection() {
 		// re-dispatches this route request. Skipping the duplicate selectNode keeps
 		// large-graph clicks off a second full selection/session/redraw pass.
 		if (targetAlreadySelected && !shouldExpand && !shouldFocusRouteSelection) {
+			if (pendingNodeExpansionIds.has(targetNodeId) || globalState.isProcessingNodeExpansion) {
+				return true;
+			}
 			// Session restore often re-selects the same person with only a partial set of
 			// previous-employer links (batch fetch used on-screen firm ids). Still inject
 			// the full employment history so gray previous firms appear without a re-click.
@@ -8732,16 +8735,15 @@ function reheatLayoutLikeRefresh(
 	const touchedIds = new Set<string>();
 	for (const node of globalState.layoutNodes) {
 		const id = String(node?.id || '');
+		const isNewNode = newIdSet.has(id);
 		delete node._fetchLayoutBiasX;
 		delete node._fetchLayoutBiasY;
 		delete node._fetchLayoutBiasStrength;
 		const placementKind = (node as any)._fetchPlacementKind;
-		if (placementKind === 'near-parent' && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+		if (placementKind === 'near-parent' && Number.isFinite(node.x) && Number.isFinite(node.y) && (isNewNode || !light)) {
 			node._fetchLayoutBiasX = Number(node.x);
 			node._fetchLayoutBiasY = Number(node.y);
 			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.14 : cooling.isLarge ? 0.18 : 0.22;
-			// node.fx = Number(node.x); // Removed so nodes can spread apart
-			// node.fy = Number(node.y);
 			nearParentPinned.push(node);
 			touchedIds.add(id);
 		} else if (!light && centerIdSet.has(id) && placementKind !== 'near-parent') {
@@ -8749,7 +8751,7 @@ function reheatLayoutLikeRefresh(
 			node._fetchLayoutBiasY = height / 2;
 			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.045 : cooling.isLarge ? 0.055 : 0.07;
 			touchedIds.add(id);
-		} else if (newIdSet.has(id) && placementKind === 'outer') {
+		} else if (isNewNode && placementKind === 'outer') {
 			const dx = Number.isFinite(node.x) ? Number(node.x) - placementCenter.x : 1;
 			const dy = Number.isFinite(node.y) ? Number(node.y) - placementCenter.y : 0;
 			const ang = Math.atan2(dy, dx);
@@ -8757,7 +8759,7 @@ function reheatLayoutLikeRefresh(
 			node._fetchLayoutBiasY = placementCenter.y + Math.sin(ang) * outerRadius;
 			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.03 : 0.04;
 			touchedIds.add(id);
-		} else if (newIdSet.has(id) && placementKind === 'inward') {
+		} else if (isNewNode && placementKind === 'inward') {
 			node._fetchLayoutBiasX = width / 2;
 			node._fetchLayoutBiasY = height / 2;
 			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.02 : 0.028;
@@ -13408,23 +13410,66 @@ function firmHasDashboardConnectionRoster(
 	return false;
 }
 
+let connCountMemoryCache: Record<string, any> | null = null;
+let connCountCacheRaw: string | null = null;
+let connCountFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getConnCountCache(syncFromStorage = false): Record<string, any> {
+	if (typeof window === 'undefined') {
+		if (!connCountMemoryCache) connCountMemoryCache = {};
+		return connCountMemoryCache;
+	}
+	if (!connCountMemoryCache || syncFromStorage) {
+		try {
+			const raw = localStorage.getItem('finra_node_conn_count');
+			if (raw && raw !== connCountCacheRaw) {
+				connCountCacheRaw = raw;
+				connCountMemoryCache = JSON.parse(raw) || {};
+			} else if (!connCountMemoryCache) {
+				connCountMemoryCache = {};
+			}
+		} catch {
+			if (!connCountMemoryCache) connCountMemoryCache = {};
+		}
+	}
+	return connCountMemoryCache!;
+}
+
+function persistConnCountCacheEntry(nid: string, counts: { total: number; controls: number; employed: number }) {
+	if (!nid || typeof window === 'undefined') return;
+	const cache = getConnCountCache(false);
+	const prev = cache[nid];
+	if (
+		prev &&
+		prev.total === counts.total &&
+		prev.controls === counts.controls &&
+		prev.employed === counts.employed
+	) {
+		return;
+	}
+	cache[nid] = {
+		total: counts.total,
+		controls: counts.controls,
+		employed: counts.employed,
+		ts: Date.now(),
+	};
+	if (connCountFlushTimer !== null) return;
+	connCountFlushTimer = setTimeout(() => {
+		connCountFlushTimer = null;
+		try {
+			const serialized = JSON.stringify(cache);
+			connCountCacheRaw = serialized;
+			localStorage.setItem('finra_node_conn_count', serialized);
+		} catch {}
+	}, 60);
+}
+
 function getKnownNodeConnectionFloor(node) {
 	const counts = { total: 0, controls: 0, employed: 0 };
 	if (!node || typeof node !== 'object') return counts;
 
 	// Authoritative floor from search/firm-connections sidecars (or compact graph payload).
 	const sidecarFloor = readSidecarKnownConnectionCount(node);
-
-	// Load persisted per-node connection cache from localStorage when available.
-	let connCache: Record<string, any> | null = null;
-	try {
-		if (typeof window !== 'undefined') {
-			const raw = localStorage.getItem('finra_node_conn_count');
-			if (raw) connCache = JSON.parse(raw);
-		}
-	} catch {
-		connCache = null;
-	}
 
 	const seenConnectionKeys = new Set<string>();
 	const addConnection = (bucket: 'controls' | 'employed', key: string | null | undefined) => {
@@ -13471,26 +13516,15 @@ function getKnownNodeConnectionFloor(node) {
 
 		// Current employment arrays are authoritative (including zero). Do not revive an
 		// all-time localStorage floor that would re-inflate fetched node size.
-		if (!counts.total && !hasCurrentArrays && connCache && node.id) {
+		if (!counts.total && !hasCurrentArrays && node.id) {
+			const connCache = getConnCountCache(true);
 			const cached = connCache[String(node.id)];
 			if (cached && typeof cached === 'object') {
 				return { total: Number(cached.total) || 0, controls: Number(cached.controls) || 0, employed: Number(cached.employed) || 0 };
 			}
 		}
 
-		// persist computed counts to cache
-		try {
-			if (typeof window !== 'undefined') {
-				const nid = String(node.id || '');
-				if (nid) {
-					connCache = connCache || {};
-					connCache[nid] = { total: counts.total, controls: counts.controls, employed: counts.employed, ts: Date.now() };
-					try {
-						localStorage.setItem('finra_node_conn_count', JSON.stringify(connCache));
-					} catch {}
-				}
-			}
-		} catch {}
+		persistConnCountCacheEntry(String(node.id || ''), counts);
 
 		return counts;
 	}
@@ -13507,26 +13541,15 @@ function getKnownNodeConnectionFloor(node) {
 			counts.employed = Math.max(counts.employed, sidecarFloor - counts.controls);
 		}
 
-		if (!counts.total && connCache && node.id) {
+		if (!counts.total && node.id) {
+			const connCache = getConnCountCache(true);
 			const cached = connCache[String(node.id)];
 			if (cached && typeof cached === 'object') {
 				return { total: Number(cached.total) || 0, controls: Number(cached.controls) || 0, employed: Number(cached.employed) || 0 };
 			}
 		}
 
-		// persist computed counts to cache
-		try {
-			if (typeof window !== 'undefined') {
-				const nid = String(node.id || '');
-				if (nid) {
-					connCache = connCache || {};
-					connCache[nid] = { total: counts.total, controls: counts.controls, employed: counts.employed, ts: Date.now() };
-					try {
-						localStorage.setItem('finra_node_conn_count', JSON.stringify(connCache));
-					} catch {}
-				}
-			}
-		} catch {}
+		persistConnCountCacheEntry(String(node.id || ''), counts);
 
 		return counts;
 	}
@@ -13534,7 +13557,8 @@ function getKnownNodeConnectionFloor(node) {
 	// If nothing matched but we have a cached entry, return that as a floor
 	try {
 		if (sidecarFloor > 0) return { total: sidecarFloor, controls: 0, employed: sidecarFloor };
-		if (connCache && node && node.id) {
+		if (node && node.id) {
+			const connCache = getConnCountCache(true);
 			const cached = connCache[String(node.id)];
 			if (cached && typeof cached === 'object') {
 				return { total: Number(cached.total) || 0, controls: Number(cached.controls) || 0, employed: Number(cached.employed) || 0 };
@@ -16300,9 +16324,9 @@ function appendFetchedImpl(
 		globalState.simulation.force('collision')?.radius?.((d) => getNodeCollisionRadius(d, globalState.layoutNodes.length));
 	}
 
-	if (skipSimRestart) {
-		// Bulk restore / progressive hydrate must not reheat the force sim on every
-		// batch — that painted every tick without throttle and climbed ~200MB/s RSS.
+	if (skipSimRestart || uniqNodes.length === 0) {
+		// Bulk restore / progressive hydrate or link-only updates must not reheat the force
+		// sim across all settled nodes when no new nodes were added.
 		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 		return;
 	}
@@ -16330,7 +16354,8 @@ function appendFetchedImpl(
 		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 	});
 
-	const lightReflow = uniqNodes.length > 0 && nearParentCount >= Math.max(1, Math.ceil(uniqNodes.length * 0.6));
+	const lightReflow =
+		priorLayoutNodeIds.size > 0 || (uniqNodes.length > 0 && nearParentCount >= Math.max(1, Math.ceil(uniqNodes.length * 0.6)));
 	reheatLayoutLikeRefresh({
 		newNodes: uniqNodes,
 		alpha:
@@ -18234,7 +18259,7 @@ async function ensureFirmConnections(
 	}
 
 	const existingRequest = firmConnectionsRequestCache.get(firmId);
-	if (existingRequest && !force) {
+	if (existingRequest) {
 		await existingRequest;
 		return;
 	}
@@ -18981,21 +19006,37 @@ async function hydrateExpansionFrontierNodes(
 		includeFirmDetails?: boolean;
 		/** Default false: label/detail only. True only when the user opened that node. */
 		injectEmploymentGraph?: boolean;
+		runId?: number;
 	} = {},
 ) {
 	const uniqueIds = Array.from(new Set(nodeIds.filter(Boolean)));
 	if (!uniqueIds.length) return [];
-	const { includeFirmDetails = false, injectEmploymentGraph = false } = options;
+	const { includeFirmDetails = false, injectEmploymentGraph = false, runId } = options;
 
 	const hydratedIds = new Set<string>();
 	for (let index = 0; index < uniqueIds.length; index += NON_GRAY_DETAIL_BATCH_SIZE) {
+		if (typeof runId === 'number' && runId !== globalState.nonGrayExpandRunId) break;
 		const chunk = uniqueIds.slice(index, index + NON_GRAY_DETAIL_BATCH_SIZE);
 		const results = await Promise.allSettled(
 			chunk.map(async (nodeId) => {
+				if (typeof runId === 'number' && runId !== globalState.nonGrayExpandRunId) return null;
 				const liveNode = globalState.layoutNodes?.find((node) => node.id === nodeId) || globalState.graphData?.nodes?.find((node) => node.id === nodeId);
 				if (!liveNode) return null;
 				if (!shouldHydrateExpansionFrontierNodeDetail(liveNode, { includeFirmDetails })) return null;
 				if (liveNode.group === 'individual') {
+					const hasMeaningfulLabel = !isGenericOrPlaceholderLabel(liveNode.label, 'individual');
+					const hasScopeOrDetailMetadata = Boolean(
+						liveNode._detailLoaded ||
+							liveNode.stub ||
+							liveNode.bcScope ||
+							liveNode.iaScope ||
+							liveNode.basicInformation?.bcScope ||
+							liveNode.basicInformation?.iaScope,
+					);
+					if (!injectEmploymentGraph && hasMeaningfulLabel && hasScopeOrDetailMetadata) {
+						normalizeNodeLabelInPlace(liveNode);
+						return null;
+					}
 					await ensureIndividualDetail(liveNode, {
 						allowOwnerEvidenceFirmFetch: includeFirmDetails,
 						// Never inject hop-2 employers while walking an expansion frontier.
@@ -19352,6 +19393,7 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 		const hydrationPromise = hydrateExpansionFrontierNodes(currentWaveIds, {
 			includeFirmDetails: false,
 			injectEmploymentGraph: false,
+			runId,
 		});
 		// Never server-expand firm IDs (employment rosters). Person clicks still expand 1 hop.
 		const expansionPromise = fetchExpansionDataForNodeIds(currentWaveIds, 1, {
@@ -19423,7 +19465,7 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 	// Final hydration: labels/scopes only — never inject employment graphs on leaf nodes
 	// (that was revealing "past direct connections" when a firm was clicked).
 	if (didRevealOrMerge && currentWaveIds.length && runId === globalState.nonGrayExpandRunId) {
-		await hydrateExpansionFrontierNodes(currentWaveIds, { includeFirmDetails: false, injectEmploymentGraph: false });
+		await hydrateExpansionFrontierNodes(currentWaveIds, { includeFirmDetails: false, injectEmploymentGraph: false, runId });
 	}
 
 	// Selection already refreshed in selectNode. Skip another full-graph restyle when the
@@ -19602,30 +19644,79 @@ function getRenderedNodeLabel(node, { skipTruncation = false }: { skipTruncation
 	return !isNodeIdLabel && isPlaceholderExpansionLabel(formattedLabel, (node as any)?.group) ? '' : formattedLabel;
 }
 
+let nodeLabelMemoryCache: Record<string, any> | null = null;
+let nodeLabelCacheRaw: string | null = null;
+let nodeLabelFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getNodeLabelCache(syncFromStorage = false): Record<string, any> {
+	if (typeof window === 'undefined' || !window.localStorage) {
+		if (!nodeLabelMemoryCache) nodeLabelMemoryCache = {};
+		return nodeLabelMemoryCache;
+	}
+	if (!nodeLabelMemoryCache || syncFromStorage) {
+		try {
+			const raw = window.localStorage.getItem('finra_node_label_cache');
+			if (raw && raw !== nodeLabelCacheRaw) {
+				nodeLabelCacheRaw = raw;
+				nodeLabelMemoryCache = JSON.parse(raw) || {};
+			} else if (!nodeLabelMemoryCache) {
+				nodeLabelMemoryCache = {};
+			}
+		} catch {
+			if (!nodeLabelMemoryCache) nodeLabelMemoryCache = {};
+		}
+	}
+	return nodeLabelMemoryCache!;
+}
+
+function persistNodeLabelCacheEntry(nodeId: string, preferredLabel: string, isFirm: boolean) {
+	if (!nodeId || typeof window === 'undefined' || !window.localStorage) return;
+	const map = getNodeLabelCache(false);
+	const expectedFirmName = isFirm ? preferredLabel : undefined;
+	const prev = map[nodeId];
+	if (prev && prev.label === preferredLabel && prev.firmName === expectedFirmName) {
+		return;
+	}
+	map[nodeId] = {
+		label: preferredLabel,
+		firmName: expectedFirmName,
+		ts: Date.now(),
+	};
+	if (nodeLabelFlushTimer !== null) return;
+	nodeLabelFlushTimer = setTimeout(() => {
+		nodeLabelFlushTimer = null;
+		try {
+			const now = Date.now();
+			const TTL = 1000 * 60 * 60 * 24 * 14;
+			for (const k of Object.keys(map)) {
+				const entry = map[k];
+				if (!entry || typeof entry.ts !== 'number' || now - entry.ts > TTL) {
+					delete map[k];
+				}
+			}
+			const serialized = JSON.stringify(map);
+			nodeLabelCacheRaw = serialized;
+			window.localStorage.setItem('finra_node_label_cache', serialized);
+		} catch {}
+	}, 60);
+}
+
 function normalizeNodeLabelInPlace(node) {
 	if (!node || typeof node !== 'object') return node;
 	// Attempt to hydrate from a small persistent client-side label cache so
 	// labels survive full page refreshes and slow network fallbacks. Cache is
 	// keyed by node.id and stores { label, ts } where ts is epoch ms.
 	try {
-		if (typeof window !== 'undefined' && window.localStorage) {
-			const raw = window.localStorage.getItem('finra_node_label_cache');
-			if (raw) {
-				const map = JSON.parse(raw || '{}');
-				const entry = map[node.id];
-				if (entry && entry.label) {
-					// Respect cached label only when current node lacks a
-					// meaningful label to avoid clobbering freshly-fetched
-					// authoritative names.
-					const currentLabel = String(node.label || '').trim();
-					if (isGenericOrPlaceholderLabel(currentLabel, node.group)) {
-						node.label = entry.label;
-						if (entry.firmName && (node.group === 'firm' || String(node.id || '').startsWith('firm:'))) {
-							node.firmName = entry.firmName;
-							if (!node.basicInformation) node.basicInformation = {};
-							if (!node.basicInformation.firmName) node.basicInformation.firmName = entry.firmName;
-						}
-					}
+		const currentLabel = String(node.label || '').trim();
+		if (node.id && isGenericOrPlaceholderLabel(currentLabel, node.group)) {
+			const map = getNodeLabelCache(true);
+			const entry = map[node.id];
+			if (entry && entry.label) {
+				node.label = entry.label;
+				if (entry.firmName && (node.group === 'firm' || String(node.id || '').startsWith('firm:'))) {
+					node.firmName = entry.firmName;
+					if (!node.basicInformation) node.basicInformation = {};
+					if (!node.basicInformation.firmName) node.basicInformation.firmName = entry.firmName;
 				}
 			}
 		}
@@ -19635,24 +19726,8 @@ function normalizeNodeLabelInPlace(node) {
 	const preferredLabel = getPreferredNodeLabel(node);
 	if (preferredLabel && !isGenericOrPlaceholderLabel(preferredLabel, node.group)) {
 		try {
-			if (typeof window !== 'undefined' && window.localStorage && node.id) {
-				const key = 'finra_node_label_cache';
-				const raw = window.localStorage.getItem(key) || '{}';
-				const map = JSON.parse(raw || '{}');
-				map[node.id] = {
-					label: preferredLabel,
-					firmName: node.group === 'firm' ? preferredLabel : undefined,
-					ts: Date.now(),
-				};
-				const TTL = 1000 * 60 * 60 * 24 * 14;
-				for (const k of Object.keys(map)) {
-					try {
-						if (!map[k] || typeof map[k].ts !== 'number' || Date.now() - map[k].ts > TTL) delete map[k];
-					} catch {
-						delete map[k];
-					}
-				}
-				window.localStorage.setItem(key, JSON.stringify(map));
+			if (node.id) {
+				persistNodeLabelCacheEntry(String(node.id), preferredLabel, node.group === 'firm');
 			}
 		} catch (e) {
 			// ignore cache write errors
