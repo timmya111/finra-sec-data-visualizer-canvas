@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { appendFile, mkdir } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// Vercel functions are read-only except /tmp. Prefer /tmp there so client memory
-// beacons do not 500 and pollute the console during graph sessions.
-const LOG_DIR =
-	process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
-		? path.join('/tmp', 'finra-client-memory')
-		: path.join(process.cwd(), '.local', 'logs');
+// Vercel functions are read-only except /tmp, and local dev (Turbopack) watches process.cwd()
+// and triggers Fast Refresh rebuilds if files inside the repo are modified on mount.
+// Write to os.tmpdir() by default unless FINRA_GPU_LOG_DIR is explicitly configured.
+const LOG_DIR = process.env.FINRA_GPU_LOG_DIR
+	? path.resolve(process.env.FINRA_GPU_LOG_DIR)
+	: path.join(os.tmpdir(), 'finra-client-memory');
 const LOG_FILE = path.join(LOG_DIR, 'client-memory.ndjson');
 
 export async function POST(request: NextRequest) {

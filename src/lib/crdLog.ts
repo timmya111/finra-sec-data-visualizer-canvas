@@ -72,12 +72,21 @@ export async function rememberCrdLogEntries(
 		const log = loadCrdLogSync();
 		let firms = log.firms.slice();
 		let individuals = log.individuals.slice();
+		let changed = false;
 		for (const entry of entries) {
 			const id = Number(entry.id);
 			if (!Number.isFinite(id) || id <= 0) continue;
+			const nextName = String(entry.name || '');
+			const targetArr = entry.kind === 'firm' ? firms : individuals;
+			const existing = targetArr.find((e) => Number(e.id) === id);
+			if (existing && (existing.name === nextName || (!nextName && existing.name))) {
+				continue;
+			}
+			changed = true;
 			if (entry.kind === 'firm') firms = upsertEntry(firms, id, entry.name);
 			else individuals = upsertEntry(individuals, id, entry.name);
 		}
+		if (!changed) return;
 		await writeCrdLog({ firms, individuals });
 	} catch (e: any) {
 		console.warn('rememberCrdLogEntries error', e?.message || e);

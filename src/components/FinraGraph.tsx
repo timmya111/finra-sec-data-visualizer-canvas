@@ -1033,8 +1033,10 @@ export default function FinraGraph() {
 	}, [isMounted]);
 
 	useEffect(() => {
-		if (!isMounted || mountedRef.current) return;
+		if (!isMounted) return;
 		mountedRef.current = true;
+		let idleHandle: number | null = null;
+		let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
 		try {
 			const pinned = localStorage.getItem('finra_sidebar_pinned') === 'true';
@@ -1047,7 +1049,11 @@ export default function FinraGraph() {
 
 		// Defer heavy graph initialization until after initial paint / idle to improve perceived load
 		const startInit = () => {
+			if (!mountedRef.current) return;
 			Promise.all([import('d3'), import('d3-force'), import('@/lib/finra-graph')]).then(async ([d3Module, d3ForceModule, { init }]) => {
+				if (!mountedRef.current) return;
+				if ((window as any).__FINRA_GRAPH_INIT_FN === init) return;
+				(window as any).__FINRA_GRAPH_INIT_FN = init;
 				const combinedD3 = { ...d3Module, ...d3ForceModule };
 				(window as any).d3 = combinedD3;
 				const defaultSelected = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_DEFAULT_SELECTED) || '';
@@ -1079,16 +1085,27 @@ export default function FinraGraph() {
 		};
 
 		if (typeof (window as any).requestIdleCallback === 'function') {
-			(window as any).requestIdleCallback(() => startInit(), { timeout: 2000 });
+			idleHandle = (window as any).requestIdleCallback(() => startInit(), { timeout: 2000 });
 		} else {
 			// fallback: small delay to allow first paint
-			setTimeout(() => startInit(), 50);
+			timeoutHandle = setTimeout(() => startInit(), 50);
 		}
 
 		return () => {
-			import('@/lib/finra-graph').then(({ destroy }) => {
-				if (typeof destroy === 'function') destroy();
-			});
+			mountedRef.current = false;
+			if (idleHandle !== null && typeof (window as any).cancelIdleCallback === 'function') {
+				(window as any).cancelIdleCallback(idleHandle);
+			}
+			if (timeoutHandle !== null) {
+				clearTimeout(timeoutHandle);
+			}
+			setTimeout(() => {
+				if (mountedRef.current) return;
+				(window as any).__FINRA_GRAPH_INIT_FN = null;
+				import('@/lib/finra-graph').then(({ destroy }) => {
+					if (!mountedRef.current && typeof destroy === 'function') destroy();
+				});
+			}, 0);
 		};
 
 		// Patch localStorage.setItem once to emit a custom event when selection log changes within same window.

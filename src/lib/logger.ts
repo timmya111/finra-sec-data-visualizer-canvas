@@ -1,8 +1,11 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import winston from 'winston';
 
-const logDir = path.join(process.cwd(), 'data', 'logs');
+const logDir = process.env.FINRA_LOG_DIR
+	? path.resolve(process.env.FINRA_LOG_DIR)
+	: path.join(os.tmpdir(), 'finra-logs');
 
 // Serverless platforms (Vercel, etc.) mount the deployment bundle read-only,
 // so creating data/logs and writing app.log there throws ENOENT/EROFS. Fall

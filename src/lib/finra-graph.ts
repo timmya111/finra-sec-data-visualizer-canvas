@@ -670,22 +670,23 @@ function getGraphPaintMinIntervalMs() {
 	const alpha = globalState.simulation?.alpha?.() || 0;
 	const moving = alpha > 0.03;
 	const fetchReflowHot = typeof performance !== 'undefined' && performance.now() < fetchReflowPaintBoostUntil;
-	// Firm-expand / fetch / pan-zoom: paint even less often — Skia realloc dominates crashes.
-	// Small graphs previously returned 0ms here, so wheel/drag still hit ~60fps canvas paints
-	// and climbed ~150–300MB/s even with the sim stopped.
+	// Firm-expand / fetch / pan-zoom: throttle heavy graphs so Skia realloc cannot climb RSS,
+	// while keeping small/medium graphs smooth (~30-60fps) so fetched nodes visibly settle.
 	if (fetchReflowHot && moving) {
-		if (count > 400) return 220;
-		if (count > 120) return 160;
-		return 120;
+		if (count > 800) return 160;
+		if (count > 400) return 90;
+		if (count > 200) return 42;
+		return globalState.canvasModeActive ? 24 : 16;
 	}
 	if (fetchReflowHot) {
-		if (count > 200) return 110;
-		return 80;
+		if (count > 400) return 90;
+		if (count > 200) return 42;
+		return globalState.canvasModeActive ? 24 : 16;
 	}
 	if (count > 800 && moving) return 150;
-	if (count > 400 && moving) return 110;
-	if (count > 200 && moving) return 72;
-	if (count > 100 && moving) return 48;
+	if (count > 400 && moving) return 90;
+	if (count > 200 && moving) return 42;
+	if (count > 100 && moving) return 28;
 	if (count > 800) return 66;
 	if (count > 400) return 45;
 	if (count > 200) return 32;
@@ -1360,19 +1361,11 @@ export function assignFallbackSessionRestorePositions(
 }
 
 function buildSessionPayload({ compact = false, extraNodeMode = 'full' }: { compact?: boolean; extraNodeMode?: 'full' | 'ids' | 'none' } = {}) {
-	const serverIds = globalState.initialServerNodeIds || new Set(globalState.graphData.nodes.map((n) => n.id));
+	const serverIds = globalState.initialServerNodeIds instanceof Set ? globalState.initialServerNodeIds : new Set<string>();
 	const extraNodes = globalState.layoutNodes.filter((n) => !serverIds.has(n.id));
 	const extraNodeIds = extraNodes.map((node) => node.id).filter(Boolean);
 	const renderedServerIds = globalState.layoutNodes.filter((n) => serverIds.has(n.id)).map((n) => n.id);
-	const baseLinkKeys =
-		globalState.initialServerLinkKeys ||
-		new Set(
-			globalState.graphData.links.map((l) => {
-				const s = l.source?.id ?? l.source;
-				const t = l.target?.id ?? l.target;
-				return `${s}|${t}`;
-			}),
-		);
+	const baseLinkKeys = globalState.initialServerLinkKeys instanceof Set ? globalState.initialServerLinkKeys : new Set<string>();
 	const shouldCompactLayout = compact || globalState.layoutNodes.length > SESSION_FULL_LAYOUT_NODE_LIMIT;
 	const includeExtraNodeObjects = extraNodeMode === 'full';
 	const includeExtraNodeIds = extraNodeMode === 'ids';
@@ -2341,6 +2334,7 @@ function getSessionPersistenceAttempts() {
 }
 
 function persistSessionNow() {
+	if (sessionRestoreInProgress) return;
 	if (!globalState.layoutNodes || !globalState.graphData) return;
 	const attempts = getSessionPersistenceAttempts();
 	const startIndex = Math.max(
@@ -2369,6 +2363,7 @@ function persistSessionNow() {
 }
 
 function saveSession() {
+	if (sessionRestoreInProgress) return;
 	if (!globalState.layoutNodes || !globalState.graphData) return;
 	if (globalState.sessionSaveTimer) return;
 	if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
@@ -7495,6 +7490,14 @@ async function ensureSessionRestoreCanvasShell(session, { clearExistingLayout = 
 			{ nodes: [], links: [], meta: globalState.graphData?.meta || {} },
 			{ freezeLayout: true, skipInitialZoom: Boolean(session?.zoomTransform) },
 		);
+		if (globalState.sessionSaveTimer) {
+			clearTimeout(globalState.sessionSaveTimer);
+			globalState.sessionSaveTimer = null;
+		}
+		if (globalState.zoomSaveTimer) {
+			clearTimeout(globalState.zoomSaveTimer);
+			globalState.zoomSaveTimer = null;
+		}
 		return;
 	}
 	// Session restore paints a projected subset. Drop leftover baseline layout only when
@@ -7504,6 +7507,14 @@ async function ensureSessionRestoreCanvasShell(session, { clearExistingLayout = 
 			{ nodes: [], links: [], meta: globalState.graphData?.meta || {} },
 			{ freezeLayout: true, skipInitialZoom: Boolean(session?.zoomTransform) },
 		);
+		if (globalState.sessionSaveTimer) {
+			clearTimeout(globalState.sessionSaveTimer);
+			globalState.sessionSaveTimer = null;
+		}
+		if (globalState.zoomSaveTimer) {
+			clearTimeout(globalState.zoomSaveTimer);
+			globalState.zoomSaveTimer = null;
+		}
 	}
 }
 
@@ -7800,6 +7811,9 @@ async function restoreSavedSession(session) {
 	}
 	} finally {
 		sessionRestoreInProgress = false;
+		if ((globalState.layoutNodes?.length || 0) > 0) {
+			saveSession();
+		}
 		// Strip generic selection-log rows immediately; prune unresolved canvas stubs after hydration.
 		try {
 			pruneGenericPlaceholderSelectionLogEntries();
@@ -7963,6 +7977,15 @@ function bindSessionCleanExitListener() {
 	if (sessionCleanExitListenerBound || typeof window === 'undefined') return;
 	sessionCleanExitListenerBound = true;
 	const onCleanExit = () => {
+		if (globalState.sessionSaveTimer || globalState.zoomSaveTimer) {
+			if (globalState.sessionSaveTimer) clearTimeout(globalState.sessionSaveTimer);
+			if (globalState.zoomSaveTimer) clearTimeout(globalState.zoomSaveTimer);
+			globalState.sessionSaveTimer = null;
+			globalState.zoomSaveTimer = null;
+			if (!sessionRestoreInProgress && (isSessionCleared || (Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length > 0))) {
+				persistSessionNow();
+			}
+		}
 		markSessionCleanExit();
 	};
 	// pagehide covers reload/navigation; beforeunload is a backup for older engines.
@@ -8627,28 +8650,26 @@ function getLayoutReflowCooling(
 	const isLarge = nodeCount > 300;
 	const isHuge = nodeCount > 1000;
 	const light = Boolean(options.light);
-	// Light reflow: near-parent / firm-owner fans are already placed — cool fast and stop
-	// painting so fetch/expand does not climb renderer RSS for 10–17s.
 	if (light) {
 		return {
 			isLarge,
 			isHuge,
 			alpha:
-				isHuge ? 0.08
-				: isLarge ? 0.1
-				: 0.12,
+				isHuge ? 0.16
+				: isLarge ? 0.2
+				: 0.26,
 			alphaDecay:
-				isHuge ? 0.06
-				: isLarge ? 0.05
-				: 0.042,
+				isHuge ? 0.028
+				: isLarge ? 0.02
+				: 0.016,
 			velocityDecay:
-				isHuge ? 0.88
-				: isLarge ? 0.8
-				: 0.6,
+				isHuge ? 0.8
+				: isLarge ? 0.75
+				: 0.5,
 			safetyStopMs:
-				isHuge ? 1100
-				: isLarge ? 1500
-				: 2000,
+				isHuge ? 3200
+				: isLarge ? 4800
+				: 6000,
 			light: true,
 		};
 	}
@@ -8675,7 +8696,7 @@ function getLayoutReflowCooling(
 	};
 }
 
-/** Reheat the force sim after fetch/append. Prefer light mode for near-parent fans. */
+/** Reheat the force sim after fetch/append. Uses the exact same movement as the Refresh button for fetches. */
 function reheatLayoutLikeRefresh(
 	options: {
 		newNodes?: any[];
@@ -8685,18 +8706,20 @@ function reheatLayoutLikeRefresh(
 		centerComponentIds?: string[];
 		placementCenter?: { x: number; y: number };
 		outerRadius?: number;
-		/** Already-placed near-parent / firm-owner fans: short cool + stop (crash mitigation). */
 		light?: boolean;
 	} = {},
 ) {
 	if (!globalState.simulation || !Array.isArray(globalState.layoutNodes) || !globalState.layoutNodes.length) return;
+	const eventName = options.eventName || 'fetch-reflow';
+	// When fetching/importing nodes onto the canvas, use the exact same movement as the Refresh button.
+	if (eventName !== 'reveal-reflow') {
+		refreshNodeLayout();
+		return;
+	}
+
 	const newNodes = Array.isArray(options.newNodes) ? options.newNodes : [];
 	const newIdSet = new Set(newNodes.map((n) => String(n?.id || '')).filter(Boolean));
-	const nearParentCount = newNodes.filter((n) => (n as any)?._fetchPlacementKind === 'near-parent').length;
-	const nearParentHeavy = newNodes.length > 0 && nearParentCount >= Math.max(1, Math.ceil(newNodes.length * 0.6));
-	const light = Boolean(options.light) || nearParentHeavy;
-	const cooling = getLayoutReflowCooling(globalState.layoutNodes.length, { light });
-	const eventName = options.eventName || 'fetch-reflow';
+	const cooling = getLayoutReflowCooling(globalState.layoutNodes.length, { light: true });
 	const main = document.getElementById('fg-main');
 	const width = main?.clientWidth || 800;
 	const height = main?.clientHeight || 600;
@@ -8705,115 +8728,45 @@ function reheatLayoutLikeRefresh(
 			.map((id) => String(id || '').trim())
 			.filter(Boolean),
 	);
-	const centerComponentIds =
-		Array.isArray(options.centerComponentIds) && options.centerComponentIds.length ?
-			options.centerComponentIds.map((id) => String(id))
-		:	priorIdSet.size ?
-			findLargestHopConnectedComponentIds(priorIdSet, globalState.layoutLinks || [])
-		:	[];
 
 	if (globalState.activeSpreadFrozenNodes?.length) {
 		releaseFrozenNodes(globalState.activeSpreadFrozenNodes);
 		globalState.activeSpreadFrozenNodes = [];
 	}
 
-	// Keep the largest already-on-canvas hop cluster near the viewport center.
-	// Skip the full-graph slide on light firm-expand reflows — it dirties every node.
-	if (centerComponentIds.length && priorIdSet.size && !light) {
-		centerLargestHopComponentInViewport(globalState.layoutNodes, centerComponentIds, width, height, { strength: 0.9 });
-	}
-
-	const placementCenter = options.placementCenter || { x: width / 2, y: height / 2 };
-	const outerRadius = Number.isFinite(options.outerRadius) ? Number(options.outerRadius) : Math.min(width, height) * 0.42;
-	const centerIdSet = new Set(centerComponentIds);
-
-	// Soft fetch biases: center cluster → viewport center; unattached new nodes → outer ring;
-	// near-parent children → hold near their placed coords so they do not stretch out.
-	// Re-apply near-parent hold to *all* still-tagged nodes (not only this batch): a later
-	// firm-expand append would otherwise unpin the first fan and stretch it to the ring.
-	const nearParentPinned: any[] = [];
-	const touchedIds = new Set<string>();
+	// Node-click reveal contract: keep settled nodes frozen while newly revealed neighbors settle.
+	const shouldPinPriorNodes = newIdSet.size > 0 || priorIdSet.size > 0;
 	for (const node of globalState.layoutNodes) {
 		const id = String(node?.id || '');
-		const isNewNode = newIdSet.has(id);
 		delete node._fetchLayoutBiasX;
 		delete node._fetchLayoutBiasY;
 		delete node._fetchLayoutBiasStrength;
-		const placementKind = (node as any)._fetchPlacementKind;
-		if (placementKind === 'near-parent' && Number.isFinite(node.x) && Number.isFinite(node.y) && (isNewNode || !light)) {
-			node._fetchLayoutBiasX = Number(node.x);
-			node._fetchLayoutBiasY = Number(node.y);
-			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.14 : cooling.isLarge ? 0.18 : 0.22;
-			nearParentPinned.push(node);
-			touchedIds.add(id);
-		} else if (!light && centerIdSet.has(id) && placementKind !== 'near-parent') {
-			node._fetchLayoutBiasX = width / 2;
-			node._fetchLayoutBiasY = height / 2;
-			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.045 : cooling.isLarge ? 0.055 : 0.07;
-			touchedIds.add(id);
-		} else if (isNewNode && placementKind === 'outer') {
-			const dx = Number.isFinite(node.x) ? Number(node.x) - placementCenter.x : 1;
-			const dy = Number.isFinite(node.y) ? Number(node.y) - placementCenter.y : 0;
-			const ang = Math.atan2(dy, dx);
-			node._fetchLayoutBiasX = placementCenter.x + Math.cos(ang) * outerRadius;
-			node._fetchLayoutBiasY = placementCenter.y + Math.sin(ang) * outerRadius;
-			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.03 : 0.04;
-			touchedIds.add(id);
-		} else if (isNewNode && placementKind === 'inward') {
-			node._fetchLayoutBiasX = width / 2;
-			node._fetchLayoutBiasY = height / 2;
-			node._fetchLayoutBiasStrength = cooling.isHuge ? 0.02 : 0.028;
-			touchedIds.add(id);
-		}
-	}
-
-	// Only unpin nodes we are actively reflowing. Leaving the rest pinned/idle
-	// avoids a whole-graph jitter paint storm on every firm expand.
-	for (const node of globalState.layoutNodes) {
-		const id = String(node?.id || '');
-		if (touchedIds.has(id) || newIdSet.has(id)) continue;
-		// Soft-hold settled nodes during light reflow so charge does not thrash them.
-		if (light && Number.isFinite(node.x) && Number.isFinite(node.y) && node.fx == null && node.fy == null) {
-			node.fx = Number(node.x);
-			node.fy = Number(node.y);
-			touchedIds.add(id);
-		} else if (!light) {
+		if (newIdSet.has(id)) {
 			node.fx = null;
 			node.fy = null;
+			continue;
+		}
+		const isPriorSettledNode = priorIdSet.size > 0 ? priorIdSet.has(id) : !newIdSet.has(id);
+		if (shouldPinPriorNodes && isPriorSettledNode && Number.isFinite(node.x) && Number.isFinite(node.y) && node.fx == null && node.fy == null) {
+			node.fx = Number(node.x);
+			node.fy = Number(node.y);
 		}
 	}
 
 	newNodes.forEach((node, idx) => {
 		if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
-		if ((node as any)._fetchPlacementKind === 'near-parent') {
-			node.vx = 0;
-			node.vy = 0;
-			return;
-		}
+		node.fx = null;
+		node.fy = null;
 		const angle = (idx / Math.max(1, newNodes.length)) * Math.PI * 2;
 		const jitter =
-			cooling.isHuge ? 8
-			: cooling.isLarge ? 10
-			: 12;
-		node.x += Math.cos(angle) * jitter + (Math.random() - 0.5) * 4;
-		node.y += Math.sin(angle) * jitter + (Math.random() - 0.5) * 4;
+			cooling.isHuge ? 10
+			: cooling.isLarge ? 8
+			: 6;
+		node.x += Math.cos(angle) * jitter + (Math.random() - 0.5) * 6;
+		node.y += Math.sin(angle) * jitter + (Math.random() - 0.5) * 6;
 		node.vx = 0;
 		node.vy = 0;
 	});
-
-	if (nearParentPinned.length) {
-		const releaseMs = light ? (cooling.isHuge ? 900 : cooling.isLarge ? 1200 : 1600) : cooling.isHuge ? 1800 : cooling.isLarge ? 2400 : 3200;
-		window.setTimeout(() => {
-			for (const node of nearParentPinned) {
-				if (!node) continue;
-				node.fx = null;
-				node.fy = null;
-				if ((node as any)._fetchPlacementKind === 'near-parent' && Number.isFinite(node._fetchLayoutBiasX)) {
-					node._fetchLayoutBiasStrength = Math.max(Number(node._fetchLayoutBiasStrength) || 0, cooling.isHuge ? 0.1 : 0.14);
-				}
-			}
-		}, releaseMs);
-	}
 
 	if (globalState.spreadReleaseTimer) {
 		clearTimeout(globalState.spreadReleaseTimer);
@@ -8833,38 +8786,6 @@ function reheatLayoutLikeRefresh(
 		/* ignore */
 	}
 
-	const applyFetchBiasForces = () => {
-		try {
-			globalState.simulation
-				?.force('location-x')
-				?.x((node: any) => {
-					if (Number.isFinite(node?._fetchLayoutBiasX)) return node._fetchLayoutBiasX;
-					if (Number.isFinite(node?._locationBiasX)) return node._locationBiasX;
-					return width / 2;
-				})
-				.strength((node: any) => {
-					const fetchStrength = Number(node?._fetchLayoutBiasStrength) || 0;
-					const locStrength = Number(node?._locationBiasStrength) || 0;
-					return Math.max(fetchStrength, locStrength);
-				});
-			globalState.simulation
-				?.force('location-y')
-				?.y((node: any) => {
-					if (Number.isFinite(node?._fetchLayoutBiasY)) return node._fetchLayoutBiasY;
-					if (Number.isFinite(node?._locationBiasY)) return node._locationBiasY;
-					return height / 2;
-				})
-				.strength((node: any) => {
-					const fetchStrength = Number(node?._fetchLayoutBiasStrength) || 0;
-					const locStrength = Number(node?._locationBiasStrength) || 0;
-					return Math.max(fetchStrength, locStrength) * 0.85;
-				});
-		} catch {
-			/* ignore */
-		}
-	};
-	applyFetchBiasForces();
-
 	const finalize = () => {
 		try {
 			for (const node of globalState.layoutNodes || []) {
@@ -8872,7 +8793,6 @@ function reheatLayoutLikeRefresh(
 				delete node._fetchLayoutBiasY;
 				delete node._fetchLayoutBiasStrength;
 				delete node._fetchPlacementKind;
-				// Release soft-holds from light reflow so the user can drag again.
 				if (node.fx != null || node.fy != null) {
 					node.fx = null;
 					node.fy = null;
@@ -8883,8 +8803,10 @@ function reheatLayoutLikeRefresh(
 			globalState.simulation?.velocityDecay?.(prevVelocityDecay);
 			globalState.simulation?.alphaTarget?.(0);
 			globalState.simulation?.on?.(`end.${eventName}`, null);
-			// Stop ticks entirely — leaving alpha cooling still paints and climbs RSS.
 			globalState.simulation?.stop?.();
+			if (!sessionRestoreInProgress && (globalState.layoutNodes?.length || 0) > 0) {
+				saveSession();
+			}
 		} catch {
 			/* ignore */
 		}
@@ -8893,10 +8815,7 @@ function reheatLayoutLikeRefresh(
 		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 	};
 
-	const restartAlpha = Number.isFinite(options.alpha) ? Number(options.alpha) : newNodes.length > 0 ? cooling.alpha : Math.max(0.1, cooling.alpha * 0.7);
-	if (typeof performance !== 'undefined') {
-		fetchReflowPaintBoostUntil = performance.now() + cooling.safetyStopMs + 400;
-	}
+	const restartAlpha = Number.isFinite(options.alpha) ? Number(options.alpha) : cooling.alpha;
 	globalState.simulation.alphaTarget(0);
 	globalState.simulation.alpha(restartAlpha).restart();
 	globalState.simulation.on(`end.${eventName}`, finalize);
@@ -8926,6 +8845,10 @@ function refreshNodeLayout() {
 	globalState.layoutNodes.forEach((node, index) => {
 		node.fx = null;
 		node.fy = null;
+		delete node._fetchLayoutBiasX;
+		delete node._fetchLayoutBiasY;
+		delete node._fetchLayoutBiasStrength;
+		delete node._fetchPlacementKind;
 
 		if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) {
 			// Log the occurrence once per node so we can track which nodes become non-finite.
@@ -8950,6 +8873,29 @@ function refreshNodeLayout() {
 		clearTimeout(globalState.spreadReleaseTimer);
 		globalState.spreadReleaseTimer = null;
 	}
+
+	try {
+		refreshSoftLocationGroupingForces(globalState.layoutNodes);
+		estimateLocalCrowdFactors(globalState.layoutNodes);
+		globalState.simulation.nodes(globalState.layoutNodes);
+		globalState.simulation.force('link')?.links?.(globalState.layoutLinks);
+		globalState.simulation.force('collision')?.radius?.((d: any) => getNodeCollisionRadius(d, globalState.layoutNodes.length));
+	} catch {
+		/* ignore */
+	}
+
+	let _refreshTick = 0;
+	bindSimulationTickHandler(globalState.simulation, () => {
+		_refreshTick += 1;
+		const count = globalState.layoutNodes?.length || 0;
+		const alpha = globalState.simulation?.alpha?.() || 0;
+		if (_refreshTick === 1 || _refreshTick % (count > 1000 ? 60 : 20) === 0) {
+			estimateLocalCrowdFactors(globalState.layoutNodes);
+		}
+		if (count > 1000 && alpha > 0.05 && _refreshTick % 10 !== 0) return;
+		if (count > 300 && alpha > 0.1 && _refreshTick % 4 !== 0) return;
+		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
+	});
 
 	const prevAlphaDecay = globalState.simulation.alphaDecay?.() ?? 0.0228;
 	const prevVelocityDecay = globalState.simulation.velocityDecay?.() ?? 0.4;
@@ -8997,7 +8943,9 @@ function refreshNodeLayout() {
 		}
 		fetchReflowPaintBoostUntil = 0;
 		try {
-			saveSession();
+			if (!sessionRestoreInProgress && (globalState.layoutNodes?.length || 0) > 0) {
+				saveSession();
+			}
 		} catch {
 			// non-critical
 		}
@@ -9022,7 +8970,7 @@ function refreshNodeLayout() {
 
 	// Delay arming so the Refresh button click itself does not immediately stop the run.
 	setTimeout(() => {
-		if (finalized || typeof document === 'undefined') return;
+		if (finalized || typeof document === 'undefined' || (globalState as any).refreshLayoutStopOnInteract !== stopAnimationOnInteract) return;
 		document.addEventListener('pointerdown', stopAnimationOnInteract, { capture: true });
 		document.addEventListener('mousedown', stopAnimationOnInteract, { capture: true });
 		document.addEventListener('touchstart', stopAnimationOnInteract, { capture: true });
@@ -9090,8 +9038,11 @@ export function destroy() {
 		if (globalState.zoomSaveTimer) clearTimeout(globalState.zoomSaveTimer);
 		globalState.sessionSaveTimer = null;
 		globalState.zoomSaveTimer = null;
-		persistSessionNow();
+		if (!sessionRestoreInProgress && (isSessionCleared || (Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length > 0))) {
+			persistSessionNow();
+		}
 	}
+	releaseClearNonLogKeepGate();
 	cancelGraphTickPositions();
 	if (globalState.spreadAnimId != null) {
 		cancelAnimationFrame(globalState.spreadAnimId);
@@ -9190,6 +9141,7 @@ export function init(
 	} = {},
 ) {
 	d3 = _d3;
+	releaseClearNonLogKeepGate();
 	const initialRouteNodeId = String(options?.initialRouteNodeId || '').trim();
 	pendingRouteNodeId = initialRouteNodeId || pendingRouteNodeId;
 	pendingSelectedNodeIds =
@@ -10041,6 +9993,11 @@ export function init(
 				};
 
 				// ── 2. Build nodes from search hits and flush onto canvas progressively ──
+				const priorSearchNodeIds = new Set<string>(
+					(globalState.layoutNodes || [])
+						.map((node) => String(node?.id || '').trim())
+						.filter((id): id is string => Boolean(id)),
+				);
 				const batchAllNodes = [];
 				const batchAllLinks = [];
 				const batchNodeIds = new Set<string>();
@@ -10160,13 +10117,49 @@ export function init(
 				};
 
 				const finishSearchLayout = () => {
-					if (!progressiveAddedTotal) return;
+					const searchAddedNodes = (globalState.layoutNodes || []).filter(
+						(node) => node?.id && !priorSearchNodeIds.has(String(node.id).trim()),
+					);
+					if (!progressiveAddedTotal && !searchAddedNodes.length) return;
 					try {
+						const main = document.getElementById('fg-main');
+						const W = main?.clientWidth || 800;
+						const H = main?.clientHeight || 600;
+						const priorNodes = (globalState.layoutNodes || []).filter((node) =>
+							priorSearchNodeIds.has(String(node?.id ?? '').trim()),
+						);
+						const addedIdSet = new Set(searchAddedNodes.map((node) => String(node.id)));
+						const addedLinks = (globalState.layoutLinks || []).filter((link) => {
+							const s = String(link?.source?.id ?? link?.source ?? '');
+							const t = String(link?.target?.id ?? link?.target ?? '');
+							return addedIdSet.has(s) || addedIdSet.has(t);
+						});
+						const existingLinks = (globalState.layoutLinks || []).filter((link) => {
+							const s = String(link?.source?.id ?? link?.source ?? '');
+							const t = String(link?.target?.id ?? link?.target ?? '');
+							return !addedIdSet.has(s) && !addedIdSet.has(t);
+						});
+						const placement =
+							searchAddedNodes.length > 0 ?
+								placeFetchedNodesOnOuterEdges({
+									existingNodes: priorNodes,
+									newNodes: searchAddedNodes,
+									newLinks: addedLinks,
+									existingLinks,
+									width: W,
+									height: H,
+									forceReplaceCoords: true,
+								})
+							:	null;
 						scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 						reheatLayoutLikeRefresh({
-							newNodes: [],
+							newNodes: searchAddedNodes,
+							priorNodeIds: priorSearchNodeIds,
+							centerComponentIds: placement?.centerComponentIds,
+							placementCenter: placement?.center,
+							outerRadius: placement?.outerRadius,
 							eventName: 'search-complete',
-							light: true,
+							light: priorSearchNodeIds.size > 0,
 						});
 					} catch (layoutErr) {
 						console.warn('Search layout finish failed', layoutErr);
@@ -12651,12 +12644,15 @@ async function loadGraph() {
 		showEmpty(true);
 	} finally {
 		if (pendingRouteNodeId) {
-			if (!globalState.graphData || !globalState.layoutNodes) {
+			if (!globalState.graphData || !globalState.layoutNodes || !globalState.simulation) {
 				clearGraphData();
 			}
 			void applyPendingRouteNodeSelection();
 		}
 		if (pendingSelectedNodeIds.length || pendingCanvasNodeIds.length) {
+			if (!globalState.graphData || !globalState.layoutNodes || !globalState.simulation) {
+				clearGraphData();
+			}
 			const toLog = pendingSelectedNodeIds.slice();
 			const toCanvas = pendingCanvasNodeIds.slice();
 			pendingSelectedNodeIds = [];
@@ -12687,6 +12683,9 @@ async function hydratePendingNodeIds(
 ) {
 	if (!ids.length) return;
 	const isLogList = options.mode === 'log-list';
+	if (!isLogList) {
+		releaseClearNonLogKeepGate();
+	}
 	const detailBatchSize = isLogList ? LOG_LIST_DETAIL_FETCH_BATCH_SIZE : ON_SCREEN_DETAIL_FETCH_BATCH_SIZE;
 	const yieldMs = isLogList ? 0 : 60;
 
@@ -12703,6 +12702,12 @@ async function hydratePendingNodeIds(
 	const reportProgress = (done: number) => {
 		options.onProgress?.(Math.min(done, normalizedIds.length), normalizedIds.length);
 	};
+
+	const priorHydrateNodeIds = new Set<string>(
+		(globalState.layoutNodes || [])
+			.map((node) => String(node?.id || '').trim())
+			.filter((id): id is string => Boolean(id)),
+	);
 
 	// Queue graph bridge: paint firm + people stubs (and employment edges) immediately from
 	// dashboard seed metadata. Local Redis often lacks these CRDs while EXTERNAL_API_DISABLED
@@ -12764,7 +12769,7 @@ async function hydratePendingNodeIds(
 				}
 				if (chunkNodes.length) {
 					mergeIntoGraphData(chunkNodes, []);
-					globalState.appendFetched?.(chunkNodes, []);
+					globalState.appendFetched?.(chunkNodes, [], { skipSimRestart: true });
 				}
 			} catch (error) {
 				console.warn('Bulk nodes-by-ids hydrate failed; falling back to detail fetches.', error);
@@ -12827,7 +12832,7 @@ async function hydratePendingNodeIds(
 				globalState.appendFetched?.(chunkNodes, chunkLinks, {
 					skipPersist: isLogList,
 					skipFindRefresh: true,
-					skipSimRestart: isLogList,
+					skipSimRestart: true,
 				});
 				for (const entry of chunk) {
 					const live = findGraphNodeByRouteId(entry.id);
@@ -12895,6 +12900,49 @@ async function hydratePendingNodeIds(
 			refreshTraceState({ deferMs: 80 });
 		} catch {
 			/* ignore */
+		}
+	}
+
+	if (!isLogList && globalState.simulation && Array.isArray(globalState.layoutNodes)) {
+		const hydratedNewNodes = globalState.layoutNodes.filter(
+			(node) => node?.id && !priorHydrateNodeIds.has(String(node.id).trim()),
+		);
+		if (hydratedNewNodes.length > 0) {
+			const main = document.getElementById('fg-main');
+			const W = main?.clientWidth || 800;
+			const H = main?.clientHeight || 600;
+			const priorNodes = globalState.layoutNodes.filter((node) =>
+				priorHydrateNodeIds.has(String(node?.id ?? '').trim()),
+			);
+			const newIdSet = new Set(hydratedNewNodes.map((node) => String(node.id)));
+			const newLinks = (globalState.layoutLinks || []).filter((link) => {
+				const s = String(link?.source?.id ?? link?.source ?? '');
+				const t = String(link?.target?.id ?? link?.target ?? '');
+				return newIdSet.has(s) || newIdSet.has(t);
+			});
+			const existingLinks = (globalState.layoutLinks || []).filter((link) => {
+				const s = String(link?.source?.id ?? link?.source ?? '');
+				const t = String(link?.target?.id ?? link?.target ?? '');
+				return !newIdSet.has(s) && !newIdSet.has(t);
+			});
+			const placement = placeFetchedNodesOnOuterEdges({
+				existingNodes: priorNodes,
+				newNodes: hydratedNewNodes,
+				newLinks,
+				existingLinks,
+				width: W,
+				height: H,
+				forceReplaceCoords: true,
+			});
+			reheatLayoutLikeRefresh({
+				newNodes: hydratedNewNodes,
+				priorNodeIds: priorHydrateNodeIds,
+				centerComponentIds: placement.centerComponentIds,
+				placementCenter: placement.center,
+				outerRadius: placement.outerRadius,
+				eventName: 'hydrate-reflow',
+				light: priorHydrateNodeIds.size > 0,
+			});
 		}
 	}
 
@@ -16263,6 +16311,10 @@ function appendFetchedImpl(
 
 	// Rebuild neighbor cache and update info
 	globalState.neighborMap = buildNeighborMap(globalState.layoutNodes, globalState.layoutLinks);
+	if (typeof window !== 'undefined') {
+		(window as any).__FINRA_GRAPH_NODES = globalState.layoutNodes;
+		(window as any).__FINRA_GRAPH_LINKS = globalState.layoutLinks;
+	}
 	if (globalState.layoutNodes.length || globalState.layoutLinks.length) showEmpty(false);
 	if (globalState.graphData) updateSubsetInfo(globalState.layoutNodes.length, globalState.graphData.nodes.length);
 	updateMeta();
