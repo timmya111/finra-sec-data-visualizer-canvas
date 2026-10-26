@@ -1,8 +1,36 @@
 {
   "firms": [
     {
+      "id": 7059,
+      "name": "SMITH BARNEY INC."
+    },
+    {
+      "id": 8174,
+      "name": "UBS PAINEWEBBER INC."
+    },
+    {
       "id": 17499,
-      "name": "TRUIST INVESTMENT SERVICES, INC."
+      "name": "SUNTRUST INVESTMENT SERVICES, INC."
+    },
+    {
+      "id": 153777,
+      "name": "CITI PRIVATE ADVISORY, LLC"
+    },
+    {
+      "id": 7302,
+      "name": "GLICKENHAUS & CO. - NEW JERSEY"
+    },
+    {
+      "id": 23906,
+      "name": "BROADWAY FINANCIAL INVESTMENT SERVICES CORP."
+    },
+    {
+      "id": 23910,
+      "name": "FIRST INSTITUTIONAL SECURITIES, L.L.C."
+    },
+    {
+      "id": 31194,
+      "name": "RBC DAIN RAUSCHER INC."
     },
     {
       "id": 8209,
@@ -79,10 +107,6 @@
     {
       "id": 866,
       "name": "WADDELL & REED, INC."
-    },
-    {
-      "id": 31194,
-      "name": "RBC CAPITAL MARKETS, LLC"
     },
     {
       "id": 47293,
@@ -257,10 +281,6 @@
       "name": "BOFA SECURITIES PRIME, INC."
     },
     {
-      "id": 153777,
-      "name": "CITI PRIVATE ALTERNATIVES, LLC"
-    },
-    {
       "id": 104555,
       "name": "STRATEGIC ADVISERS LLC"
     },
@@ -287,10 +307,6 @@
     {
       "id": 129052,
       "name": "PNC INVESTMENTS"
-    },
-    {
-      "id": 7059,
-      "name": "CITIGROUP GLOBAL MARKETS INC."
     },
     {
       "id": 79,
@@ -323,10 +339,6 @@
     {
       "id": 4297,
       "name": "NOMURA SECURITIES INTERNATIONAL, INC."
-    },
-    {
-      "id": 8174,
-      "name": "UBS FINANCIAL SERVICES INC."
     },
     {
       "id": 21404,
@@ -5987,6 +5999,30 @@
   ],
   "individuals": [
     {
+      "id": 7513044,
+      "name": "Kevin F Brewster"
+    },
+    {
+      "id": 7513032,
+      "name": "Richard Palacios"
+    },
+    {
+      "id": 7314194,
+      "name": "Michael Chiocchio"
+    },
+    {
+      "id": 3025951,
+      "name": "Freddie Moultrie"
+    },
+    {
+      "id": 1004169,
+      "name": "David Edgar"
+    },
+    {
+      "id": 7543714,
+      "name": "Zachary Noble"
+    },
+    {
       "id": 3048135,
       "name": "Glenn A Bates"
     },
@@ -8734,6 +8770,12 @@
       "id": 2257293,
       "name": "Lewis Brent Mason"
     },
+    {
+      "id": 2212832,
+      "name": "CALVIN BOYD MASON"
+    }
+  ]
+} },
     {
       "id": 2212832,
       "name": "CALVIN BOYD MASON"
