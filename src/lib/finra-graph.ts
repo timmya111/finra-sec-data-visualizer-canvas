@@ -12490,6 +12490,34 @@ async function loadGraph() {
 			return 'continue' as const;
 		};
 
+		// Dashboard Queue → Graph import: restore any prior canvas session first, then APPEND
+		// bridged node ids. Without this, pendingCanvasNodeIds skips the restore prompt gate
+		// and the loadGraph finally path can clearGraphData() before hydrating only the bridge
+		// ids — wiping everything the user already had on screen.
+		if (pendingCanvasNodeIds.length > 0 && hasSavedSessionData && session && !clearedSession) {
+			globalState.graphData = { nodes: [], links: [], meta: {} };
+			globalState.initialServerNodeIds = new Set();
+			globalState.initialServerLinkKeys = new Set();
+			globalState.isSubsetMode = false;
+			renderGraph(globalState.graphData);
+			showEmpty(false);
+			updateMeta({ totalIndividuals: 0, totalFirms: 0, totalLinks: 0 });
+			await restoreSavedSession(session);
+			if (pendingRouteNodeId) {
+				await applyPendingRouteNodeSelection();
+			}
+			if (pendingSelectedNodeIds.length || pendingCanvasNodeIds.length) {
+				const toLog = pendingSelectedNodeIds.slice();
+				const toCanvas = pendingCanvasNodeIds.slice();
+				pendingSelectedNodeIds = [];
+				pendingCanvasNodeIds = [];
+				await hydratePendingNodeIds(toLog, true);
+				await hydratePendingNodeIds(toCanvas, false);
+			}
+			await markSessionRestoreFinished();
+			return;
+		}
+
 		if (!currentProfileEnabled) {
 			if (session && !clearedSession) {
 				globalState.graphData = { nodes: [], links: [], meta: {} };
@@ -12643,16 +12671,34 @@ async function loadGraph() {
 		console.error('loadGraph:', err);
 		showEmpty(true);
 	} finally {
-		if (pendingRouteNodeId) {
+		// Bootstrap an empty canvas shell only when nothing is on screen yet. Never call
+		// clearGraphData() over an already-restored layout — that was wiping prior nodes when
+		// Dashboard Queue imports arrived with pendingCanvasNodeIds / pendingRouteNodeId.
+		const ensurePendingHydrateShell = () => {
+			const hasLayout = Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length > 0;
+			if (hasLayout) {
+				if (!globalState.graphData || !Array.isArray(globalState.graphData.nodes)) {
+					globalState.graphData = {
+						nodes: globalState.layoutNodes.slice(),
+						links: Array.isArray(globalState.layoutLinks) ? globalState.layoutLinks.slice() : [],
+						meta: {},
+					};
+				}
+				if (!globalState.simulation) {
+					renderGraph(globalState.graphData, { freezeLayout: true, skipInitialZoom: true });
+				}
+				return;
+			}
 			if (!globalState.graphData || !globalState.layoutNodes || !globalState.simulation) {
 				clearGraphData();
 			}
+		};
+		if (pendingRouteNodeId) {
+			ensurePendingHydrateShell();
 			void applyPendingRouteNodeSelection();
 		}
 		if (pendingSelectedNodeIds.length || pendingCanvasNodeIds.length) {
-			if (!globalState.graphData || !globalState.layoutNodes || !globalState.simulation) {
-				clearGraphData();
-			}
+			ensurePendingHydrateShell();
 			const toLog = pendingSelectedNodeIds.slice();
 			const toCanvas = pendingCanvasNodeIds.slice();
 			pendingSelectedNodeIds = [];
