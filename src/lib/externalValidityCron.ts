@@ -115,37 +115,52 @@ function normalizeDiscoveryTerm(value: string) {
 		.filter(Boolean);
 }
 
-export function buildNameQueryCandidates(seedBank: {
-	individualIds?: string[];
-	firmIds?: string[];
-	nameByNumber?: { individual?: Record<string, string>; firm?: Record<string, string> };
-}) {
-	const terms = new Set<string>();
+const DEFAULT_NAME_DISCOVERY_LIMIT = Math.max(0, Number(process.env.FINRA_EXTERNAL_VALIDITY_NAME_DISCOVERY_LIMIT || 8));
+/** Soft wall-clock budget for optional name searches so numeric discovery + gap always get time. */
+const DEFAULT_NAME_DISCOVERY_BUDGET_MS = Math.max(0, Number(process.env.FINRA_EXTERNAL_VALIDITY_NAME_DISCOVERY_BUDGET_MS || 8000));
 
-	const seedNames = [
-		...(seedBank?.individualIds || []),
-		...(seedBank?.firmIds || []),
-		...Object.values(seedBank?.nameByNumber?.individual || {}),
-		...Object.values(seedBank?.nameByNumber?.firm || {}),
-	];
+function isNumericOnlyTerm(term: string) {
+	return /^\d+$/.test(String(term || '').trim());
+}
+
+/**
+ * Build short name-search terms from seed **names** only.
+ * CRD/firm IDs must never become search terms — that floods the 60s cron budget.
+ */
+export function buildNameQueryCandidates(
+	seedBank: {
+		individualIds?: string[];
+		firmIds?: string[];
+		nameByNumber?: { individual?: Record<string, string>; firm?: Record<string, string> };
+	},
+	limit = DEFAULT_NAME_DISCOVERY_LIMIT,
+) {
+	const terms = new Set<string>();
+	const maxTerms = Math.max(0, Math.floor(Number(limit) || 0));
+
+	const seedNames = [...Object.values(seedBank?.nameByNumber?.individual || {}), ...Object.values(seedBank?.nameByNumber?.firm || {})];
 
 	for (const raw of seedNames) {
 		const words = normalizeDiscoveryTerm(String(raw || ''));
 		for (const word of words) {
+			if (isNumericOnlyTerm(word)) continue;
 			if (word.length >= 3 && word.length <= 10) terms.add(word);
 			for (let start = 0; start < word.length - 2; start += 1) {
 				for (let end = start + 3; end <= Math.min(word.length, 10); end += 1) {
-					terms.add(word.slice(start, end));
+					const slice = word.slice(start, end);
+					if (!isNumericOnlyTerm(slice)) terms.add(slice);
 				}
 			}
 		}
-		const joined = words.join(' ');
-		if (joined.length >= 3 && joined.length <= 10) terms.add(joined);
+		const joined = words.filter((w) => !isNumericOnlyTerm(w)).join(' ');
+		if (joined.length >= 3 && joined.length <= 10 && !isNumericOnlyTerm(joined)) terms.add(joined);
 	}
 
-	return Array.from(terms)
-		.filter((term) => term.length >= 3 && term.length <= 10)
-		.sort((a, b) => a.localeCompare(b));
+	const ranked = Array.from(terms)
+		.filter((term) => term.length >= 3 && term.length <= 10 && !isNumericOnlyTerm(term))
+		// Prefer longer tokens (closer to real name words) so the cap keeps useful queries.
+		.sort((a, b) => b.length - a.length || a.localeCompare(b));
+	return maxTerms > 0 ? ranked.slice(0, maxTerms) : [];
 }
 
 function maxNumericId(values: string[]) {
@@ -848,8 +863,11 @@ export async function runExternalValidityCron() {
 		const firmIds = filterValidFirmIds(uniqueSortedNumericIds(seedBank?.firmIds || []));
 		const discoveryTerms = buildNameQueryCandidates(seedBank);
 		const discoveredNameIds = new Set<string>();
+		const nameBudgetMs = DEFAULT_NAME_DISCOVERY_BUDGET_MS;
+		const nameStartedAt = Date.now();
 
 		for (const term of discoveryTerms) {
+			if (nameBudgetMs > 0 && Date.now() - nameStartedAt >= nameBudgetMs) break;
 			try {
 				for (const id of await fetchSearchCandidates('individual', term)) discoveredNameIds.add(id);
 				for (const id of await fetchSearchCandidates('firm', term)) discoveredNameIds.add(id);

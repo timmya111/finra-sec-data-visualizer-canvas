@@ -15,19 +15,40 @@ import { makeRedisKey } from '@/lib/crd';
 
 describe('externalValidityCron candidate discovery', () => {
 	it('generates 3-10 character name terms from seed bank names', () => {
-		const candidates = buildNameQueryCandidates({
-			individualIds: ['12345'],
-			firmIds: ['67890'],
-			nameByNumber: {
-				individual: { '12345': 'Alicia Torres' },
-				firm: { '67890': 'Northwind Capital' },
+		const candidates = buildNameQueryCandidates(
+			{
+				individualIds: ['12345'],
+				firmIds: ['67890'],
+				nameByNumber: {
+					individual: { '12345': 'Alicia Torres' },
+					firm: { '67890': 'Northwind Capital' },
+				},
 			},
-		});
+			50,
+		);
 
-		expect(candidates.some((term) => term === 'alic')).toBe(true);
-		expect(candidates.some((term) => term === 'torre')).toBe(true);
-		expect(candidates.some((term) => term === 'north')).toBe(true);
+		expect(candidates.some((term) => term.startsWith('alic'))).toBe(true);
+		expect(candidates.some((term) => term.startsWith('torre'))).toBe(true);
+		expect(candidates.some((term) => term.startsWith('north'))).toBe(true);
 		expect(candidates.every((term) => term.length >= 3 && term.length <= 10)).toBe(true);
+	});
+
+	it('does not turn CRD IDs into name-search terms and caps the list', () => {
+		const candidates = buildNameQueryCandidates(
+			{
+				individualIds: ['8354525', '011629', '007322'],
+				firmIds: ['344865'],
+				nameByNumber: {
+					individual: { '1': 'Ada Lovelace' },
+					firm: { '2': 'Beta Partners' },
+				},
+			},
+			5,
+		);
+		expect(candidates.every((term) => !/^\d+$/.test(term))).toBe(true);
+		expect(candidates.some((term) => term.includes('835') || term.includes('011') || term.includes('007'))).toBe(false);
+		expect(candidates.length).toBeLessThanOrEqual(5);
+		expect(candidates.some((term) => term.startsWith('ada') || term.startsWith('love') || term.startsWith('beta'))).toBe(true);
 	});
 
 	it('pulls numeric CRD/Firm IDs out of search payload hits', () => {
