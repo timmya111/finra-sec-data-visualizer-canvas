@@ -29,8 +29,9 @@ const DEFAULT_DISCOVERY_BATCH = Math.max(1, Number(process.env.FINRA_EXTERNAL_VA
 const DEFAULT_GAP_BATCH = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_GAP_BATCH || process.env.FINRA_EXTERNAL_VALIDITY_UPDATE_BATCH || 3));
 const DEFAULT_FAILBACK_MINUTES = [6, 11] as const;
 const DEFAULT_MIN_RUN_INTERVAL_MINUTES = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_MIN_RUN_INTERVAL_MINUTES || 360));
-const DEFAULT_MIN_INDIVIDUAL_GAP = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_MIN_INDIVIDUAL_UPDATE || 7000000));
-const DEFAULT_MIN_FIRM_GAP = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_MIN_FIRM_UPDATE || 300000));
+/** Gap scan walks unknown CRDs downward to this floor (default 1 = lowest number). */
+const DEFAULT_MIN_INDIVIDUAL_GAP = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_MIN_INDIVIDUAL_UPDATE || 1));
+const DEFAULT_MIN_FIRM_GAP = Math.max(1, Number(process.env.FINRA_EXTERNAL_VALIDITY_MIN_FIRM_UPDATE || 1));
 
 type CronState = {
 	backoffUntil: number;
@@ -346,7 +347,7 @@ async function fetchSearchCandidates(kind: 'individual' | 'firm', query: string)
 
 async function fetchRecord(kind: 'individual' | 'firm', id: string) {
 	const normalized = normalizeId(id);
-	if (!isNumericId(normalized)) return { finra: null, sec: null };
+	if (!isNumericId(normalized)) return { finra: null, sec: null, finraRaw: null, secRaw: null };
 	const finraUrl =
 		kind === 'individual' ?
 			`https://api.brokercheck.finra.org/search/individual/${encodeURIComponent(normalized)}?${INDIVIDUAL_QUERY}`
@@ -355,10 +356,29 @@ async function fetchRecord(kind: 'individual' | 'firm', id: string) {
 		kind === 'individual' ?
 			`https://api.adviserinfo.sec.gov/search/individual/${encodeURIComponent(normalized)}?wt=json`
 		:	`https://api.adviserinfo.sec.gov/search/firm/${encodeURIComponent(normalized)}?wt=json`;
-	const [finra, sec] = await Promise.all([fetchUpstreamJson(finraUrl), fetchUpstreamJson(secUrl)]);
+	const [finraRaw, secRaw] = await Promise.all([fetchUpstreamJson(finraUrl), fetchUpstreamJson(secUrl)]);
+	// Individuals use iacontent on AdviserInfo; firms use content.
+	const secContentKey = kind === 'individual' ? 'iacontent' : 'content';
 	return {
-		finra: parseDetailPayload(finra, 'content'),
-		sec: parseDetailPayload(sec, 'iacontent'),
+		finraRaw,
+		secRaw,
+		finra: parseDetailPayload(finraRaw, 'content'),
+		sec: parseDetailPayload(secRaw, secContentKey),
+	};
+}
+
+/** Prefer raw search envelopes so firm/individual routes + selection-refresh can parse them. */
+export function detailCachePayload(raw: unknown, parsed: unknown, contentKey: string) {
+	if (raw && typeof raw === 'object') {
+		const hits = (raw as any)?.hits?.hits;
+		if (Array.isArray(hits) && hits.length > 0) return raw;
+	}
+	if (!parsed || typeof parsed !== 'object') return parsed ?? null;
+	return {
+		hits: {
+			total: 1,
+			hits: [{ _source: { [contentKey]: parsed } }],
+		},
 	};
 }
 
@@ -747,7 +767,7 @@ async function processCandidate(
 		return { found: true, discovered: false, updated: false, 429: false };
 	}
 
-	const { finra, sec } = await fetchRecord(kind, id);
+	const { finra, sec, finraRaw, secRaw } = await fetchRecord(kind, id);
 	if (!finra && !sec) return { found: false, discovered: false, updated: false, 429: false };
 
 	const node = buildRecordNode(kind, id, finra, sec);
@@ -757,7 +777,7 @@ async function processCandidate(
 		return { found: true, discovered: false, updated: false, 429: false };
 	}
 
-	// Persist raw payloads only if changed to save Redis command/bandwidth costs
+	// Persist parsed snapshots for debugging / resume; detail routes prefer search envelopes below.
 	try {
 		await redis.set(`${PENDING_PREFIX}:${kind}:${normalizeId(id)}:finra`, JSON.stringify(finra || {}));
 	} catch {}
@@ -787,10 +807,14 @@ async function processCandidate(
 	}
 
 	// Bare detail keys match makeRedisKey / selection-refresh / firm|individual routes.
+	// Store search envelopes (hits._source.content|iacontent), not already-parsed detail objects.
 	try {
 		const crd = normalizeId(id);
-		await redis.set(makeRedisKey('finra', kind, crd), JSON.stringify(finra || sec), { ex: 60 * 60 * 24 });
-		await redis.set(makeRedisKey('sec', kind, crd), JSON.stringify(sec || finra), { ex: 60 * 60 * 24 });
+		const secContentKey = kind === 'individual' ? 'iacontent' : 'content';
+		const finraPayload = detailCachePayload(finraRaw, finra || sec, 'content');
+		const secPayload = detailCachePayload(secRaw, sec || finra, secContentKey);
+		if (finraPayload) await redis.set(makeRedisKey('finra', kind, crd), JSON.stringify(finraPayload), { ex: 60 * 60 * 24 });
+		if (secPayload) await redis.set(makeRedisKey('sec', kind, crd), JSON.stringify(secPayload), { ex: 60 * 60 * 24 });
 	} catch {
 		// best effort cache refresh only
 	}

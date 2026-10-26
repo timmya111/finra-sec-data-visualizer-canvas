@@ -4,6 +4,7 @@ import { rememberInventoryEntitiesDurable, resetCrdInventoryModuleCache } from '
 import {
 	buildGapCandidates,
 	buildNameQueryCandidates,
+	detailCachePayload,
 	extractCandidateIdsFromSearchPayload,
 	filterValidFirmIds,
 	resolveDiscoveryHighWater,
@@ -71,6 +72,23 @@ describe('externalValidityCron candidate discovery', () => {
 		const { candidates, nextCursor } = buildGapCandidates(5, new Set(['5', '4', '3']), 5, 3);
 		expect(candidates).toEqual([]);
 		expect(nextCursor).toBe(2);
+	});
+
+	it('buildGapCandidates can walk all the way to CRD 1', () => {
+		const { candidates, nextCursor } = buildGapCandidates(4, new Set(['4', '2']), 5, 1);
+		expect(candidates).toEqual(['3', '1']);
+		expect(nextCursor).toBe(0);
+	});
+
+	it('detailCachePayload prefers raw hits envelopes and wraps parsed detail otherwise', () => {
+		const raw = { hits: { hits: [{ _source: { content: { basicInformation: { firmId: '9' } } } }] } };
+		expect(detailCachePayload(raw, { basicInformation: { firmId: '9' } }, 'content')).toBe(raw);
+
+		const wrapped = detailCachePayload(null, { basicInformation: { firmName: 'Acme' } }, 'content') as any;
+		expect(wrapped.hits.hits[0]._source.content.basicInformation.firmName).toBe('Acme');
+
+		const iaWrapped = detailCachePayload(null, { basicInformation: { firstName: 'Ada' } }, 'iacontent') as any;
+		expect(iaWrapped.hits.hits[0]._source.iacontent.basicInformation.firstName).toBe('Ada');
 	});
 
 	it('resolveDiscoveryHighWater floors from zset/inventory and ignores polluted firm IDs', () => {

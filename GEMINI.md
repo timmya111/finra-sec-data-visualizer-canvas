@@ -62,7 +62,7 @@ On **localhost**, HTTP/app/DB caching that would hide freshness issues should st
 - Warm interactive paths should stay at **single-digit Redis commands** per page when mem misses (detail GETs + one firm-connections GET). Enrichment is capped (~40 lookups).
 - When Redis errors/limits out → **cache-only automatically** (`src/lib/redisAvailability.ts`): firm connections fall back to `data/firm-connections/`; details use mem/primed/disk; search stays on sidecars. Do not open FINRA/SEC just because Redis failed.
 - External FINRA/SEC validation is **slow and deliberate**, not on every click. Sequential crawl, respect 429 / `retry-after`.
-- Vercel daily cron hits `/api/finra/external-validity`: forward discovery past high-water, then backward **gap-only** probes (skip known CRDs).
+- Vercel daily cron hits `/api/finra/external-validity`: forward discovery past high-water, then backward **gap-only** probes down toward CRD 1 (skip known CRDs). Known-CRD content refresh is selection-only.
 
 ## Graph ↔ dashboard contract
 

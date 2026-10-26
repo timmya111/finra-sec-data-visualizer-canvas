@@ -89,7 +89,23 @@ function parseDetailPayload(data: any, contentKey = "content") {
     return extractFromSource(data.hits.hits[0]?._source);
   }
 
-  return extractFromSource(data);
+  const fromContent = extractFromSource(data);
+  if (fromContent) return fromContent;
+
+  // Cron / selection-refresh may store already-parsed detail objects (basicInformation at top level).
+  if (data && typeof data === "object") {
+    const looksLikeDetail =
+      data.basicInformation ||
+      data.firmId ||
+      data.bdSECNumber ||
+      data.firmName ||
+      data.firmStatus ||
+      data.disclosures ||
+      data.directOwners;
+    if (looksLikeDetail) return data;
+  }
+
+  return null;
 }
 
 function buildSecDocumentLinks(opts: {

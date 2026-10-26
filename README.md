@@ -211,13 +211,13 @@ For runtime performance in production:
 
 ## Cron & revalidation
 
-Vercel runs a **daily** cron (`0 10 * * *` UTC) against `/api/finra/external-validity`. Each run:
+Vercel runs a **daily** cron (`0 10 * * *` UTC) against `/api/finra/external-validity` (single cron slot). Each run:
 
 1. Probes sequential CRDs **above** the current high-water mark (new discoveries).
-2. Walks **backward through gaps only** (unknown CRD numbers), skipping known CRDs.
-3. When a live CRD is found, updates inventory via `rememberInventoryEntitiesDurable` (sidecar when writable + Redis `dashboard:cached-crd-count` / highest-CRD zsets).
+2. Walks **backward through gaps only** (unknown CRD numbers) down toward CRD `1`, skipping known CRDs. Floors are `FINRA_EXTERNAL_VALIDITY_MIN_INDIVIDUAL_UPDATE` / `FINRA_EXTERNAL_VALIDITY_MIN_FIRM_UPDATE` (default `1`).
+3. When a live CRD is found, writes search-envelope detail keys + inventory via `rememberInventoryEntitiesDurable` (sidecar when writable + Redis `dashboard:cached-crd-count` / highest-CRD zsets). Cron does **not** re-validate or refresh known CRDs.
 
-**Selection refresh:** after a node is selected and the expand/pulse animation settles, the client POSTs `/api/finra/selection-refresh`. The server reads Redis, compares against live FINRA/SEC, and writes Redis + returns detail when newer. Click handling stays local-first. On HTTP 429 the server pauses 7–9 minutes (shared Redis backoff) and shortens that pause after later successes (floor 3 minutes). Per-node cooldown avoids re-checking the same CRD on every click.
+**Selection refresh:** after a node is selected and the expand/pulse animation settles, the client POSTs `/api/finra/selection-refresh`. The server fingerprints Redis vs live FINRA/SEC and writes Redis + returns detail only when content changed. Click handling stays local-first. On HTTP 429 the server pauses 7–9 minutes (shared Redis backoff) and shortens that pause after later successes (floor 3 minutes). Per-node cooldown (45 minutes) avoids re-checking the same CRD on every click.
 
 Search and roster reads stay local-first (gzip sidecars / Redis). The cron discovers new/gap CRDs; selection refresh keeps selected known CRDs fresh without local pushes. After local Redis gains new CRDs, refresh shipped search sidecars with `pnpm run sidecars:status` / `pnpm run sidecars:rebuild`, then commit `public/search-indexes/*` and deploy (see `docs/search-sidecar.md`).
 
