@@ -913,7 +913,10 @@ const FILTER_MATCH_LIMIT = 100; // maximum number of direct matches to show when
 const LS_SESSION_KEY = 'finra_session'; // storage key for persisted session nodes
 const LS_GRAPH_TEMPLATES_KEY = 'finra_graph_templates'; // durable saved graph templates (survives reset/session clear)
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
-const SESSION_STORAGE_SOFT_LIMIT_BYTES = 4 * 1024 * 1024; // stay comfortably below common browser quotas
+// Prefer IndexedDB well before the ~5MB localStorage ceiling. Label/conn caches often
+// already occupy multi-MB, so a 4MB session soft-limit never tripped IDB and QuotaExceeded
+// forced reduced/minimal payloads that Dashboard → Graph then restored as an empty canvas.
+const SESSION_STORAGE_SOFT_LIMIT_BYTES = 512 * 1024;
 const SESSION_FULL_LAYOUT_NODE_LIMIT = 100000; // above this, store only compact positioning data
 const GRAPH_TEMPLATES_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
 const NON_GRAY_HOP_ANIMATION_MS = 1200;
@@ -2306,6 +2309,18 @@ function updateSelectionLogTemplatesUI() {
 	});
 }
 
+function persistSessionToIndexedDBWithPointer(envelope: { expiresAt: number; data: any }) {
+	if (typeof indexedDB === 'undefined') return false;
+	saveSessionToIndexedDB(envelope).catch(() => undefined);
+	try {
+		localStorage.setItem(LS_SESSION_KEY, JSON.stringify({ expiresAt: envelope.expiresAt, pointer: 'idb' }));
+		return true;
+	} catch {
+		// Pointer write can still fail under extreme quota pressure; IDB may hold the body.
+		return true;
+	}
+}
+
 function persistSessionPayload(payload) {
 	const envelope = {
 		expiresAt: Date.now() + SESSION_TTL_MS,
@@ -2313,15 +2328,19 @@ function persistSessionPayload(payload) {
 	};
 	const serialized = JSON.stringify(envelope);
 	if (serialized.length > SESSION_STORAGE_SOFT_LIMIT_BYTES && typeof indexedDB !== 'undefined') {
-		saveSessionToIndexedDB(envelope).catch(() => undefined);
-		try {
-			localStorage.setItem(LS_SESSION_KEY, JSON.stringify({ expiresAt: envelope.expiresAt, pointer: 'idb' }));
-		} catch {
-			/* ignore persistence errors */
-		}
+		persistSessionToIndexedDBWithPointer(envelope);
 		return;
 	}
-	localStorage.setItem(LS_SESSION_KEY, serialized);
+	try {
+		localStorage.setItem(LS_SESSION_KEY, serialized);
+	} catch (error) {
+		// QuotaExceeded while session body itself is under the soft limit — caches filled LS.
+		// Spill to IDB instead of letting persistSessionNow strip extras down to minimal.
+		if (typeof indexedDB !== 'undefined' && persistSessionToIndexedDBWithPointer(envelope)) {
+			return;
+		}
+		throw error;
+	}
 }
 
 function getSessionPersistenceAttempts() {
@@ -2446,7 +2465,10 @@ async function fetchNodesByIds(nodeIds: string[] = []) {
 	url.searchParams.set('ids', uniqueIds.join(','));
 	const response = await fetchWithTimeout(url.toString());
 	if (!response.ok) throw new Error(`nodes-by-ids HTTP ${response.status}`);
-	return response.json();
+	const payload = await response.json();
+	if (Array.isArray(payload)) return payload;
+	if (Array.isArray(payload?.nodes)) return payload.nodes;
+	return [];
 }
 
 // Resolve a node that is already known to the graph (rendered layout node first, then the
@@ -2742,6 +2764,29 @@ function loadSession() {
 	}
 }
 
+export function sessionRestorableNodeWeight(session: any): number {
+	if (!session || session.cleared) return 0;
+	return Math.max(
+		Array.isArray(session.extraNodes) ? session.extraNodes.length : 0,
+		Array.isArray(session.extraNodeIds) ? session.extraNodeIds.length : 0,
+		Array.isArray(session.renderedServerIds) ? session.renderedServerIds.length : 0,
+		Array.isArray(session.nodePositions) ? session.nodePositions.length : 0,
+	);
+}
+
+export function collectSessionRestoreIdsFromPositions(session: any): string[] {
+	if (!Array.isArray(session?.nodePositions) || !session.nodePositions.length) return [];
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of session.nodePositions) {
+		const id = String(entry?.id || '').trim();
+		if (!id || seen.has(id)) continue;
+		seen.add(id);
+		ids.push(id);
+	}
+	return ids;
+}
+
 async function loadSessionAsync() {
 	try {
 		const raw = localStorage.getItem(LS_SESSION_KEY);
@@ -2764,7 +2809,21 @@ async function loadSessionAsync() {
 					localStorage.removeItem(LS_SESSION_KEY);
 					return null;
 				}
-				return parsed.data || null;
+				const lsData = parsed.data || null;
+				// A quota downgrade can replace an IDB pointer with a sparse localStorage body
+				// while IndexedDB still holds the fuller prior session — prefer the richer copy.
+				try {
+					const idbEnvelope = await loadSessionFromIndexedDB();
+					const idbData = idbEnvelope && typeof idbEnvelope === 'object' ? idbEnvelope.data : null;
+					const idbExpiresAt = Number(idbEnvelope?.expiresAt || 0);
+					const idbFresh = Number.isFinite(idbExpiresAt) && Date.now() <= idbExpiresAt;
+					if (idbFresh && sessionRestorableNodeWeight(idbData) > sessionRestorableNodeWeight(lsData)) {
+						return idbData;
+					}
+				} catch {
+					/* ignore IDB probe failures */
+				}
+				return lsData;
 			}
 			return parsed || null;
 		}
@@ -7632,7 +7691,14 @@ async function restoreSavedSession(session) {
 		restoreLinks = session.extraLinks || [];
 	}
 
-	const willPaintSessionGraph = Boolean(restoreNodes.length || restoreLinks.length || session.renderedServerIds?.length || session.extraNodeIds?.length);
+	const positionRestoreIds = collectSessionRestoreIdsFromPositions(session);
+	const willPaintSessionGraph = Boolean(
+		restoreNodes.length ||
+			restoreLinks.length ||
+			session.renderedServerIds?.length ||
+			session.extraNodeIds?.length ||
+			positionRestoreIds.length,
+	);
 	await ensureSessionRestoreCanvasShell(session, { clearExistingLayout: willPaintSessionGraph });
 	if (willPaintSessionGraph) {
 		updateFetchStatus('Restoring previous session…', true);
@@ -7678,16 +7744,27 @@ async function restoreSavedSession(session) {
 			);
 			await yieldToBrowserForSessionRestore();
 		}
-	} else if (!restoreNodes.length && session.extraNodeIds?.length) {
-		const missingExtraNodeIds = session.extraNodeIds.filter((id) => id && !renderedIds.has(id));
-		for (let i = 0; i < missingExtraNodeIds.length; i += SESSION_RESTORE_NODE_CHUNK_SIZE) {
-			const chunk = missingExtraNodeIds.slice(i, i + SESSION_RESTORE_NODE_CHUNK_SIZE);
-			injectNodesById(chunk, { skipPersist: true, skipSimRestart: true });
-			updateFetchStatus(
-				`Restoring session nodes ${Math.min(i + SESSION_RESTORE_NODE_CHUNK_SIZE, missingExtraNodeIds.length)}/${missingExtraNodeIds.length}…`,
-				true,
-			);
-			await yieldToBrowserForSessionRestore();
+	} else if (!restoreNodes.length && (session.extraNodeIds?.length || positionRestoreIds.length)) {
+		// Reduced/minimal quota downgrades keep ids (extraNodeIds and/or nodePositions) without
+		// full node objects. injectNodesById only copies from in-memory graphData, which is empty
+		// on Dashboard → Graph remount — fetch/hydrate those ids instead so prior nodes return.
+		const idList = Array.from(
+			new Set(
+				[
+					...(Array.isArray(session.extraNodeIds) ? session.extraNodeIds : []),
+					...positionRestoreIds,
+				]
+					.map((id) => String(id || '').trim())
+					.filter((id) => id && !renderedIds.has(id)),
+			),
+		);
+		if (idList.length) {
+			updateFetchStatus(`Restoring session nodes 0/${idList.length}…`, true);
+			await hydratePendingNodeIds(idList, false, {
+				onProgress: (done, total) => {
+					updateFetchStatus(`Restoring session nodes ${done}/${total}…`, true);
+				},
+			});
 		}
 	}
 
@@ -8382,6 +8459,7 @@ function sessionHasRestorableGraph(session) {
 	if (Array.isArray(session.extraNodes) && session.extraNodes.length) return true;
 	if (Array.isArray(session.extraNodeIds) && session.extraNodeIds.length) return true;
 	if (Array.isArray(session.renderedServerIds) && session.renderedServerIds.length) return true;
+	if (Array.isArray(session.nodePositions) && session.nodePositions.length) return true;
 	if (session.selectedNodeId) return true;
 	if (Array.isArray(session.highlightedNodes) && session.highlightedNodes.length) return true;
 	return false;
@@ -9033,14 +9111,18 @@ function drawDisclosureIndicator(g, d, r) {
 setOnNodeClickCallback(handleNodeOpen);
 
 export function destroy() {
-	if (globalState.sessionSaveTimer || globalState.zoomSaveTimer) {
-		if (globalState.sessionSaveTimer) clearTimeout(globalState.sessionSaveTimer);
-		if (globalState.zoomSaveTimer) clearTimeout(globalState.zoomSaveTimer);
+	if (globalState.sessionSaveTimer) {
+		clearTimeout(globalState.sessionSaveTimer);
 		globalState.sessionSaveTimer = null;
+	}
+	if (globalState.zoomSaveTimer) {
+		clearTimeout(globalState.zoomSaveTimer);
 		globalState.zoomSaveTimer = null;
-		if (!sessionRestoreInProgress && (isSessionCleared || (Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length > 0))) {
-			persistSessionNow();
-		}
+	}
+	// Always flush a live layout on unmount. Waiting for a pending timer meant Dashboard
+	// navigations could leave a stale/minimal localStorage session for the next Graph import.
+	if (!sessionRestoreInProgress && (isSessionCleared || (Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length > 0))) {
+		persistSessionNow();
 	}
 	releaseClearNonLogKeepGate();
 	cancelGraphTickPositions();
@@ -12332,6 +12414,7 @@ async function loadGraph() {
 				(existingSession.extraNodes?.length ||
 					existingSession.extraNodeIds?.length ||
 					existingSession.renderedServerIds?.length ||
+					existingSession.nodePositions?.length ||
 					existingSession.selectedNodeId ||
 					existingSession.highlightedNodes?.length),
 			);
@@ -12408,7 +12491,12 @@ async function loadGraph() {
 		const hasSavedSessionData = Boolean(
 			session &&
 			!clearedSession &&
-			(session.extraNodes?.length || session.extraNodeIds?.length || session.renderedServerIds?.length || session.selectedNodeId || session.highlightedNodes?.length),
+			(session.extraNodes?.length ||
+				session.extraNodeIds?.length ||
+				session.renderedServerIds?.length ||
+				session.nodePositions?.length ||
+				session.selectedNodeId ||
+				session.highlightedNodes?.length),
 		);
 		const shouldStartEmptyForCustomProfile = profileName === 'custom' && !pendingRouteNodeId && !profileHasExplicitSeedTargets(profileData) && !hasSavedSessionData;
 
