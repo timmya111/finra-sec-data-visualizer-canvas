@@ -49,10 +49,15 @@ import {
 	normalizeDatabaseSearchQueryKey,
 	TEXT_SEARCH_FETCH_LIMIT,
 	TEXT_SEARCH_DETAIL_HYDRATION_LIMIT,
+	FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT,
 	wasUncleanSessionExit,
 	markSessionLive,
 	markSessionCleanExit,
 	buildFirmCurrentConnectionGraphBatch,
+	buildFirmRosterCanvasBridgeContext,
+	orderFirmCurrentConnectionsForCanvasBridges,
+	scoreFirmRosterPersonCanvasBridge,
+	shouldExpandFirmCurrentConnections,
 	shouldFetchFirmDetailForOwnerEvidence,
 	shouldHydrateExpansionFrontierNodeDetail,
 	shouldAutoExpandRouteSelection,
@@ -2024,10 +2029,105 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		);
 		expect(batch.nodes.map((node) => node.id)).toEqual(['person:111']);
 		expect(batch.skippedExisting).toBe(2);
+		expect(batch.remainingNew).toBe(0);
+		expect(batch.truncated).toBe(false);
 		expect(batch.links).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ source: 'person:111', target: 'firm:107319', relationship: 'employed_by', isCurrent: true }),
 				expect.objectContaining({ source: 'person:222', target: 'firm:107319', relationship: 'employed_by', isCurrent: true }),
+			]),
+		);
+	});
+
+	it('shouldExpandFirmCurrentConnections is true for every firm coverage type', () => {
+		expect(shouldExpandFirmCurrentConnections({ id: 'firm:1', group: 'firm', hasSecData: true, hasFinraData: false })).toBe(true);
+		expect(shouldExpandFirmCurrentConnections({ id: 'firm:2', group: 'firm', hasSecData: false, hasFinraData: true, bcScope: 'ACTIVE' })).toBe(true);
+		expect(shouldExpandFirmCurrentConnections({ id: 'firm:3', group: 'firm', hasSecData: true, hasFinraData: true })).toBe(true);
+		expect(shouldExpandFirmCurrentConnections({ id: 'person:1', group: 'individual' })).toBe(false);
+		expect(shouldExpandFirmCurrentConnections(null)).toBe(false);
+	});
+
+	it('buildFirmCurrentConnectionGraphBatch reveals at most FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT new people per click', () => {
+		expect(FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT).toBe(100);
+		const roster = Array.from({ length: 250 }, (_, index) => ({
+			individualId: String(1000 + index),
+			name: `Person ${index}`,
+			bcScope: 'Active',
+			isCurrent: true,
+		}));
+		const first = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:7691', group: 'firm', label: 'Mega Firm' },
+			roster,
+			{ existingNodeIds: [], limit: FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT },
+		);
+		expect(first.nodes).toHaveLength(100);
+		expect(first.remainingNew).toBe(150);
+		expect(first.truncated).toBe(true);
+		expect(first.nodes[0].id).toBe('person:1000');
+		expect(first.nodes[99].id).toBe('person:1099');
+
+		const alreadyShown = first.nodes.map((node) => node.id);
+		const second = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:7691', group: 'firm', label: 'Mega Firm' },
+			roster,
+			{ existingNodeIds: alreadyShown, limit: FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT },
+		);
+		expect(second.nodes).toHaveLength(100);
+		expect(second.remainingNew).toBe(50);
+		expect(second.nodes[0].id).toBe('person:1100');
+		expect(second.skippedExisting).toBe(100);
+
+		const third = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:7691', group: 'firm', label: 'Mega Firm' },
+			roster,
+			{ existingNodeIds: [...alreadyShown, ...second.nodes.map((node) => node.id)], limit: FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT },
+		);
+		expect(third.nodes).toHaveLength(50);
+		expect(third.remainingNew).toBe(0);
+		expect(third.truncated).toBe(false);
+	});
+
+	it('orderFirmCurrentConnectionsForCanvasBridges prefers people linked to on-screen nodes', () => {
+		const roster = [
+			{ individualId: '100', name: 'No Bridge' },
+			{ individualId: '200', name: 'Bridge Via Link' },
+			{ individualId: '300', name: 'Bridge Via Other Firm' },
+			{ individualId: '400', name: 'Also No Bridge' },
+		];
+		const context = buildFirmRosterCanvasBridgeContext('firm:1', {
+			canvasNodeIds: ['firm:1', 'firm:2', 'person:999'],
+			layoutNodes: [
+				{ id: 'firm:1', group: 'firm' },
+				{
+					id: 'firm:2',
+					group: 'firm',
+					currentConnections: [{ individualId: '300', name: 'Bridge Via Other Firm' }],
+				},
+				{ id: 'person:999', group: 'individual' },
+			],
+			links: [{ source: 'person:200', target: 'person:999', relationship: 'employed_by' }],
+		});
+		expect(scoreFirmRosterPersonCanvasBridge('person:200', context)).toBeGreaterThan(0);
+		expect(scoreFirmRosterPersonCanvasBridge('person:300', context)).toBeGreaterThan(0);
+		expect(scoreFirmRosterPersonCanvasBridge('person:100', context)).toBe(0);
+
+		const ordered = orderFirmCurrentConnectionsForCanvasBridges(roster, 'firm:1', context);
+		expect(ordered.map((person) => person.individualId).slice(0, 2).sort()).toEqual(['200', '300']);
+		expect(ordered.map((person) => person.individualId).slice(2)).toEqual(['100', '400']);
+
+		const batch = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:1', group: 'firm', label: 'Clicked' },
+			roster,
+			{ existingNodeIds: ['firm:1', 'firm:2', 'person:999'], limit: 2, bridgeContext: context },
+		);
+		expect(batch.nodes.map((node) => node.id).sort()).toEqual(['person:200', 'person:300']);
+		expect(batch.bridgedNew).toBe(2);
+		expect(batch.remainingNew).toBe(2);
+		expect(batch.links).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ source: 'person:200', target: 'firm:1', relationship: 'employed_by' }),
+				expect.objectContaining({ source: 'person:300', target: 'firm:1', relationship: 'employed_by' }),
+				expect.objectContaining({ source: 'person:300', target: 'firm:2', relationship: 'employed_by' }),
 			]),
 		);
 	});

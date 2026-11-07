@@ -14,8 +14,8 @@ const LOCK_KEY = 'finra:cron:external-validity:lock';
 const DEFAULT_LOCK_TTL_SECONDS = Math.max(30, Number(process.env.FINRA_EXTERNAL_VALIDITY_CRON_LOCK_TTL_SECONDS || 300));
 // If true, use TTL-only locking (don't attempt to delete the lock at the end)
 const USE_TTL_ONLY_LOCK = String(process.env.FINRA_EXTERNAL_VALIDITY_CRON_TTL_ONLY || 'false').toLowerCase() === 'true';
-const QUEUE_KEY = 'finra:cron:queue';
 const PROCESSED_SET = 'finra:cron:processed';
+/** Failure / 429 bookkeeping only — cron advances cursors inline and does not re-drain this set. */
 const RETRY_ZSET = 'finra:cron:retry';
 const PENDING_PREFIX = 'finra:pending';
 const DEFAULT_RETRY_SECONDS = Math.max(60, Number(process.env.FINRA_EXTERNAL_VALIDITY_RETRY_SECONDS || 300));
@@ -630,54 +630,6 @@ async function storeState(redis: Redis, state: CronState) {
 	await redis.set(STATE_KEY, JSON.stringify(state), { ex: 60 * 60 * 24 * 30 });
 }
 
-async function moveDueRetriesToQueue(redis: Redis, now = Date.now(), limit = 100) {
-	try {
-		// get due members
-		const due = (await (redis as any).zrangebyscore?.(RETRY_ZSET, '-inf', String(now))) || [];
-		if (!due || !due.length) return 0;
-		const slice = due.slice(0, limit);
-		for (const member of slice) {
-			try {
-				await (redis as any).zrem?.(RETRY_ZSET, member);
-			} catch {}
-			try {
-				await redis.lpush(QUEUE_KEY, member);
-			} catch {}
-		}
-		return slice.length;
-	} catch {
-		return 0;
-	}
-}
-
-async function enqueueCandidate(redis: Redis, kind: 'individual' | 'firm', id: string, source: 'discovery' | 'update') {
-	const item = `${source}|${kind}:${String(id)}`;
-	try {
-		// if already processed, skip
-		const processed = await (redis as any).sismember?.(PROCESSED_SET, `${kind}:${String(id)}`);
-		if (processed) return false;
-		await redis.lpush(QUEUE_KEY, item);
-		return true;
-	} catch {
-		// best-effort: if enqueue fails, ignore
-		return false;
-	}
-}
-
-async function popQueueBatch(redis: Redis, limit: number) {
-	const items: string[] = [];
-	for (let i = 0; i < limit; i++) {
-		try {
-			const v = await (redis as any).rpop?.(QUEUE_KEY);
-			if (!v) break;
-			items.push(String(v));
-		} catch {
-			break;
-		}
-	}
-	return items;
-}
-
 async function loadState(redis: Redis, maxIndividual: number, maxFirm: number): Promise<CronState> {
 	try {
 		const raw = await redis.get<string>(STATE_KEY);
@@ -922,13 +874,6 @@ export async function runExternalValidityCron() {
 			updatedAt: new Date().toISOString(),
 		};
 
-		// Move any due retry items back into the work queue before processing
-		try {
-			await moveDueRetriesToQueue(redis);
-		} catch {
-			// ignore
-		}
-
 		const summary: RunSummary = {
 			processed: 0,
 			discovered: 0,
@@ -962,13 +907,6 @@ export async function runExternalValidityCron() {
 			options: { gapNextCursor?: number; gapFloor?: number } = {},
 		) => {
 			for (const id of ids) {
-				// persist candidate in queue for durability
-				try {
-					await redis.lpush(QUEUE_KEY, `${kind}:${normalizeId(id)}`);
-				} catch {
-					// ignore
-				}
-
 				// skip if already processed
 				try {
 					if (await isProcessed(redis, kind, id)) {

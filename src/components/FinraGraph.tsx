@@ -1659,10 +1659,9 @@ export default function FinraGraph() {
 							</h4>
 							<ul className='fg-empty-steps'>
 								<li>For discovery, enter a firm name or CRD number, or a broker name or CRD number. You can also enter a comma-separated list of names/CRDs.</li>
-								<li>Selecting Individual nodes reveal it's current and previous employment connections (blue).</li>
-								<li>Selecting SEC Only Firm nodes (green)reveal it's current broker connections (blue).</li>
-								<li>Selecting Firm nodes with FINRA data (purple)reveal it's business direct connections and employed by (red).</li>
-								<li>To find the full list of connections for a firm, view that firm in the dashboard, to see the full connection list for a firm</li>
+								<li>Selecting broker nodes to view all their employment history reavealed as nodes.</li>
+								<li>Selecting firm nodes will reviewal 100 at a time with each click.</li>
+								<li>Use the Dashboard to create custome filiters for each form and to see the full list of connections for a firm.</li>
 							</ul>
 							<br />
 							<a

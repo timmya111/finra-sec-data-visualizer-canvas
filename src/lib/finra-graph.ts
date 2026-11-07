@@ -927,6 +927,11 @@ const NON_GRAY_DETAIL_BATCH_SIZE = 5;
 const AUTO_EXPANSION_DIRECT_NEIGHBOR_LIMIT = 60;
 /** Hard cap: never dump mega-firm neighborhoods (e.g. Merrill ~2500) onto the canvas in one expand. */
 const MAX_AUTO_REVEAL_NEIGHBORS_PER_EXPAND = 60;
+/**
+ * Firm click reveals at most this many new current-connection people per click.
+ * Click the same firm again to continue with the next batch not yet on canvas.
+ */
+export const FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT = 100;
 /** Form BD Direct Owners / Executive Officers painted on firm click — keep bounded. */
 const MAX_FIRM_CONTROL_OWNERS_ON_CANVAS = 24;
 /** Sidebar connection lists stay short; full roster lives on the dashboard. */
@@ -1025,6 +1030,30 @@ if (typeof window !== 'undefined') {
 			orphanPosition: node.orphanPosition || node.orphan?.position || null,
 			controlPositions: node.controlPositions,
 			isNodeInactive: isNodeInactive(node),
+		};
+	};
+	/** Test/debug helper: continue firm current-connection reveal batches (100 per call). */
+	(window as any).__fgExpandFirmCurrentConnections = async (crdOrId: string) => {
+		const raw = String(crdOrId || '').trim();
+		const id = raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const node =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id) === id) ||
+			(globalState.graphData?.nodes || []).find((entry) => String(entry?.id) === id) ||
+			null;
+		if (!node) return { ok: false, reason: 'node-missing', id };
+		const before = countFirmCurrentConnectionsOnCanvas(node);
+		const result = await expandSecOnlyFirmCurrentConnections(node);
+		revealIncidentRenderedLinks(node, isAutoExpansionLink);
+		const after = countFirmCurrentConnectionsOnCanvas(node);
+		return {
+			ok: true,
+			id,
+			before,
+			after,
+			added: result?.added ?? 0,
+			remaining: result?.remaining ?? 0,
+			bridged: result?.bridged ?? 0,
+			expanded: node._secOnlyCurrentConnectionsExpanded === true,
 		};
 	};
 	(window as any).__fgForceInjectPersonEmployment = async (crdOrId: string) => {
@@ -2661,7 +2690,7 @@ async function applyPendingRouteNodeSelection() {
 							revealIncidentRenderedLinks(liveNode, isAutoExpansionLink);
 						}
 					} catch (error) {
-						console.warn('Failed to expand SEC-only firm current connections for route firm:', error);
+						console.warn('Failed to expand firm current connections for route firm:', error);
 					}
 				})();
 			}
@@ -6973,9 +7002,9 @@ function isPersonClickEmploymentLink(link) {
 	return isPreviousEmploymentLink(link);
 }
 
-// Clicking a firm node should only reveal its Form BD — Direct Owners & Executive
-// Officers ("controls") connections, not employment/registration history — that
-// data is expensive to fetch/render for mega-firms and is dashboard-only now.
+// Firm-click wave filter: Form BD control links plus current employment/registration
+// links already on the graph. Large employment rosters are batched separately via
+// expandSecOnlyFirmCurrentConnections (FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT per click).
 function isFirmControlOnlyLink(link) {
 	if (!link) return false;
 	const rel = String(link.relationship || '')
@@ -18505,58 +18534,241 @@ async function ensureFirmConnections(
 	}
 }
 
+export type FirmRosterCanvasBridgeContext = {
+	/** Node ids currently rendered on the canvas. */
+	canvasIds: Set<string>;
+	/** personId → on-screen neighbor ids (excluding the clicked firm). */
+	personToCanvasNeighbors: Map<string, Set<string>>;
+	/** personId → other on-screen firm ids that already list this person in currentConnections. */
+	personToOnScreenFirmIds: Map<string, Set<string>>;
+};
+
+function extractFirmRosterPersonCrd(person: any): string {
+	return String(person?.individualId || person?.crd || person?.crdNumber || person?.personId || '').trim();
+}
+
+/**
+ * Build lookup maps so firm-roster reveal can prefer people who bridge to nodes
+ * already on the canvas (existing graph links + other on-screen firm rosters).
+ */
+export function buildFirmRosterCanvasBridgeContext(
+	firmNodeId: string,
+	options: {
+		canvasNodeIds?: Iterable<string> | null;
+		layoutNodes?: any[] | null;
+		links?: any[] | null;
+	} = {},
+): FirmRosterCanvasBridgeContext {
+	const clickedFirmId = String(firmNodeId || '').trim();
+	const canvasIds = new Set<string>();
+	for (const id of options.canvasNodeIds || []) {
+		const normalized = String(id || '').trim();
+		if (normalized) canvasIds.add(normalized);
+	}
+	const layoutNodes = Array.isArray(options.layoutNodes) ? options.layoutNodes : [];
+	for (const node of layoutNodes) {
+		const id = String(node?.id || '').trim();
+		if (id) canvasIds.add(id);
+	}
+
+	const personToCanvasNeighbors = new Map<string, Set<string>>();
+	const personToOnScreenFirmIds = new Map<string, Set<string>>();
+	const rememberNeighbor = (personId: string, otherId: string) => {
+		if (!personId.startsWith('person:') || !otherId || otherId === clickedFirmId) return;
+		if (!canvasIds.has(otherId)) return;
+		let set = personToCanvasNeighbors.get(personId);
+		if (!set) {
+			set = new Set<string>();
+			personToCanvasNeighbors.set(personId, set);
+		}
+		set.add(otherId);
+		if (otherId.startsWith('firm:')) {
+			let firms = personToOnScreenFirmIds.get(personId);
+			if (!firms) {
+				firms = new Set<string>();
+				personToOnScreenFirmIds.set(personId, firms);
+			}
+			firms.add(otherId);
+		}
+	};
+
+	for (const link of Array.isArray(options.links) ? options.links : []) {
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		if (!sourceId || !targetId) continue;
+		if (sourceId.startsWith('person:')) rememberNeighbor(sourceId, targetId);
+		if (targetId.startsWith('person:')) rememberNeighbor(targetId, sourceId);
+	}
+
+	// Other on-screen firms that already loaded a roster: people listed there become bridges.
+	for (const node of layoutNodes) {
+		if (!node || node.group !== 'firm') continue;
+		const otherFirmId = String(node.id || '').trim();
+		if (!otherFirmId || otherFirmId === clickedFirmId || !canvasIds.has(otherFirmId)) continue;
+		const roster = Array.isArray(node.currentConnections) ? node.currentConnections : [];
+		for (const person of roster) {
+			const crd = extractFirmRosterPersonCrd(person);
+			if (!/^\d+$/.test(crd)) continue;
+			const personId = `person:${crd}`;
+			let firms = personToOnScreenFirmIds.get(personId);
+			if (!firms) {
+				firms = new Set<string>();
+				personToOnScreenFirmIds.set(personId, firms);
+			}
+			firms.add(otherFirmId);
+			rememberNeighbor(personId, otherFirmId);
+		}
+	}
+
+	return { canvasIds, personToCanvasNeighbors, personToOnScreenFirmIds };
+}
+
+/** Higher score = reveal sooner (bridges to on-screen nodes first). */
+export function scoreFirmRosterPersonCanvasBridge(personId: string, context: FirmRosterCanvasBridgeContext | null | undefined): number {
+	const id = String(personId || '').trim();
+	if (!id || !context) return 0;
+	const neighbors = context.personToCanvasNeighbors.get(id);
+	const firms = context.personToOnScreenFirmIds.get(id);
+	const neighborCount = neighbors?.size || 0;
+	const firmCount = firms?.size || 0;
+	if (!neighborCount && !firmCount) return 0;
+	// Prefer people with more distinct on-screen attachments; firm roster hits are a strong bridge signal.
+	return neighborCount * 100 + firmCount * 40;
+}
+
+/**
+ * Stable-sort firm roster so people who connect to on-screen nodes come first.
+ * When no bridge signal exists, original order is preserved.
+ */
+export function orderFirmCurrentConnectionsForCanvasBridges(
+	currentConnections: any[] = [],
+	firmNodeId: string,
+	context: FirmRosterCanvasBridgeContext | null | undefined,
+) {
+	const list = Array.isArray(currentConnections) ? currentConnections.slice() : [];
+	if (!context || list.length < 2) return list;
+	const clickedFirmId = String(firmNodeId || '').trim();
+	if (!clickedFirmId) return list;
+
+	return list
+		.map((person, index) => {
+			const crd = extractFirmRosterPersonCrd(person);
+			const personId = /^\d+$/.test(crd) ? `person:${crd}` : '';
+			return {
+				person,
+				index,
+				score: personId ? scoreFirmRosterPersonCanvasBridge(personId, context) : 0,
+			};
+		})
+		.sort((left, right) => right.score - left.score || left.index - right.index)
+		.map((entry) => entry.person);
+}
+
 /** Build person stubs + current employment links for a firm roster (graph expand). */
 export function buildFirmCurrentConnectionGraphBatch(
 	firmNode: any,
 	currentConnections: any[] = [],
-	options: { existingNodeIds?: Iterable<string> | null } = {},
+	options: {
+		existingNodeIds?: Iterable<string> | null;
+		limit?: number | null;
+		/** When set, new people that bridge to on-screen nodes are revealed first. */
+		bridgeContext?: FirmRosterCanvasBridgeContext | null;
+		/** Prefer canvas bridges (default true when bridgeContext is provided). */
+		preferCanvasBridges?: boolean;
+	} = {},
 ) {
 	const firmNodeId = String(firmNode?.id || '').trim();
-	if (!firmNodeId.startsWith('firm:')) return { nodes: [] as any[], links: [] as any[], skippedExisting: 0 };
+	if (!firmNodeId.startsWith('firm:')) {
+		return {
+			nodes: [] as any[],
+			links: [] as any[],
+			skippedExisting: 0,
+			remainingNew: 0,
+			truncated: false,
+			bridgedNew: 0,
+		};
+	}
 
 	const existing = new Set<string>();
 	for (const id of options.existingNodeIds || []) {
 		const normalized = String(id || '').trim();
 		if (normalized) existing.add(normalized);
 	}
+	const rawLimit = options.limit;
+	const hasLimit = rawLimit != null && Number.isFinite(Number(rawLimit));
+	const limit = hasLimit ? Math.max(0, Math.floor(Number(rawLimit))) : Number.POSITIVE_INFINITY;
+	const preferBridges = options.preferCanvasBridges !== false && Boolean(options.bridgeContext);
+	const orderedConnections =
+		preferBridges ?
+			orderFirmCurrentConnectionsForCanvasBridges(currentConnections, firmNodeId, options.bridgeContext)
+		:	Array.isArray(currentConnections) ? currentConnections
+		:	[];
 	const nodes: any[] = [];
 	const links: any[] = [];
 	const pendingPersonIds = new Set<string>();
+	const pendingLinkKeys = new Set<string>();
 	let skippedExisting = 0;
+	let remainingNew = 0;
+	let bridgedNew = 0;
 
-	for (const person of Array.isArray(currentConnections) ? currentConnections : []) {
-		const crd = String(person?.individualId || person?.crd || person?.crdNumber || person?.personId || '').trim();
+	const pushLink = (personId: string, targetFirmId: string) => {
+		const key = `${personId}|${targetFirmId}|employed_by`;
+		if (pendingLinkKeys.has(key)) return;
+		pendingLinkKeys.add(key);
+		links.push({
+			source: personId,
+			target: targetFirmId,
+			relationship: 'employed_by',
+			isCurrent: true,
+		});
+	};
+
+	for (const person of orderedConnections) {
+		const crd = extractFirmRosterPersonCrd(person);
 		if (!/^\d+$/.test(crd)) continue;
 		const personId = `person:${crd}`;
 		const alreadyOnCanvas = existing.has(personId) || pendingPersonIds.has(personId);
 		if (alreadyOnCanvas) {
 			skippedExisting += 1;
-		} else {
-			pendingPersonIds.add(personId);
-			const bcScope = String(person?.bcScope || '').trim() || null;
-			const iaScope = String(person?.iaScope || '').trim() || null;
-			const scopeLooksActive = classifyActivityText(bcScope) === 'active' || classifyActivityText(iaScope) === 'active';
-			const scopeLooksInactive = classifyActivityText(bcScope) === 'inactive' || classifyActivityText(iaScope) === 'inactive';
-			nodes.push({
-				id: personId,
-				label: normalizePersonLabel(person?.name || person?.legalName || `CRD ${crd}`),
-				group: 'individual',
-				crd,
-				stub: true,
-				bcScope,
-				iaScope,
-				_vizInactive: scopeLooksInactive && !scopeLooksActive,
-			});
+			pushLink(personId, firmNodeId);
+			continue;
 		}
-		links.push({
-			source: personId,
-			target: firmNodeId,
-			relationship: 'employed_by',
-			isCurrent: true,
+		if (nodes.length >= limit) {
+			remainingNew += 1;
+			continue;
+		}
+		pendingPersonIds.add(personId);
+		const bcScope = String(person?.bcScope || '').trim() || null;
+		const iaScope = String(person?.iaScope || '').trim() || null;
+		const scopeLooksActive = classifyActivityText(bcScope) === 'active' || classifyActivityText(iaScope) === 'active';
+		const scopeLooksInactive = classifyActivityText(bcScope) === 'inactive' || classifyActivityText(iaScope) === 'inactive';
+		const bridgeScore = scoreFirmRosterPersonCanvasBridge(personId, options.bridgeContext);
+		if (bridgeScore > 0) bridgedNew += 1;
+		nodes.push({
+			id: personId,
+			label: normalizePersonLabel(person?.name || person?.legalName || `CRD ${crd}`),
+			group: 'individual',
+			crd,
+			stub: true,
+			bcScope,
+			iaScope,
+			_vizInactive: scopeLooksInactive && !scopeLooksActive,
 		});
+		pushLink(personId, firmNodeId);
+		// Also attach to other on-screen firms that already list this person — paints the bridge.
+		for (const otherFirmId of options.bridgeContext?.personToOnScreenFirmIds.get(personId) || []) {
+			if (otherFirmId && otherFirmId !== firmNodeId) pushLink(personId, otherFirmId);
+		}
 	}
 
-	return { nodes, links, skippedExisting };
+	return {
+		nodes,
+		links,
+		skippedExisting,
+		remainingNew,
+		truncated: remainingNew > 0,
+		bridgedNew,
+	};
 }
 
 /** Count how many of the firm's current-connection people are present on the live canvas. */
@@ -18578,7 +18790,7 @@ function firmHasAllCurrentConnectionsOnCanvas(firmNode: any) {
 	return total > 0 && present >= total;
 }
 
-/** After clear-non-log prunes people, SEC-only firms must be allowed to expand again. */
+/** After clear-non-log prunes people, firms must be allowed to expand again. */
 function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
 	const nodes = [
 		...(Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes : []),
@@ -18589,7 +18801,7 @@ function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
 		const id = String(node.id || '').trim();
 		if (keepIds.size && id && !keepIds.has(id)) continue;
 		// A few bridge people left on canvas must not keep the "already expanded" flag —
-		// otherwise SEC-only firms never re-inject the rest of the roster after clear-non-log.
+		// otherwise firms never re-inject the rest of the roster after clear-non-log.
 		if (node._secOnlyCurrentConnectionsExpanded && !firmHasAllCurrentConnectionsOnCanvas(node)) {
 			delete node._secOnlyCurrentConnectionsExpanded;
 		}
@@ -18597,32 +18809,20 @@ function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
 }
 
 /**
- * SEC-led firms auto-open their /connections current roster on the canvas.
- * Prefer strict sec_only coverage; also recover when hasFinraData was flipped true
- * without a BD bcScope (Fisher 107342 after hydrate) so clear-non-log can re-expand.
+ * Every firm click opens its /connections current roster on the canvas
+ * (SEC-only, FINRA-only, and dual), in batches of FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT.
  */
-function shouldExpandFirmCurrentConnections(firmNode: any) {
-	if (!firmNode || firmNode.group !== 'firm') return false;
-	if (getFirmSourceCoverage(firmNode) === 'sec_only') return true;
-	if (firmNode.hasFinraData === false && firmNode.hasSecData !== false) return true;
-	const bcRaw = String(firmNode.bcScope || firmNode.basicInformation?.bcScope || '').trim();
-	const bcNorm = bcRaw.toLowerCase().replace(/[^a-z0-9]+/g, '');
-	const hasBcSignal = Boolean(bcNorm) && bcNorm !== 'notinscope' && /(active|inactive|approved|current|terminated)/.test(bcNorm);
-	if (hasBcSignal) return false;
-	// No BD scope signal + SEC data / loaded SEC roster → keep using current-connections expand.
-	if (firmNode.hasSecData === false) return false;
-	if (Array.isArray(firmNode.currentConnections) && firmNode.currentConnections.length > 0) return true;
-	if (firmNode._secOnlyCurrentConnectionsExpanded || firmNode._connectionsLoaded) return true;
-	return firmNode.hasSecData === true;
+export function shouldExpandFirmCurrentConnections(firmNode: any) {
+	return Boolean(firmNode && firmNode.group === 'firm');
 }
 
 /**
- * SEC-only (green) firm click: fetch /connections and add every current person onto the graph.
- * FINRA / dual firms keep Form BD control-only expand.
+ * Firm click: fetch /connections and add up to FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT
+ * new current people onto the graph. Click again to continue with the next batch.
  */
 async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
-	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0 };
-	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0 };
+	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0, remaining: 0, bridged: 0 };
+	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	// Intentional firm expand — do not let a prior clear-non-log keep-gate drop the roster.
 	releaseClearNonLogKeepGate();
 
@@ -18638,11 +18838,21 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 		updateFetchStatus(`No current connections for ${firmLabel}`);
 		// Do not stamp expanded/loaded on empty — allow the next click to retry.
 		delete firmNode._secOnlyCurrentConnectionsExpanded;
-		return { added: 0, linked: 0 };
+		return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	}
 
 	const existingIds = (globalState.layoutNodes || []).map((node) => String(node?.id || ''));
-	const batch = buildFirmCurrentConnectionGraphBatch(firmNode, current, { existingNodeIds: existingIds });
+	const bridgeContext = buildFirmRosterCanvasBridgeContext(firmNode.id, {
+		canvasNodeIds: existingIds,
+		layoutNodes: globalState.layoutNodes,
+		links: [...(globalState.layoutLinks || []), ...(globalState.graphData?.links || [])],
+	});
+	const batch = buildFirmCurrentConnectionGraphBatch(firmNode, current, {
+		existingNodeIds: existingIds,
+		limit: FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT,
+		bridgeContext,
+		preferCanvasBridges: true,
+	});
 	if (!batch.nodes.length && !batch.links.length) {
 		updateFetchStatus(
 			batch.skippedExisting ?
@@ -18650,21 +18860,36 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 			:	`No current connections for ${firmLabel}`,
 		);
 		firmNode._secOnlyCurrentConnectionsExpanded = true;
-		return { added: 0, linked: 0 };
+		return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	}
 
 	if (typeof globalState.appendFetched === 'function') {
 		globalState.appendFetched(batch.nodes, batch.links, { skipPersist: true, skipFindRefresh: true });
 	}
 	mergeIntoGraphData(batch.nodes, batch.links);
-	firmNode._secOnlyCurrentConnectionsExpanded = true;
+	// Paint any pre-existing graph links from newly added people to other on-screen nodes.
+	for (const personNode of batch.nodes) {
+		revealIncidentRenderedLinks(personNode, isAutoExpansionLink);
+	}
 	const added = batch.nodes.length;
+	const remaining = Number(batch.remainingNew) || 0;
+	const bridged = Number(batch.bridgedNew) || 0;
+	// Only mark fully expanded when nothing new remains for a later click.
+	if (remaining > 0) {
+		delete firmNode._secOnlyCurrentConnectionsExpanded;
+	} else {
+		firmNode._secOnlyCurrentConnectionsExpanded = true;
+	}
+	const bridgeNote = bridged > 0 ? `, ${bridged} bridge${bridged === 1 ? '' : 's'} to on-screen nodes` : '';
 	updateFetchStatus(
 		added ?
-			`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}`
+			remaining > 0 ?
+				`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}${bridgeNote} (${remaining} more — click again)`
+			:	`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}${bridgeNote}`
+		: remaining > 0 ? `Linked current connections for ${firmLabel} (${remaining} more — click again)`
 		:	`Linked current connections for ${firmLabel}`,
 	);
-	return { added, linked: batch.links.length };
+	return { added, linked: batch.links.length, remaining, bridged };
 }
 
 // Fetch firm detail from the server (which checks local cache first, then FINRA API).
@@ -19511,8 +19736,8 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 		didRevealOrMerge = didRevealOrMerge || (globalState.layoutNodes?.length || 0) > beforeCount;
 		didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, expansionLinkFilter) > 0 || didRevealOrMerge;
 
-		// Green SEC-led firms: also open the full current employment roster onto the canvas.
-		// FINRA-only / dual firms stay Form BD control-only on click (dashboard for full roster).
+		// All firm types: open current employment roster in batches of
+		// FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT; click again for the next batch.
 		if (shouldExpandFirmCurrentConnections(clickedNode)) {
 			const beforeSec = globalState.layoutNodes?.length || 0;
 			await expandSecOnlyFirmCurrentConnections(clickedNode);
@@ -20196,9 +20421,8 @@ async function materializeRouteSelectionNeighborhood(node, hops: number = getDef
 			console.warn('Failed to fetch route-selected neighborhood from server:', error);
 		}
 
-		// Firms only auto-reveal Form BD "controls" connections (see isFirmControlOnlyLink);
-		// employment/registration history is dashboard-only now for performance —
-		// except green SEC-only firms, which open all current connections on the canvas.
+		// Firms auto-reveal Form BD "controls" plus a batched current employment roster
+		// (FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT new people per open; click again for more).
 		revealNeighbors(node, normalizedHops, {
 			linkFilter: isFirmControlOnlyLink,
 			markSelected: true,
@@ -20208,7 +20432,7 @@ async function materializeRouteSelectionNeighborhood(node, hops: number = getDef
 				await expandSecOnlyFirmCurrentConnections(node);
 				revealIncidentRenderedLinks(node, isAutoExpansionLink);
 			} catch (error) {
-				console.warn('Failed to expand SEC-only firm current connections:', error);
+				console.warn('Failed to expand firm current connections:', error);
 			}
 		}
 	}
