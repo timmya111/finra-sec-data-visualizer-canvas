@@ -1511,13 +1511,23 @@ export default function FinraGraph() {
 								title='Make log entries larger and bolder'>
 								Log Bold
 							</button>
-							<button
-								type='button'
-								data-fg-action='clear-session'
-								className='fg-danger-btn'
-								title='Clear saved session and reload fresh'>
-								Reset Session
-							</button>
+							<div className='fg-sidebar-session-row'>
+								<button
+									type='button'
+									data-fg-action='clear-session'
+									className='fg-danger-btn'
+									title='Clear saved session and reload fresh'>
+									Reset Session
+								</button>
+								<button
+									type='button'
+									data-fg-action='refresh-layout'
+									className='fg-sidebar-action-btn fg-sidebar-action-btn--secondary fg-sidebar-reflow-btn'
+									title='Re-run the graph layout'
+									aria-label='Reflow'>
+									Reflow
+								</button>
+							</div>
 						</div>
 					</div>
 					<div
@@ -1525,7 +1535,7 @@ export default function FinraGraph() {
 						className='fg-sidebar-inner'>
 						{/* <p className='fg-hint'>Click a node to inspect it.</p> */}
 					</div>
-					{/* Keep above .fg-sidebar-inner so focus/refresh icons stay clickable. */}
+					{/* Keep above .fg-sidebar-inner so focus icon stays clickable. */}
 					<div className='fg-sidebar-theme-stack'>
 						<ThemeToggle />
 						<button
@@ -1573,18 +1583,6 @@ export default function FinraGraph() {
 										strokeLinecap='round'
 									/>
 								</svg>
-							</span>
-						</button>
-						<button
-							type='button'
-							data-fg-action='refresh-layout'
-							className='fg-sidebar-action-btn fg-sidebar-action-btn--secondary fg-sidebar-action-btn--icon-only fg-sidebar-refresh-btn'
-							title='Re-run the graph layout'
-							aria-label='Reflow layout'>
-							<span
-								className='fg-sidebar-action-icon'
-								aria-hidden='true'>
-								↺
 							</span>
 						</button>
 					</div>

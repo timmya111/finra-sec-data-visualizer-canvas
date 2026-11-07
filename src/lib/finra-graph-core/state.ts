@@ -72,6 +72,8 @@ globalState.appendFetched = null;
 globalState.lastExpandOriginNode = null;
 globalState.nonGrayExpandRunId = 0;
 globalState.hasUserInitiatedGraphExpansion = false;
+/** While set to 'click', append/reheat uses the 4s click layout stop instead of the 10s fetch stop. */
+globalState.layoutReflowKind = null;
 globalState.activeFetchStatusMessage = null;
 globalState.activeFetchStatusPinned = null;
 globalState.isProcessingNodeExpansion = false;

@@ -8750,13 +8750,26 @@ function ensureGraphViewportVisible({ duration = 0 }: { duration?: number } = {}
 	});
 }
 
+/** Node-click reveal: stop the force layout after this many ms. */
+const CLICK_LAYOUT_STOP_MS = 4000;
+/** Search/fetch/import: stop the force layout after this many ms. */
+const FETCH_LAYOUT_STOP_MS = 10000;
+
 function getLayoutReflowCooling(
 	nodeCount = globalState.layoutNodes?.length || 0,
-	options: { light?: boolean } = {},
+	options: { light?: boolean; safetyStopMs?: number | null } = {},
 ) {
 	const isLarge = nodeCount > 300;
 	const isHuge = nodeCount > 1000;
 	const light = Boolean(options.light);
+	const defaultSafetyStopMs =
+		isHuge ? 3200
+		: isLarge ? 4800
+		: 6000;
+	const safetyStopMs =
+		options.safetyStopMs == null || !Number.isFinite(Number(options.safetyStopMs)) ?
+			defaultSafetyStopMs
+		:	Math.max(0, Math.floor(Number(options.safetyStopMs)));
 	if (light) {
 		return {
 			isLarge,
@@ -8773,10 +8786,7 @@ function getLayoutReflowCooling(
 				isHuge ? 0.8
 				: isLarge ? 0.75
 				: 0.5,
-			safetyStopMs:
-				isHuge ? 3200
-				: isLarge ? 4800
-				: 6000,
+			safetyStopMs,
 			light: true,
 		};
 	}
@@ -8795,15 +8805,22 @@ function getLayoutReflowCooling(
 			isHuge ? 0.8
 			: isLarge ? 0.75
 			: 0.5,
-		safetyStopMs:
-			isHuge ? 3200
-			: isLarge ? 4800
-			: 6000,
+		safetyStopMs,
 		light: false,
 	};
 }
 
-/** Reheat the force sim after fetch/append. Uses the exact same movement as the Refresh button for fetches. */
+function isClickLayoutReflowEvent(eventName: string) {
+	const normalized = String(eventName || '').trim().toLowerCase();
+	return normalized === 'reveal-reflow' || normalized === 'click-reflow';
+}
+
+/**
+ * Reheat the force sim after fetch/append/click-reveal.
+ * - reveal/click-reflow (node click): settle newly revealed neighbors, stop after 4s
+ * - fetch/search/import: same motion as the Reflow button, stop after 10s
+ * Manual Reflow button calls refreshNodeLayout() with no time limit.
+ */
 function reheatLayoutLikeRefresh(
 	options: {
 		newNodes?: any[];
@@ -8818,18 +8835,18 @@ function reheatLayoutLikeRefresh(
 ) {
 	if (!globalState.simulation || !Array.isArray(globalState.layoutNodes) || !globalState.layoutNodes.length) return;
 	const eventName = options.eventName || 'fetch-reflow';
-	// When fetching/importing nodes onto the canvas, use the exact same movement as the Refresh button.
-	if (eventName !== 'reveal-reflow') {
-		refreshNodeLayout();
+	// Fetch/import/search: same movement as Reflow, but auto-stop after FETCH_LAYOUT_STOP_MS.
+	if (!isClickLayoutReflowEvent(eventName)) {
+		refreshNodeLayout({ safetyStopMs: FETCH_LAYOUT_STOP_MS, eventName });
 		return;
 	}
 
 	const newNodes = Array.isArray(options.newNodes) ? options.newNodes : [];
 	const newIdSet = new Set(newNodes.map((n) => String(n?.id || '')).filter(Boolean));
-	const cooling = getLayoutReflowCooling(globalState.layoutNodes.length, { light: true });
-	const main = document.getElementById('fg-main');
-	const width = main?.clientWidth || 800;
-	const height = main?.clientHeight || 600;
+	const cooling = getLayoutReflowCooling(globalState.layoutNodes.length, {
+		light: true,
+		safetyStopMs: CLICK_LAYOUT_STOP_MS,
+	});
 	const priorIdSet = new Set(
 		Array.from(options.priorNodeIds || [])
 			.map((id) => String(id || '').trim())
@@ -8926,10 +8943,20 @@ function reheatLayoutLikeRefresh(
 	globalState.simulation.alphaTarget(0);
 	globalState.simulation.alpha(restartAlpha).restart();
 	globalState.simulation.on(`end.${eventName}`, finalize);
-	globalState.spreadReleaseTimer = setTimeout(finalize, cooling.safetyStopMs);
+	globalState.spreadReleaseTimer = setTimeout(finalize, CLICK_LAYOUT_STOP_MS);
 }
 
-function refreshNodeLayout() {
+/**
+ * Manual Reflow / timed fetch reheat.
+ * With no safetyStopMs (Reflow button): keep reheating until the user interacts.
+ * With safetyStopMs (fetch/search): auto-stop after that duration; interact still stops early.
+ */
+function refreshNodeLayout(
+	options: {
+		safetyStopMs?: number | null;
+		eventName?: string;
+	} = {},
+) {
 	if (!globalState.simulation || !Array.isArray(globalState.layoutNodes) || !globalState.layoutNodes.length) return;
 
 	const main = document.getElementById('fg-main');
@@ -8939,6 +8966,9 @@ function refreshNodeLayout() {
 	const centerY = height / 2;
 	const nodeCount = globalState.layoutNodes.length;
 	const cooling = getLayoutReflowCooling(nodeCount);
+	const endEventName = String(options.eventName || 'refresh-layout').trim() || 'refresh-layout';
+	const hasSafetyStop = options.safetyStopMs != null && Number.isFinite(Number(options.safetyStopMs));
+	const safetyStopMs = hasSafetyStop ? Math.max(0, Math.floor(Number(options.safetyStopMs))) : null;
 	const jitterBase =
 		cooling.isHuge ? 10
 		: cooling.isLarge ? 8
@@ -9042,7 +9072,7 @@ function refreshNodeLayout() {
 			globalState.simulation?.velocityDecay?.(prevVelocityDecay);
 			globalState.simulation?.alphaTarget?.(0);
 			globalState.simulation?.alpha?.(0);
-			globalState.simulation?.on?.('end.refresh-layout', null);
+			globalState.simulation?.on?.(`end.${endEventName}`, null);
 			// Stop ticks entirely — leaving alpha cooling still paints and climbs RSS.
 			globalState.simulation?.stop?.();
 		} catch {
@@ -9059,15 +9089,15 @@ function refreshNodeLayout() {
 		scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
 	};
 
-	// Keep reheating until the user clicks/interacts — long runs help collision
+	// Keep reheating until interact (and optional safety timer). Long runs help collision
 	// resolve overlapping hop clusters that a short cool leaves piled together.
 	globalState.simulation.alphaTarget(0.1);
 	globalState.simulation.alpha(cooling.alpha).restart();
-	globalState.simulation.on('end.refresh-layout', globalState.refreshFinalizeLayoutFn);
+	globalState.simulation.on(`end.${endEventName}`, globalState.refreshFinalizeLayoutFn);
 
 	const stopAnimationOnInteract = () => {
 		try {
-			globalState.simulation?.on?.('end.refresh-layout', null);
+			globalState.simulation?.on?.(`end.${endEventName}`, null);
 		} catch {
 			/* ignore */
 		}
@@ -9075,7 +9105,14 @@ function refreshNodeLayout() {
 	};
 	(globalState as any).refreshLayoutStopOnInteract = stopAnimationOnInteract;
 
-	// Delay arming so the Refresh button click itself does not immediately stop the run.
+	if (safetyStopMs != null) {
+		globalState.refreshLayoutStopTimer = setTimeout(() => {
+			globalState.refreshLayoutStopTimer = null;
+			if (globalState.refreshFinalizeLayoutFn) globalState.refreshFinalizeLayoutFn();
+		}, safetyStopMs);
+	}
+
+	// Delay arming so the Reflow button click itself does not immediately stop the run.
 	setTimeout(() => {
 		if (finalized || typeof document === 'undefined' || (globalState as any).refreshLayoutStopOnInteract !== stopAnimationOnInteract) return;
 		document.addEventListener('pointerdown', stopAnimationOnInteract, { capture: true });
@@ -16332,6 +16369,8 @@ function appendFetchedImpl(
 		skipFindRefresh?: boolean;
 		skipSimRestart?: boolean;
 		skipSidecarHydration?: boolean;
+		/** Force click (4s) or fetch (10s) layout stop; defaults to global click-expand flag or fetch. */
+		reflowKind?: 'click' | 'fetch' | null;
 	} = {},
 ) {
 	const {
@@ -16339,6 +16378,7 @@ function appendFetchedImpl(
 		skipFindRefresh = false,
 		skipSimRestart = false,
 		skipSidecarHydration = false,
+		reflowKind = null,
 	} = options;
 	const suppressSidecarHydration = skipSidecarHydration || sessionRestoreInProgress;
 	if (!Array.isArray(newNodes)) newNodes = [];
@@ -16571,11 +16611,15 @@ function appendFetchedImpl(
 
 	const lightReflow =
 		priorLayoutNodeIds.size > 0 || (uniqNodes.length > 0 && nearParentCount >= Math.max(1, Math.ceil(uniqNodes.length * 0.6)));
+	const resolvedReflowKind =
+		reflowKind === 'click' || reflowKind === 'fetch' ? reflowKind
+		: globalState.layoutReflowKind === 'click' ? 'click'
+		:	'fetch';
 	reheatLayoutLikeRefresh({
 		newNodes: uniqNodes,
 		alpha:
 			uniqNodes.length > 0 ? undefined : Math.max(0.1, getIncrementalRestartAlpha(globalState.layoutNodes.length, Math.max(1, impactedIds?.length || 0))),
-		eventName: 'fetch-reflow',
+		eventName: resolvedReflowKind === 'click' ? 'click-reflow' : 'fetch-reflow',
 		priorNodeIds: priorLayoutNodeIds,
 		centerComponentIds: fetchPlacement?.centerComponentIds,
 		placementCenter: fetchPlacement?.center,
@@ -18825,7 +18869,10 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	// Intentional firm expand — do not let a prior clear-non-log keep-gate drop the roster.
 	releaseClearNonLogKeepGate();
+	const previousLayoutReflowKind = globalState.layoutReflowKind;
+	globalState.layoutReflowKind = 'click';
 
+	try {
 	const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
 	updateFetchStatus(`Loading current connections for ${firmLabel}…`, true);
 	const existingCurrent = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections.length : 0;
@@ -18864,7 +18911,7 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	}
 
 	if (typeof globalState.appendFetched === 'function') {
-		globalState.appendFetched(batch.nodes, batch.links, { skipPersist: true, skipFindRefresh: true });
+		globalState.appendFetched(batch.nodes, batch.links, { skipPersist: true, skipFindRefresh: true, reflowKind: 'click' });
 	}
 	mergeIntoGraphData(batch.nodes, batch.links);
 	// Paint any pre-existing graph links from newly added people to other on-screen nodes.
@@ -18890,6 +18937,9 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 		:	`Linked current connections for ${firmLabel}`,
 	);
 	return { added, linked: batch.links.length, remaining, bridged };
+	} finally {
+		globalState.layoutReflowKind = previousLayoutReflowKind;
+	}
 }
 
 // Fetch firm detail from the server (which checks local cache first, then FINRA API).
@@ -19657,6 +19707,18 @@ async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = 
 
 	const runId = ++globalState.nonGrayExpandRunId;
 	globalState.lastExpandOriginNode = clickedNode;
+	const previousLayoutReflowKind = globalState.layoutReflowKind;
+	globalState.layoutReflowKind = 'click';
+	try {
+		await expandNodeThroughNonGrayHopsBody(clickedNode, hops, runId);
+	} finally {
+		if (globalState.nonGrayExpandRunId === runId) {
+			globalState.layoutReflowKind = previousLayoutReflowKind;
+		}
+	}
+}
+
+async function expandNodeThroughNonGrayHopsBody(clickedNode, hops: number | 'all' = getDefaultExpansionHops(), runId = globalState.nonGrayExpandRunId) {
 	const normalizedHops = normalizeHighlightHops(hops);
 	const maxHops = normalizedHops === 'all' ? 100 : Math.max(1, Number(normalizedHops) || 1);
 	const revealTiming = getNodeExpansionRevealTiming(globalState.layoutNodes?.length || 0, { isUserInitiated: true });

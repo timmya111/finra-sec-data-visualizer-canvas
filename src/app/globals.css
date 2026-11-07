@@ -2225,13 +2225,11 @@ a,
 	margin-top: 0;
 }
 
-.fg-sidebar-focus-btn,
-.fg-sidebar-refresh-btn {
+.fg-sidebar-focus-btn {
 	opacity: 0.9;
 }
 
-.fg-sidebar-focus-btn:hover:not(:disabled),
-.fg-sidebar-refresh-btn:hover:not(:disabled) {
+.fg-sidebar-focus-btn:hover:not(:disabled) {
 	opacity: 1;
 }
 .fg-sidebar-mobile-actions {
@@ -2252,6 +2250,23 @@ a,
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	height: 35px;
+}
+
+.fg-sidebar-session-row {
+	display: flex;
+	gap: 6px;
+	flex: 1 1 100%;
+	width: 100%;
+	min-width: 0;
+}
+
+.fg-sidebar-session-row > .fg-danger-btn,
+.fg-sidebar-session-row > .fg-sidebar-action-btn,
+.fg-sidebar-session-row > .fg-sidebar-reflow-btn {
+	flex: 1 1 calc(50% - 3px);
+	width: calc(50% - 3px);
+	min-width: 0;
 	height: 35px;
 }
 
