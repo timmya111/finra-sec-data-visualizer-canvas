@@ -58,6 +58,7 @@ import {
 	orderFirmCurrentConnectionsForCanvasBridges,
 	scoreFirmRosterPersonCanvasBridge,
 	shouldExpandFirmCurrentConnections,
+	nodeHasNoAdditionalNodesToReveal,
 	shouldFetchFirmDetailForOwnerEvidence,
 	shouldHydrateExpansionFrontierNodeDetail,
 	shouldAutoExpandRouteSelection,
@@ -2045,6 +2046,45 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(shouldExpandFirmCurrentConnections({ id: 'firm:3', group: 'firm', hasSecData: true, hasFinraData: true })).toBe(true);
 		expect(shouldExpandFirmCurrentConnections({ id: 'person:1', group: 'individual' })).toBe(false);
 		expect(shouldExpandFirmCurrentConnections(null)).toBe(false);
+	});
+
+	it('nodeHasNoAdditionalNodesToReveal skips exhausted firms and complete people', () => {
+		expect(
+			nodeHasNoAdditionalNodesToReveal({
+				id: 'firm:1',
+				group: 'firm',
+				_secOnlyCurrentConnectionsExpanded: true,
+			}),
+		).toBe(true);
+		expect(
+			nodeHasNoAdditionalNodesToReveal({
+				id: 'firm:2',
+				group: 'firm',
+				_secOnlyCurrentConnectionsExpanded: false,
+				currentConnections: [{ individualId: '9' }],
+			}),
+		).toBe(false);
+		expect(
+			nodeHasNoAdditionalNodesToReveal({
+				id: 'person:1',
+				group: 'individual',
+				_detailLoaded: true,
+				_employmentHistoryResolved: true,
+				currentEmployments: [],
+				previousEmployments: [],
+				currentIAEmployments: [],
+				previousIAEmployments: [],
+			}),
+		).toBe(true);
+		expect(
+			nodeHasNoAdditionalNodesToReveal({
+				id: 'person:2',
+				group: 'individual',
+				_detailLoaded: false,
+				_employmentHistoryResolved: false,
+			}),
+		).toBe(false);
+		expect(nodeHasNoAdditionalNodesToReveal(null)).toBe(false);
 	});
 
 	it('buildFirmCurrentConnectionGraphBatch reveals at most FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT new people per click', () => {

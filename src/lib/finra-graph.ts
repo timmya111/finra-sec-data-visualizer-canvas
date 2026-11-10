@@ -1076,6 +1076,27 @@ if (typeof window !== 'undefined') {
 			zoom: Number(transform?.k) || 1,
 		};
 	};
+	/** Test/debug: mark a firm as roster-exhausted (or clear) for re-click short-circuit checks. */
+	(window as any).__fgStampFirmExhausted = (crdOrId: string, exhausted = true) => {
+		const raw = String(crdOrId || '').trim();
+		const id = raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const nodes = [
+			...(Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes : []),
+			...(Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes : []),
+		];
+		const matches = nodes.filter((entry) => String(entry?.id || '') === id);
+		for (const node of matches) {
+			if (exhausted) node._secOnlyCurrentConnectionsExpanded = true;
+			else delete node._secOnlyCurrentConnectionsExpanded;
+		}
+		return {
+			ok: matches.length > 0,
+			id,
+			count: matches.length,
+			exhausted: Boolean(exhausted),
+			hasNoMore: matches[0] ? nodeHasNoAdditionalNodesToReveal(matches[0]) : false,
+		};
+	};
 	/** Test/debug helper: continue firm current-connection reveal batches (100 per call). */
 	(window as any).__fgExpandFirmCurrentConnections = async (crdOrId: string) => {
 		const raw = String(crdOrId || '').trim();
@@ -18909,12 +18930,45 @@ export function shouldExpandFirmCurrentConnections(firmNode: any) {
 }
 
 /**
+ * True when a later click should skip fetch/reveal and only refresh the details panel.
+ * Firms: expand already stamped exhausted, or every loaded current person is on canvas.
+ * People: detail loaded and every expected employment firm is already linked.
+ */
+export function nodeHasNoAdditionalNodesToReveal(node: any): boolean {
+	if (!node) return false;
+	if (node.group === 'firm') {
+		if (node._secOnlyCurrentConnectionsExpanded === true) return true;
+		return firmHasAllCurrentConnectionsOnCanvas(node);
+	}
+	if (node.group === 'individual') {
+		if (!node._detailLoaded) return false;
+		return !personNeedsEmploymentHistoryReinject(node);
+	}
+	return false;
+}
+
+function stampFirmRosterExhaustedIfComplete(firmNode: any) {
+	if (!firmNode || firmNode.group !== 'firm') return;
+	if (firmNode._secOnlyCurrentConnectionsExpanded === true) return;
+	if (firmHasAllCurrentConnectionsOnCanvas(firmNode)) {
+		firmNode._secOnlyCurrentConnectionsExpanded = true;
+	}
+}
+
+/**
  * Firm click: fetch /connections and add up to FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT
  * new current people onto the graph. Click again to continue with the next batch.
  */
 async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0, remaining: 0, bridged: 0 };
+	// Already fully revealed — do not re-hit /connections or rebuild batches.
+	if (firmNode._secOnlyCurrentConnectionsExpanded === true || firmHasAllCurrentConnectionsOnCanvas(firmNode)) {
+		stampFirmRosterExhaustedIfComplete(firmNode);
+		const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
+		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
+		return { added: 0, linked: 0, remaining: 0, bridged: 0 };
+	}
 	// Intentional firm expand — do not let a prior clear-non-log keep-gate drop the roster.
 	releaseClearNonLogKeepGate();
 	const previousLayoutReflowKind = globalState.layoutReflowKind;
@@ -20761,6 +20815,23 @@ function openNodeWithExpansion(
 		syncRoute: options.syncRoute,
 	});
 
+	// Nothing left to reveal: skip the expand queue (connections fetch, hop waves, layout).
+	// Selection chrome already ran; force the details panel open for this node.
+	if (nodeHasNoAdditionalNodesToReveal(d)) {
+		if (d.group === 'firm') stampFirmRosterExhaustedIfComplete(d);
+		if (typeof window !== 'undefined') {
+			(window as any).__fgRevealShortCircuitCount =
+				(Number((window as any).__fgRevealShortCircuitCount) || 0) + 1;
+		}
+		renderSidebar(d, { reveal: true });
+		if (sidebarViewMode === 'info') {
+			void hydrateSidebarDetailsForSelectedNode(d).catch((err) => {
+				console.error('Failed to load sidebar detail:', err);
+			});
+		}
+		return;
+	}
+
 	scheduleNodeExpansion(d, options, enqueueNodeExpansion);
 }
 
@@ -20774,6 +20845,29 @@ async function openNodeWithExpansionTask(
 	} = {},
 ) {
 	const { focus = false, pulse = false, focusDuration = 300 } = options;
+	// Defense: node may have finished revealing while this task was queued.
+	if (nodeHasNoAdditionalNodesToReveal(d)) {
+		if (d.group === 'firm') stampFirmRosterExhaustedIfComplete(d);
+		if (String(globalState.selectedId || '') !== String(d?.id || '')) {
+			selectNode(d, {
+				skipAutoExpand: true,
+				focus,
+				pulse,
+				focusDuration,
+				syncRoute: options.syncRoute,
+			});
+		}
+		renderSidebar(d, { reveal: true });
+		if (sidebarViewMode === 'info') {
+			try {
+				await hydrateSidebarDetailsForSelectedNode(d);
+			} catch (err) {
+				console.error('Failed to load sidebar detail:', err);
+			}
+		}
+		return;
+	}
+
 	const clickExpansionHops = getAutoExpansionHopsForNode(d);
 	markUserInitiatedGraphExpansion();
 	anchorNode(d);
