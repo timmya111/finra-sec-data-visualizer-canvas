@@ -1,6 +1,26 @@
 {
   "firms": [
     {
+      "id": 7784,
+      "name": "FIDELITY BROKERAGE SERVICES, INC."
+    },
+    {
+      "id": 7325,
+      "name": "PUTNAM RETAIL MANAGEMENT LIMITED PARTNERSHIP"
+    },
+    {
+      "id": 117453,
+      "name": "CAPITAL STRATEGIES GROUP, INC."
+    },
+    {
+      "id": 14363,
+      "name": "FORTH FINANCIAL SECURITIES, CORPORATION"
+    },
+    {
+      "id": 175502,
+      "name": "THE MAIN STREET GROUP"
+    },
+    {
       "id": 104555,
       "name": "STRATEGIC ADVISERS LLC"
     },
@@ -87,10 +107,6 @@
     {
       "id": 36130,
       "name": "TEACHERS PERSONAL INVESTORS SERVICES, INC."
-    },
-    {
-      "id": 7784,
-      "name": "FIDELITY BROKERAGE SERVICES LLC"
     },
     {
       "id": 13572,
@@ -935,10 +951,6 @@
     {
       "id": 24497,
       "name": "PIONEER FUNDS DISTRIBUTOR, INC."
-    },
-    {
-      "id": 7325,
-      "name": "PUTNAM MUTUAL FUNDS CORP."
     },
     {
       "id": 27884,
@@ -7298,6 +7310,14 @@
     }
   ],
   "individuals": [
+    {
+      "id": 2165658,
+      "name": "LAWRENCE EDWIN GRIMES"
+    },
+    {
+      "id": 2720578,
+      "name": "Jimmie Lee Smith"
+    },
     {
       "id": 6242643,
       "name": "ANKIT PATEL"

@@ -401,7 +401,21 @@ export function createCanvasOverlay(parent: HTMLElement) {
 	canvas.addEventListener('pointerup', endCanvasDrag);
 	canvas.addEventListener('pointercancel', endCanvasDrag);
 	canvas.addEventListener('pointerleave', onCanvasPointerLeave);
-	return { drawFrame: drawCanvasFrame, resize, destroy: destroyCanvas };
+	return {
+		drawFrame: drawCanvasFrame,
+		resize,
+		destroy: destroyCanvas,
+		/** Last-draw label hit boxes (ids + screen bounds) for tests/debug. */
+		getLabelHitBounds: () =>
+			canvasLabelHitBounds.map(({ node, x0, y0, x1, y1 }) => ({
+				id: String(node?.id ?? ''),
+				label: String(node?.label || node?.id || ''),
+				x0,
+				y0,
+				x1,
+				y1,
+			})),
+	};
 }
 
 function destroyCanvas() {
@@ -840,16 +854,13 @@ function drawCanvasFrame(
 		: visibleNodes.length > 300 ? 280
 		: visibleNodes.length > 150 ? 360
 		: Infinity;
+	// Zoomed-out labels are Log Bold / explicit priority only. Selection and
+	// focus keep node chrome but do not force a small text label when default
+	// labels are hidden (Bold off + below CANVAS_DEFAULT_LABEL_ZOOM_THRESHOLD).
 	const labelCandidates = visibleNodes
 		.filter((node) => {
 			const id = String(node.id);
-			return (
-				forcedLabelIds.has(id) ||
-				priorityLabelIds.has(id) ||
-				
-				(focusedNodeId && id === focusedNodeId) ||
-				(selectedNodeId && id === selectedNodeId)
-			);
+			return forcedLabelIds.has(id) || priorityLabelIds.has(id);
 		})
 		.map((node) => node.id);
 	const labelCandidateIds = new Set(labelCandidates);
@@ -956,7 +967,7 @@ function drawCanvasFrame(
 			ctx.stroke();
 		}
 
-		// Zoomed-out: only Log Bold / priority / hover / focus (selected). Neighbors need zoom-in.
+		// Zoomed-out: only Log Bold / explicit priority. Selection alone does not show a label.
 		if (shouldShowLabel && (isForcedLabel || isPriorityForcedLabel || isPriorityLabel || scale >= selectedCanvasLabelZoomThreshold)) {
 			renderedLabelCount += 1;
 			const pending = { n, isBoldLabel, inactive, size };

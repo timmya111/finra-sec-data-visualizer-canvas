@@ -4,26 +4,47 @@ import { enrichFirmSearchHitSource } from './searchHitActivity';
 
 export type FirmSourceCoverage = 'both' | 'sec_only' | 'finra_only' | 'none';
 
-/** SEC-only firm fill — keep the existing connected-firm green. */
+/**
+ * All firm nodes share one green palette (coverage no longer changes fill).
+ * Selected = slightly darker; roster-exhausted = darker center + darker outline.
+ */
 export const FIRM_SEC_ONLY_FILL = '#14c2bb';
 export const FIRM_SEC_ONLY_STROKE = '#00f5ff';
-const FIRM_SEC_ONLY_SELECTED_FILL = '#0f766e';
-const FIRM_SEC_ONLY_SELECTED_STROKE = '#2dd4bf';
+export const FIRM_SELECTED_FILL = '#0f766e';
+export const FIRM_SELECTED_STROKE = '#2dd4bf';
+/** Darker green center when no more current connections remain to reveal. */
+export const FIRM_EXHAUSTED_FILL = '#0f766e';
+/** Darker green outline for exhausted roster. */
+export const FIRM_EXHAUSTED_STROKE = '#134e4a';
+export const FIRM_EXHAUSTED_SELECTED_FILL = '#115e59';
+export const FIRM_EXHAUSTED_SELECTED_STROKE = '#042f2e';
 
-/**
- * FINRA-only firm fill — purple at roughly the same relative luminance as
- * FIRM_SEC_ONLY_FILL (#14c2bb ≈ 0.42).
- */
-export const FIRM_FINRA_ONLY_FILL = '#e879f9';
-const FIRM_FINRA_ONLY_STROKE = '#f5d0fe';
-const FIRM_FINRA_ONLY_SELECTED_FILL = '#a21caf';
-const FIRM_FINRA_ONLY_SELECTED_STROKE = '#f0abfc';
+/** @deprecated Kept as aliases — all firms paint green now. */
+export const FIRM_FINRA_ONLY_FILL = FIRM_SEC_ONLY_FILL;
+const FIRM_FINRA_ONLY_STROKE = FIRM_SEC_ONLY_STROKE;
+const FIRM_FINRA_ONLY_SELECTED_FILL = FIRM_SELECTED_FILL;
+const FIRM_FINRA_ONLY_SELECTED_STROKE = FIRM_SELECTED_STROKE;
 
-/** Dual-coverage: same purple fill as FINRA-only, green border to signal SEC. */
-export const FIRM_BOTH_FILL = FIRM_FINRA_ONLY_FILL;
-export const FIRM_BOTH_STROKE = FIRM_SEC_ONLY_FILL;
-const FIRM_BOTH_SELECTED_FILL = FIRM_FINRA_ONLY_SELECTED_FILL;
-const FIRM_BOTH_SELECTED_STROKE = FIRM_SEC_ONLY_FILL;
+/** @deprecated Kept as aliases — all firms paint green now. */
+export const FIRM_BOTH_FILL = FIRM_SEC_ONLY_FILL;
+export const FIRM_BOTH_STROKE = FIRM_SEC_ONLY_STROKE;
+const FIRM_BOTH_SELECTED_FILL = FIRM_SELECTED_FILL;
+const FIRM_BOTH_SELECTED_STROKE = FIRM_SELECTED_STROKE;
+
+const FIRM_SEC_ONLY_SELECTED_FILL = FIRM_SELECTED_FILL;
+const FIRM_SEC_ONLY_SELECTED_STROKE = FIRM_SELECTED_STROKE;
+
+/** True once firm roster expand has nothing left to add on a later click. */
+export function isFirmRosterRevealExhausted(node: any): boolean {
+	if (!node || node.group !== 'firm') return false;
+	if (node._secOnlyCurrentConnectionsExpanded === true) return true;
+	// Loaded empty roster: nothing left to reveal.
+	if (node._connectionsLoaded === true) {
+		const current = Array.isArray(node.currentConnections) ? node.currentConnections : [];
+		if (current.length === 0) return true;
+	}
+	return false;
+}
 
 function isNotInScopeValue(value: unknown) {
 	return (
@@ -228,12 +249,13 @@ export type FirmSourcePaintStyle = {
 	stroke: string | null;
 	/** CSS modifier class for SVG firm nodes. */
 	className: string | null;
+	exhausted?: boolean;
 };
 
 /**
  * Fill/stroke for graph firm nodes.
- * When coverage is known, returns source colors. When `none`, returns null fills so
- * callers keep their existing default / connected fallback.
+ * All active firms use the same green; selected is darker; exhausted roster is
+ * darker center + darker outline. Coverage is still returned for sidebar/summary.
  */
 export function getFirmSourcePaintStyle(
 	node: any,
@@ -241,31 +263,23 @@ export function getFirmSourcePaintStyle(
 ): FirmSourcePaintStyle {
 	const selected = Boolean(options.selected);
 	const coverage = getFirmSourceCoverage(node);
-	if (coverage === 'sec_only') {
-		return {
-			coverage,
-			fill: selected ? FIRM_SEC_ONLY_SELECTED_FILL : FIRM_SEC_ONLY_FILL,
-			stroke: selected ? FIRM_SEC_ONLY_SELECTED_STROKE : FIRM_SEC_ONLY_STROKE,
-			className: 'fg-node--sec-only',
-		};
+	const exhausted = isFirmRosterRevealExhausted(node);
+	let fill: string = FIRM_SEC_ONLY_FILL;
+	let stroke: string = FIRM_SEC_ONLY_STROKE;
+	if (exhausted && selected) {
+		fill = FIRM_EXHAUSTED_SELECTED_FILL;
+		stroke = FIRM_EXHAUSTED_SELECTED_STROKE;
+	} else if (exhausted) {
+		fill = FIRM_EXHAUSTED_FILL;
+		stroke = FIRM_EXHAUSTED_STROKE;
+	} else if (selected) {
+		fill = FIRM_SELECTED_FILL;
+		stroke = FIRM_SELECTED_STROKE;
 	}
-	if (coverage === 'finra_only') {
-		return {
-			coverage,
-			fill: selected ? FIRM_FINRA_ONLY_SELECTED_FILL : FIRM_FINRA_ONLY_FILL,
-			stroke: selected ? FIRM_FINRA_ONLY_SELECTED_STROKE : FIRM_FINRA_ONLY_STROKE,
-			className: 'fg-node--finra-only',
-		};
-	}
-	if (coverage === 'both') {
-		return {
-			coverage,
-			fill: selected ? FIRM_BOTH_SELECTED_FILL : FIRM_BOTH_FILL,
-			stroke: selected ? FIRM_BOTH_SELECTED_STROKE : FIRM_BOTH_STROKE,
-			className: 'fg-node--finra-sec',
-		};
-	}
-	return { coverage, fill: null, stroke: null, className: null };
+	const className =
+		exhausted ? 'fg-node--firm-green fg-node--roster-exhausted'
+		:	'fg-node--firm-green';
+	return { coverage, fill, stroke, className, exhausted };
 }
 
 

@@ -1032,6 +1032,50 @@ if (typeof window !== 'undefined') {
 			isNodeInactive: isNodeInactive(node),
 		};
 	};
+	/** Test/debug: canvas labels from the last draw (empty when zoomed out without Log Bold). */
+	(window as any).__fgDebugCanvasLabels = () => {
+		const transform = getCurrentZoomTransform();
+		const zoom = Math.max(0.01, Number(transform?.k) || 1);
+		const bounds =
+			globalState.canvasApi && typeof (globalState.canvasApi as any).getLabelHitBounds === 'function' ?
+				(globalState.canvasApi as any).getLabelHitBounds()
+			:	[];
+		return {
+			ok: true,
+			zoom,
+			defaultLabelsVisible: zoom >= 0.32,
+			labelCount: Array.isArray(bounds) ? bounds.length : 0,
+			labels: Array.isArray(bounds) ? bounds.slice(0, 40) : [],
+			selectedId: globalState.selectedId ?? null,
+			logBold: Boolean(isSelectionLogBold),
+		};
+	};
+	/** Test/debug: screen-space center of a layout node for click verification. */
+	(window as any).__fgDebugNodeScreenPos = (crdOrId: string) => {
+		const raw = String(crdOrId || '').trim();
+		const asPerson = raw.startsWith('person:') || raw.startsWith('firm:') ? raw : `person:${raw.replace(/^\D+/, '')}`;
+		const asFirm = raw.startsWith('person:') || raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const node =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id) === asPerson || String(entry?.id) === asFirm || String(entry?.id) === raw) ||
+			null;
+		if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) {
+			return { ok: false, reason: 'node-missing-or-unpositioned', tried: [asPerson, asFirm, raw] };
+		}
+		const transform = getCurrentZoomTransform();
+		const canvas = typeof document !== 'undefined' ? document.getElementById('fg-canvas') : null;
+		const rect = canvas?.getBoundingClientRect?.();
+		const sx = (Number(transform?.x) || 0) + node.x * (Number(transform?.k) || 1);
+		const sy = (Number(transform?.y) || 0) + node.y * (Number(transform?.k) || 1);
+		return {
+			ok: true,
+			id: String(node.id),
+			label: node.label || null,
+			world: { x: node.x, y: node.y },
+			canvas: { x: sx, y: sy },
+			client: rect ? { x: rect.left + sx, y: rect.top + sy } : null,
+			zoom: Number(transform?.k) || 1,
+		};
+	};
 	/** Test/debug helper: continue firm current-connection reveal batches (100 per call). */
 	(window as any).__fgExpandFirmCurrentConnections = async (crdOrId: string) => {
 		const raw = String(crdOrId || '').trim();
@@ -15225,9 +15269,11 @@ export function renderNodeContents(selection) {
 			.classed('fg-node--entity', d.group === 'entity')
 			.classed('fg-node--stub', d.group === 'individual' && isStubPaint)
 			.classed('fg-node--control-position', isControlNode)
-			.classed('fg-node--sec-only', firmSourcePaint?.coverage === 'sec_only')
-			.classed('fg-node--finra-only', firmSourcePaint?.coverage === 'finra_only')
-			.classed('fg-node--finra-sec', firmSourcePaint?.coverage === 'both');
+			.classed('fg-node--firm-green', Boolean(firmSourcePaint?.fill))
+			.classed('fg-node--roster-exhausted', Boolean(firmSourcePaint?.exhausted))
+			.classed('fg-node--sec-only', false)
+			.classed('fg-node--finra-only', false)
+			.classed('fg-node--finra-sec', false);
 		// Use lighter blue for stub individuals to match the legend
 		let color = inactive ? GRAPH_COLORS.nodeInactive : NODE_COLOR[d.group] || GRAPH_COLORS.nodeDefault;
 		let nodeOpacity: number | string = inactive ? 0.82 : 1;
@@ -15990,9 +16036,11 @@ function updateNodeVisuals(
 			.classed('fg-node--entity', d.group === 'entity')
 			.classed('fg-node--stub', d.group === 'individual' && isStubPaint)
 			.classed('fg-node--control-position', isControlNodeResolved)
-			.classed('fg-node--sec-only', firmSourcePaint?.coverage === 'sec_only')
-			.classed('fg-node--finra-only', firmSourcePaint?.coverage === 'finra_only')
-			.classed('fg-node--finra-sec', firmSourcePaint?.coverage === 'both');
+			.classed('fg-node--firm-green', Boolean(firmSourcePaint?.fill))
+			.classed('fg-node--roster-exhausted', Boolean(firmSourcePaint?.exhausted))
+			.classed('fg-node--sec-only', false)
+			.classed('fg-node--finra-only', false)
+			.classed('fg-node--finra-sec', false);
 
 		let color = inactive ? GRAPH_COLORS.nodeInactive : NODE_COLOR[d.group] || GRAPH_COLORS.nodeDefault;
 
@@ -18882,9 +18930,14 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 
 	const current = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
 	if (!current.length) {
-		updateFetchStatus(`No current connections for ${firmLabel}`);
-		// Do not stamp expanded/loaded on empty — allow the next click to retry.
-		delete firmNode._secOnlyCurrentConnectionsExpanded;
+		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
+		// Stamp exhausted so paint can darken; allow retry only if connections later hydrate.
+		firmNode._secOnlyCurrentConnectionsExpanded = true;
+		try {
+			rerenderGraphNodesByIds([firmNode.id]);
+		} catch {
+			/* ignore */
+		}
 		return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	}
 
@@ -18901,12 +18954,13 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 		preferCanvasBridges: true,
 	});
 	if (!batch.nodes.length && !batch.links.length) {
-		updateFetchStatus(
-			batch.skippedExisting ?
-				`All ${batch.skippedExisting} current connections already on canvas`
-			:	`No current connections for ${firmLabel}`,
-		);
+		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
 		firmNode._secOnlyCurrentConnectionsExpanded = true;
+		try {
+			rerenderGraphNodesByIds([firmNode.id]);
+		} catch {
+			/* ignore */
+		}
 		return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	}
 
@@ -18934,8 +18988,15 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 				`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}${bridgeNote} (${remaining} more — click again)`
 			:	`Added ${added} current connection${added === 1 ? '' : 's'} for ${firmLabel}${bridgeNote}`
 		: remaining > 0 ? `Linked current connections for ${firmLabel} (${remaining} more — click again)`
-		:	`Linked current connections for ${firmLabel}`,
+		:	`No more connections to reveal for ${firmLabel}`,
 	);
+	if (remaining <= 0) {
+		try {
+			rerenderGraphNodesByIds([firmNode.id]);
+		} catch {
+			/* ignore */
+		}
+	}
 	return { added, linked: batch.links.length, remaining, bridged };
 	} finally {
 		globalState.layoutReflowKind = previousLayoutReflowKind;
