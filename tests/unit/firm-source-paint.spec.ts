@@ -143,5 +143,17 @@ describe('firmSourcePaint', () => {
 		expect(exhausted.stroke).toBe(FIRM_EXHAUSTED_STROKE);
 		expect(exhausted.className).toContain('fg-node--roster-exhausted');
 		expect(exhausted.exhausted).toBe(true);
+
+		// Loaded-empty connections alone must not darken (BD/control firms, failed empty loads).
+		const emptyLoaded = {
+			group: 'firm',
+			hasSecData: true,
+			hasFinraData: true,
+			_connectionsLoaded: true,
+			currentConnections: [],
+		};
+		expect(isFirmRosterRevealExhausted(emptyLoaded)).toBe(false);
+		expect(getFirmSourcePaintStyle(emptyLoaded).exhausted).toBe(false);
+		expect(getFirmSourcePaintStyle(emptyLoaded).fill).toBe(FIRM_SEC_ONLY_FILL);
 	});
 });

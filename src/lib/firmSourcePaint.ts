@@ -34,16 +34,14 @@ const FIRM_BOTH_SELECTED_STROKE = FIRM_SELECTED_STROKE;
 const FIRM_SEC_ONLY_SELECTED_FILL = FIRM_SELECTED_FILL;
 const FIRM_SEC_ONLY_SELECTED_STROKE = FIRM_SELECTED_STROKE;
 
-/** True once firm roster expand has nothing left to add on a later click. */
+/**
+ * True once firm roster expand stamped that nothing remains for a later click.
+ * Only the expand flag counts — a loaded-empty `_connectionsLoaded` roster must not
+ * darken firms that still show BD/control links (or never ran expand).
+ */
 export function isFirmRosterRevealExhausted(node: any): boolean {
 	if (!node || node.group !== 'firm') return false;
-	if (node._secOnlyCurrentConnectionsExpanded === true) return true;
-	// Loaded empty roster: nothing left to reveal.
-	if (node._connectionsLoaded === true) {
-		const current = Array.isArray(node.currentConnections) ? node.currentConnections : [];
-		if (current.length === 0) return true;
-	}
-	return false;
+	return node._secOnlyCurrentConnectionsExpanded === true;
 }
 
 function isNotInScopeValue(value: unknown) {

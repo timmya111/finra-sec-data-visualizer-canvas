@@ -55,6 +55,7 @@ import {
 	markSessionCleanExit,
 	buildFirmCurrentConnectionGraphBatch,
 	buildFirmRosterCanvasBridgeContext,
+	getFirmRosterConnectionStartTime,
 	orderFirmCurrentConnectionsForCanvasBridges,
 	scoreFirmRosterPersonCanvasBridge,
 	shouldExpandFirmCurrentConnections,
@@ -2127,12 +2128,13 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(third.truncated).toBe(false);
 	});
 
-	it('orderFirmCurrentConnectionsForCanvasBridges prefers people linked to on-screen nodes', () => {
+	it('orderFirmCurrentConnectionsForCanvasBridges prefers on-screen firm bridges then newest start dates', () => {
 		const roster = [
-			{ individualId: '100', name: 'No Bridge' },
-			{ individualId: '200', name: 'Bridge Via Link' },
-			{ individualId: '300', name: 'Bridge Via Other Firm' },
-			{ individualId: '400', name: 'Also No Bridge' },
+			{ individualId: '100', name: 'Old No Bridge', startDate: '01/01/2010' },
+			{ individualId: '200', name: 'Bridge Via Person', startDate: '01/01/2024' },
+			{ individualId: '300', name: 'Bridge Via Other Firm', startDate: '01/01/2015' },
+			{ individualId: '400', name: 'Newest No Bridge', startDate: '06/01/2023' },
+			{ individualId: '500', name: 'Mid No Bridge', startDate: '01/01/2020' },
 		];
 		const context = buildFirmRosterCanvasBridgeContext('firm:1', {
 			canvasNodeIds: ['firm:1', 'firm:2', 'person:999'],
@@ -2147,29 +2149,49 @@ describe('FinraGraph DOM helpers (unit)', () => {
 			],
 			links: [{ source: 'person:200', target: 'person:999', relationship: 'employed_by' }],
 		});
+		expect(scoreFirmRosterPersonCanvasBridge('person:300', context)).toBeGreaterThan(
+			scoreFirmRosterPersonCanvasBridge('person:200', context),
+		);
 		expect(scoreFirmRosterPersonCanvasBridge('person:200', context)).toBeGreaterThan(0);
-		expect(scoreFirmRosterPersonCanvasBridge('person:300', context)).toBeGreaterThan(0);
 		expect(scoreFirmRosterPersonCanvasBridge('person:100', context)).toBe(0);
+		expect(getFirmRosterConnectionStartTime(roster[3])).toBeGreaterThan(getFirmRosterConnectionStartTime(roster[0]));
 
 		const ordered = orderFirmCurrentConnectionsForCanvasBridges(roster, 'firm:1', context);
-		expect(ordered.map((person) => person.individualId).slice(0, 2).sort()).toEqual(['200', '300']);
-		expect(ordered.map((person) => person.individualId).slice(2)).toEqual(['100', '400']);
+		// Firm bridge first, then person-neighbor bridge, then newest non-bridges.
+		expect(ordered.map((person) => person.individualId)).toEqual(['300', '200', '400', '500', '100']);
 
 		const batch = buildFirmCurrentConnectionGraphBatch(
 			{ id: 'firm:1', group: 'firm', label: 'Clicked' },
 			roster,
-			{ existingNodeIds: ['firm:1', 'firm:2', 'person:999'], limit: 2, bridgeContext: context },
+			{ existingNodeIds: ['firm:1', 'firm:2', 'person:999'], limit: 3, bridgeContext: context },
 		);
-		expect(batch.nodes.map((node) => node.id).sort()).toEqual(['person:200', 'person:300']);
+		expect(batch.nodes.map((node) => node.id)).toEqual(['person:300', 'person:200', 'person:400']);
 		expect(batch.bridgedNew).toBe(2);
 		expect(batch.remainingNew).toBe(2);
 		expect(batch.links).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ source: 'person:200', target: 'firm:1', relationship: 'employed_by' }),
 				expect.objectContaining({ source: 'person:300', target: 'firm:1', relationship: 'employed_by' }),
 				expect.objectContaining({ source: 'person:300', target: 'firm:2', relationship: 'employed_by' }),
+				expect.objectContaining({ source: 'person:200', target: 'firm:1', relationship: 'employed_by' }),
+				expect.objectContaining({ source: 'person:400', target: 'firm:1', relationship: 'employed_by' }),
 			]),
 		);
+	});
+
+	it('buildFirmCurrentConnectionGraphBatch uses newest start dates when no on-screen firm bridges exist', () => {
+		const roster = [
+			{ individualId: '10', name: 'Old', startDate: '2010-01-01' },
+			{ individualId: '20', name: 'Newest', startDate: '2024-06-15' },
+			{ individualId: '30', name: 'Mid', startDate: '2019-03-01' },
+		];
+		const batch = buildFirmCurrentConnectionGraphBatch(
+			{ id: 'firm:9', group: 'firm', label: 'Solo' },
+			roster,
+			{ existingNodeIds: ['firm:9'], limit: 2 },
+		);
+		expect(batch.nodes.map((node) => node.id)).toEqual(['person:20', 'person:30']);
+		expect(batch.remainingNew).toBe(1);
+		expect(batch.bridgedNew).toBe(0);
 	});
 
 	it('applyGraphDerivedNodeMetrics gives fetched individuals a connection count before links are rendered', () => {

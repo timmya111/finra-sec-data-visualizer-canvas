@@ -1076,6 +1076,34 @@ if (typeof window !== 'undefined') {
 			zoom: Number(transform?.k) || 1,
 		};
 	};
+	/** Test/debug: firm paint + exhausted-flag snapshot for clear-non-log color checks. */
+	(window as any).__fgDebugFirmPaint = (crdOrId?: string) => {
+		const raw = String(crdOrId || '').trim();
+		const firms = (globalState.layoutNodes || []).filter((entry) => {
+			if (!entry || entry.group !== 'firm') return false;
+			if (!raw) return true;
+			const id = String(entry.id || '');
+			return id === raw || id === `firm:${raw.replace(/^\D+/, '')}` || String(entry.firmId || '') === raw.replace(/^\D+/, '');
+		});
+		return firms.slice(0, 40).map((node) => {
+			const paint = getFirmSourcePaintStyle(node, {
+				selected: String(globalState.selectedId || '') === String(node.id || ''),
+			});
+			const counts = countFirmCurrentConnectionsOnCanvas(node);
+			return {
+				id: String(node.id || ''),
+				label: String(node.label || '').slice(0, 48),
+				expanded: node._secOnlyCurrentConnectionsExpanded === true,
+				exhausted: Boolean(paint.exhausted),
+				fill: paint.fill,
+				stroke: paint.stroke,
+				className: paint.className,
+				present: counts.present,
+				total: counts.total,
+				degTotal: Number(node?._deg?.total || 0),
+			};
+		});
+	};
 	/** Test/debug: mark a firm as roster-exhausted (or clear) for re-click short-circuit checks. */
 	(window as any).__fgStampFirmExhausted = (crdOrId: string, exhausted = true) => {
 		const raw = String(crdOrId || '').trim();
@@ -1097,6 +1125,56 @@ if (typeof window !== 'undefined') {
 			hasNoMore: matches[0] ? nodeHasNoAdditionalNodesToReveal(matches[0]) : false,
 		};
 	};
+	/**
+	 * Test/debug: plant another on-screen firm that lists not-yet-visible people from the
+	 * clicked firm's roster, so the next expand can prefer those firm bridges.
+	 */
+	(window as any).__fgPlantOnScreenFirmBridge = (clickedCrdOrId: string, bridgeFirmCrd = '999001') => {
+		const raw = String(clickedCrdOrId || '').trim();
+		const clickedId = raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const clicked =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id) === clickedId) ||
+			(globalState.graphData?.nodes || []).find((entry) => String(entry?.id) === clickedId) ||
+			null;
+		if (!clicked) return { ok: false, reason: 'clicked-missing', clickedId };
+		const layoutIds = new Set((globalState.layoutNodes || []).map((entry) => String(entry?.id || '').trim()).filter(Boolean));
+		const shared = (Array.isArray(clicked.currentConnections) ? clicked.currentConnections : [])
+			.map((person) => {
+				const crd = extractFirmRosterPersonCrd(person);
+				return /^\d+$/.test(crd) ? { crd, person } : null;
+			})
+			.filter((entry) => entry && !layoutIds.has(`person:${entry.crd}`))
+			.slice(0, 5) as Array<{ crd: string; person: any }>;
+		if (!shared.length) return { ok: false, reason: 'no-offscreen-roster-people', clickedId };
+		const bridgeId = `firm:${String(bridgeFirmCrd).replace(/^\D+/, '') || '999001'}`;
+		let bridgeNode = (globalState.layoutNodes || []).find((entry) => String(entry?.id) === bridgeId);
+		if (!bridgeNode) {
+			bridgeNode = {
+				id: bridgeId,
+				label: `Bridge Firm ${bridgeFirmCrd}`,
+				group: 'firm',
+				firmId: String(bridgeFirmCrd).replace(/^\D+/, '') || '999001',
+				x: Number(clicked.x) || 0,
+				y: (Number(clicked.y) || 0) + 80,
+			};
+			if (Array.isArray(globalState.layoutNodes)) globalState.layoutNodes.push(bridgeNode);
+			if (globalState.graphData && Array.isArray(globalState.graphData.nodes)) globalState.graphData.nodes.push(bridgeNode);
+		}
+		bridgeNode.currentConnections = shared.map(({ person, crd }) => ({
+			...person,
+			individualId: crd,
+			name: person?.name || `CRD ${crd}`,
+			isCurrent: true,
+		}));
+		bridgeNode._connectionsLoaded = true;
+		delete clicked._secOnlyCurrentConnectionsExpanded;
+		return {
+			ok: true,
+			clickedId,
+			bridgeId,
+			sharedPersonIds: shared.map(({ crd }) => `person:${crd}`),
+		};
+	};
 	/** Test/debug helper: continue firm current-connection reveal batches (100 per call). */
 	(window as any).__fgExpandFirmCurrentConnections = async (crdOrId: string) => {
 		const raw = String(crdOrId || '').trim();
@@ -1107,6 +1185,18 @@ if (typeof window !== 'undefined') {
 			null;
 		if (!node) return { ok: false, reason: 'node-missing', id };
 		const before = countFirmCurrentConnectionsOnCanvas(node);
+		const existingIds = new Set((globalState.layoutNodes || []).map((entry) => String(entry?.id || '').trim()).filter(Boolean));
+		const bridgeContext = buildFirmRosterCanvasBridgeContext(node.id, {
+			canvasNodeIds: Array.from(existingIds),
+			layoutNodes: globalState.layoutNodes,
+			links: [...(globalState.layoutLinks || []), ...(globalState.graphData?.links || [])],
+		});
+		const preview = buildFirmCurrentConnectionGraphBatch(node, node.currentConnections || [], {
+			existingNodeIds: existingIds,
+			limit: Math.min(10, FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT),
+			bridgeContext,
+			preferCanvasBridges: true,
+		});
 		const result = await expandSecOnlyFirmCurrentConnections(node);
 		revealIncidentRenderedLinks(node, isAutoExpansionLink);
 		const after = countFirmCurrentConnectionsOnCanvas(node);
@@ -1119,6 +1209,8 @@ if (typeof window !== 'undefined') {
 			remaining: result?.remaining ?? 0,
 			bridged: result?.bridged ?? 0,
 			expanded: node._secOnlyCurrentConnectionsExpanded === true,
+			previewFirstIds: (preview.nodes || []).map((entry) => entry.id),
+			previewBridgedNew: preview.bridgedNew ?? 0,
 		};
 	};
 	(window as any).__fgForceInjectPersonEmployment = async (crdOrId: string) => {
@@ -5989,7 +6081,8 @@ function clearNonConnectedAction(button?: HTMLButtonElement) {
 	const keepIds = collectSelectionLogClearNonLogKeepIds(globalState.graphData, selectedNodesLog);
 	armClearNonLogKeepGate(keepIds);
 	pruneGraphDataToKeepIds(keepIds);
-	resetFirmConnectionExpandFlagsAfterPrune(keepIds);
+	// Prune first (layout people gone), then clear exhausted flags and repaint greens.
+	refreshFirmPaintAfterClearNonLogPrune(keepIds);
 	if (button) flashSelectionLogActionButton(button, 'Step 1');
 }
 
@@ -6033,7 +6126,8 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 	);
 	armClearNonLogKeepGate(afterStripIds);
 	pruneGraphDataToKeepIds(afterStripIds);
-	resetFirmConnectionExpandFlagsAfterPrune(afterStripIds);
+	// Prune first (layout people gone), then clear exhausted flags and repaint greens.
+	refreshFirmPaintAfterClearNonLogPrune(afterStripIds);
 	const strippedLines = Math.max(stripResult.removedLinkCount, stripResult.layoutPreviousLinkCount);
 	if (strippedLines > 0 || stripResult.removedNodeCount > 0) {
 		updateFetchStatus(`Cleared ${strippedLines} previous connection${strippedLines === 1 ? '' : 's'}, removed ${stripResult.removedNodeCount} node${stripResult.removedNodeCount === 1 ? '' : 's'}`);
@@ -18736,22 +18830,35 @@ export function buildFirmRosterCanvasBridgeContext(
 	return { canvasIds, personToCanvasNeighbors, personToOnScreenFirmIds };
 }
 
-/** Higher score = reveal sooner (bridges to on-screen nodes first). */
-export function scoreFirmRosterPersonCanvasBridge(personId: string, context: FirmRosterCanvasBridgeContext | null | undefined): number {
-	const id = String(personId || '').trim();
-	if (!id || !context) return 0;
-	const neighbors = context.personToCanvasNeighbors.get(id);
-	const firms = context.personToOnScreenFirmIds.get(id);
-	const neighborCount = neighbors?.size || 0;
-	const firmCount = firms?.size || 0;
-	if (!neighborCount && !firmCount) return 0;
-	// Prefer people with more distinct on-screen attachments; firm roster hits are a strong bridge signal.
-	return neighborCount * 100 + firmCount * 40;
+/** Employment start time for roster reveal ordering (newest first). */
+export function getFirmRosterConnectionStartTime(person: any): number {
+	if (!person || typeof person !== 'object') return Number.NEGATIVE_INFINITY;
+	return parseDateStringToTime(
+		person.startDate || person.registrationBeginDate || person.fromDate || person.hireDate || person.beginDate || '',
+	);
 }
 
 /**
- * Stable-sort firm roster so people who connect to on-screen nodes come first.
- * When no bridge signal exists, original order is preserved.
+ * Higher score = reveal sooner.
+ * Prefer people who instantly bridge to other on-screen firms; mild boost for other on-screen neighbors.
+ */
+export function scoreFirmRosterPersonCanvasBridge(personId: string, context: FirmRosterCanvasBridgeContext | null | undefined): number {
+	const id = String(personId || '').trim();
+	if (!id || !context) return 0;
+	const firms = context.personToOnScreenFirmIds.get(id);
+	const firmCount = firms?.size || 0;
+	if (firmCount > 0) return firmCount * 1000;
+	const neighbors = context.personToCanvasNeighbors.get(id);
+	const neighborCount = neighbors?.size || 0;
+	// Person-only on-screen links stay below any firm bridge.
+	return neighborCount > 0 ? neighborCount : 0;
+}
+
+/**
+ * Sort firm roster for click reveal:
+ * 1) people who bridge to other on-screen firms
+ * 2) newest employment start date
+ * 3) original roster index
  */
 export function orderFirmCurrentConnectionsForCanvasBridges(
 	currentConnections: any[] = [],
@@ -18759,9 +18866,8 @@ export function orderFirmCurrentConnectionsForCanvasBridges(
 	context: FirmRosterCanvasBridgeContext | null | undefined,
 ) {
 	const list = Array.isArray(currentConnections) ? currentConnections.slice() : [];
-	if (!context || list.length < 2) return list;
+	if (list.length < 2) return list;
 	const clickedFirmId = String(firmNodeId || '').trim();
-	if (!clickedFirmId) return list;
 
 	return list
 		.map((person, index) => {
@@ -18770,10 +18876,11 @@ export function orderFirmCurrentConnectionsForCanvasBridges(
 			return {
 				person,
 				index,
-				score: personId ? scoreFirmRosterPersonCanvasBridge(personId, context) : 0,
+				score: clickedFirmId && personId && context ? scoreFirmRosterPersonCanvasBridge(personId, context) : 0,
+				startTime: getFirmRosterConnectionStartTime(person),
 			};
 		})
-		.sort((left, right) => right.score - left.score || left.index - right.index)
+		.sort((left, right) => right.score - left.score || right.startTime - left.startTime || left.index - right.index)
 		.map((entry) => entry.person);
 }
 
@@ -18810,12 +18917,13 @@ export function buildFirmCurrentConnectionGraphBatch(
 	const rawLimit = options.limit;
 	const hasLimit = rawLimit != null && Number.isFinite(Number(rawLimit));
 	const limit = hasLimit ? Math.max(0, Math.floor(Number(rawLimit))) : Number.POSITIVE_INFINITY;
-	const preferBridges = options.preferCanvasBridges !== false && Boolean(options.bridgeContext);
-	const orderedConnections =
-		preferBridges ?
-			orderFirmCurrentConnectionsForCanvasBridges(currentConnections, firmNodeId, options.bridgeContext)
-		:	Array.isArray(currentConnections) ? currentConnections
-		:	[];
+	// Always newest-first; when bridgeContext is present, on-screen firm bridges rank above dates.
+	const preferBridges = options.preferCanvasBridges !== false;
+	const orderedConnections = orderFirmCurrentConnectionsForCanvasBridges(
+		currentConnections,
+		firmNodeId,
+		preferBridges ? options.bridgeContext || null : null,
+	);
 	const nodes: any[] = [];
 	const links: any[] = [];
 	const pendingPersonIds = new Set<string>();
@@ -18905,10 +19013,12 @@ function firmHasAllCurrentConnectionsOnCanvas(firmNode: any) {
 
 /** After clear-non-log prunes people, firms must be allowed to expand again. */
 function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
+	const clearedIds: string[] = [];
 	const nodes = [
 		...(Array.isArray(globalState.layoutNodes) ? globalState.layoutNodes : []),
 		...(Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes : []),
 	];
+	const seen = new Set<string>();
 	for (const node of nodes) {
 		if (!node || node.group !== 'firm') continue;
 		const id = String(node.id || '').trim();
@@ -18917,8 +19027,37 @@ function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
 		// otherwise firms never re-inject the rest of the roster after clear-non-log.
 		if (node._secOnlyCurrentConnectionsExpanded && !firmHasAllCurrentConnectionsOnCanvas(node)) {
 			delete node._secOnlyCurrentConnectionsExpanded;
+			if (id && !seen.has(id)) {
+				seen.add(id);
+				clearedIds.push(id);
+			}
 		}
 	}
+	return clearedIds;
+}
+
+/**
+ * Clear exhausted-roster flags after prune, recompute degrees, and repaint firms.
+ * Incremental clear-non-log DOM prune used to leave darker exhausted greens stuck.
+ */
+function refreshFirmPaintAfterClearNonLogPrune(keepIds: Set<string>) {
+	const clearedIds = resetFirmConnectionExpandFlagsAfterPrune(keepIds);
+	try {
+		applyGraphDerivedNodeMetrics(globalState.layoutNodes || [], globalState.layoutLinks || []);
+	} catch {
+		/* ignore */
+	}
+	try {
+		if (globalState.canvasModeActive) {
+			scheduleGraphTickPositions(globalState.linkSel, globalState.nodeSel, globalState.arrowSel);
+		} else {
+			refreshGraphColors();
+			if (clearedIds.length) rerenderGraphNodesByIds(clearedIds);
+		}
+	} catch {
+		/* ignore */
+	}
+	return clearedIds;
 }
 
 /**
@@ -19896,8 +20035,8 @@ async function expandNodeThroughNonGrayHopsBody(clickedNode, hops: number | 'all
 		await ensureFirmDetail(clickedNode);
 		if (runId !== globalState.nonGrayExpandRunId) return;
 		const beforeCount = globalState.layoutNodes?.length || 0;
-		// Always (re)inject BD Direct Owners & Executive Officers as red control nodes.
-		// ensureFirmDetail may no-op when detail is already cached without canvas links.
+		// Always reveal BD Direct Owners / Executive Officers (red controls) first,
+		// before the current-employment roster batch.
 		if (Array.isArray(clickedNode.directOwners) && clickedNode.directOwners.length) {
 			syncFirmConnectionsFromDetail(clickedNode, {
 				directOwners: clickedNode.directOwners,
@@ -19912,9 +20051,16 @@ async function expandNodeThroughNonGrayHopsBody(clickedNode, hops: number | 'all
 		}
 		didRevealOrMerge = didRevealOrMerge || (globalState.layoutNodes?.length || 0) > beforeCount;
 		didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, expansionLinkFilter) > 0 || didRevealOrMerge;
+		// Paint control positions before kicking the roster fetch/append.
+		if (didRevealOrMerge && typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+			await new Promise<void>((resolve) => {
+				window.requestAnimationFrame(() => resolve());
+			});
+			if (runId !== globalState.nonGrayExpandRunId) return;
+		}
 
-		// All firm types: open current employment roster in batches of
-		// FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT; click again for the next batch.
+		// Then open current employment roster (bridges to on-screen firms first, else newest),
+		// up to FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT; click again for the next batch.
 		if (shouldExpandFirmCurrentConnections(clickedNode)) {
 			const beforeSec = globalState.layoutNodes?.length || 0;
 			await expandSecOnlyFirmCurrentConnections(clickedNode);
