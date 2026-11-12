@@ -1185,9 +1185,13 @@ if (typeof window !== 'undefined') {
 			null;
 		if (!node) return { ok: false, reason: 'node-missing', id };
 		const before = countFirmCurrentConnectionsOnCanvas(node);
-		const existingIds = new Set((globalState.layoutNodes || []).map((entry) => String(entry?.id || '').trim()).filter(Boolean));
+		const existingIds = new Set<string>(
+			(globalState.layoutNodes || [])
+				.map((entry) => String(entry?.id || '').trim())
+				.filter((id): id is string => Boolean(id)),
+		);
 		const bridgeContext = buildFirmRosterCanvasBridgeContext(node.id, {
-			canvasNodeIds: Array.from(existingIds),
+			canvasNodeIds: existingIds,
 			layoutNodes: globalState.layoutNodes,
 			links: [...(globalState.layoutLinks || []), ...(globalState.graphData?.links || [])],
 		});
