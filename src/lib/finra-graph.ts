@@ -8914,17 +8914,22 @@ function ensureGraphViewportVisible({ duration = 0 }: { duration?: number } = {}
 }
 
 /** Node-click reveal: stop the force layout after this many ms. */
-const CLICK_LAYOUT_STOP_MS = 4000;
+const CLICK_LAYOUT_STOP_MS = 5500;
 /** Search/fetch/import: stop the force layout after this many ms. */
 const FETCH_LAYOUT_STOP_MS = 10000;
+/** Hop radius that may move during click reflow (new nodes + local area). */
+const CLICK_LAYOUT_LOCAL_HOPS = 1;
+/** Spatial radius (px) around seeds that may also move during click reflow. */
+const CLICK_LAYOUT_LOCAL_RADIUS_PX = 240;
 
 function getLayoutReflowCooling(
 	nodeCount = globalState.layoutNodes?.length || 0,
-	options: { light?: boolean; safetyStopMs?: number | null } = {},
+	options: { light?: boolean; safetyStopMs?: number | null; clickLocal?: boolean } = {},
 ) {
 	const isLarge = nodeCount > 300;
 	const isHuge = nodeCount > 1000;
 	const light = Boolean(options.light);
+	const clickLocal = Boolean(options.clickLocal);
 	const defaultSafetyStopMs =
 		isHuge ? 3200
 		: isLarge ? 4800
@@ -8933,6 +8938,28 @@ function getLayoutReflowCooling(
 		options.safetyStopMs == null || !Number.isFinite(Number(options.safetyStopMs)) ?
 			defaultSafetyStopMs
 		:	Math.max(0, Math.floor(Number(options.safetyStopMs)));
+	// Click/local: less damping + hotter alpha so neighbors can unstack before the stop timer.
+	if (clickLocal) {
+		return {
+			isLarge,
+			isHuge,
+			alpha:
+				isHuge ? 0.24
+				: isLarge ? 0.3
+				: 0.36,
+			alphaDecay:
+				isHuge ? 0.018
+				: isLarge ? 0.012
+				: 0.009,
+			velocityDecay:
+				isHuge ? 0.52
+				: isLarge ? 0.42
+				: 0.32,
+			safetyStopMs,
+			light: true,
+			clickLocal: true,
+		};
+	}
 	if (light) {
 		return {
 			isLarge,
@@ -8951,6 +8978,7 @@ function getLayoutReflowCooling(
 				: 0.5,
 			safetyStopMs,
 			light: true,
+			clickLocal: false,
 		};
 	}
 	return {
@@ -8970,17 +8998,83 @@ function getLayoutReflowCooling(
 			: 0.5,
 		safetyStopMs,
 		light: false,
+		clickLocal: false,
 	};
 }
 
 function isClickLayoutReflowEvent(eventName: string) {
 	const normalized = String(eventName || '').trim().toLowerCase();
-	return normalized === 'reveal-reflow' || normalized === 'click-reflow';
+	return normalized === 'reveal-reflow' || normalized === 'click-reflow' || normalized === 'neighbor-reflow';
+}
+
+/**
+ * Nodes allowed to move during click reflow: newly revealed ids, the selection/focus
+ * seed’s 1-hop neighbors, and anything spatially near those seeds. Distant settled
+ * nodes stay pinned.
+ */
+function collectClickReflowMovableIds(options: {
+	newNodeIds?: Iterable<string> | Set<string> | null;
+	seedNodeIds?: Iterable<string> | Set<string> | null;
+	hops?: number;
+	radiusPx?: number;
+} = {}) {
+	const movable = new Set<string>();
+	const remember = (value: unknown) => {
+		const id = String(value || '').trim();
+		if (id) movable.add(id);
+	};
+	for (const id of options.newNodeIds || []) remember(id);
+	for (const id of options.seedNodeIds || []) remember(id);
+	remember(globalState.selectedId);
+	remember(globalState.focusedNodeId);
+
+	const hops = Math.max(0, Math.floor(Number(options.hops) || CLICK_LAYOUT_LOCAL_HOPS));
+	let frontier = Array.from(movable);
+	for (let depth = 0; depth < hops; depth += 1) {
+		const next: string[] = [];
+		for (const id of frontier) {
+			const neighbors =
+				typeof getNeighborIds === 'function' ? getNeighborIds(id)
+				:	[];
+			for (const neighborId of neighbors || []) {
+				const nid = String(neighborId || '').trim();
+				if (!nid || movable.has(nid)) continue;
+				movable.add(nid);
+				next.push(nid);
+			}
+		}
+		frontier = next;
+		if (!frontier.length) break;
+	}
+
+	const radius = Math.max(80, Number(options.radiusPx) || CLICK_LAYOUT_LOCAL_RADIUS_PX);
+	const centers: Array<{ x: number; y: number }> = [];
+	for (const node of globalState.layoutNodes || []) {
+		const id = String(node?.id || '').trim();
+		if (!movable.has(id)) continue;
+		if (!Number.isFinite(node?.x) || !Number.isFinite(node?.y)) continue;
+		centers.push({ x: Number(node.x), y: Number(node.y) });
+	}
+	if (centers.length) {
+		for (const node of globalState.layoutNodes || []) {
+			const id = String(node?.id || '').trim();
+			if (!id || movable.has(id) || !Number.isFinite(node?.x) || !Number.isFinite(node?.y)) continue;
+			const x = Number(node.x);
+			const y = Number(node.y);
+			for (const center of centers) {
+				if (Math.hypot(x - center.x, y - center.y) <= radius) {
+					movable.add(id);
+					break;
+				}
+			}
+		}
+	}
+	return movable;
 }
 
 /**
  * Reheat the force sim after fetch/append/click-reveal.
- * - reveal/click-reflow (node click): settle newly revealed neighbors, stop after 4s
+ * - reveal/click/neighbor-reflow: new nodes + local area move; distant nodes stay pinned; stop after CLICK_LAYOUT_STOP_MS
  * - fetch/search/import: same motion as the Reflow button, stop after 10s
  * Manual Reflow button calls refreshNodeLayout() with no time limit.
  */
@@ -8990,6 +9084,7 @@ function reheatLayoutLikeRefresh(
 		alpha?: number;
 		eventName?: string;
 		priorNodeIds?: Iterable<string> | Set<string>;
+		seedNodeIds?: Iterable<string> | Set<string>;
 		centerComponentIds?: string[];
 		placementCenter?: { x: number; y: number };
 		outerRadius?: number;
@@ -9008,6 +9103,7 @@ function reheatLayoutLikeRefresh(
 	const newIdSet = new Set(newNodes.map((n) => String(n?.id || '')).filter(Boolean));
 	const cooling = getLayoutReflowCooling(globalState.layoutNodes.length, {
 		light: true,
+		clickLocal: true,
 		safetyStopMs: CLICK_LAYOUT_STOP_MS,
 	});
 	const priorIdSet = new Set(
@@ -9015,22 +9111,41 @@ function reheatLayoutLikeRefresh(
 			.map((id) => String(id || '').trim())
 			.filter(Boolean),
 	);
+	const localRadius =
+		cooling.isHuge ? 170
+		: cooling.isLarge ? 210
+		: CLICK_LAYOUT_LOCAL_RADIUS_PX;
+	const movableIds = collectClickReflowMovableIds({
+		newNodeIds: newIdSet,
+		seedNodeIds: options.seedNodeIds,
+		hops: CLICK_LAYOUT_LOCAL_HOPS,
+		radiusPx: localRadius,
+	});
+	const anchorId = String(globalState.selectedId || globalState.focusedNodeId || '').trim();
 
 	if (globalState.activeSpreadFrozenNodes?.length) {
 		releaseFrozenNodes(globalState.activeSpreadFrozenNodes);
 		globalState.activeSpreadFrozenNodes = [];
 	}
 
-	// Node-click reveal contract: keep settled nodes frozen while newly revealed neighbors settle.
-	const shouldPinPriorNodes = newIdSet.size > 0 || priorIdSet.size > 0;
+	// Keep distant settled nodes frozen; let newly revealed + local neighborhood unstack.
+	const shouldPinPriorNodes = newIdSet.size > 0 || priorIdSet.size > 0 || movableIds.size > 0;
 	for (const node of globalState.layoutNodes) {
 		const id = String(node?.id || '');
 		delete node._fetchLayoutBiasX;
 		delete node._fetchLayoutBiasY;
 		delete node._fetchLayoutBiasStrength;
-		if (newIdSet.has(id)) {
+		delete node._clickReflowLoose;
+		if (movableIds.has(id) && id !== anchorId) {
 			node.fx = null;
 			node.fy = null;
+			node._clickReflowLoose = true;
+			continue;
+		}
+		if (id && id === anchorId && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+			// Keep the selected/clicked node as a stable local anchor while neighbors move.
+			node.fx = Number(node.x);
+			node.fy = Number(node.y);
 			continue;
 		}
 		const isPriorSettledNode = priorIdSet.size > 0 ? priorIdSet.has(id) : !newIdSet.has(id);
@@ -9044,15 +9159,16 @@ function reheatLayoutLikeRefresh(
 		if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
 		node.fx = null;
 		node.fy = null;
+		node._clickReflowLoose = true;
 		const angle = (idx / Math.max(1, newNodes.length)) * Math.PI * 2;
 		const jitter =
-			cooling.isHuge ? 10
-			: cooling.isLarge ? 8
-			: 6;
-		node.x += Math.cos(angle) * jitter + (Math.random() - 0.5) * 6;
-		node.y += Math.sin(angle) * jitter + (Math.random() - 0.5) * 6;
-		node.vx = 0;
-		node.vy = 0;
+			cooling.isHuge ? 18
+			: cooling.isLarge ? 24
+			: 30;
+		node.x += Math.cos(angle) * jitter + (Math.random() - 0.5) * 12;
+		node.y += Math.sin(angle) * jitter + (Math.random() - 0.5) * 12;
+		node.vx = (Math.random() - 0.5) * 2;
+		node.vy = (Math.random() - 0.5) * 2;
 	});
 
 	if (globalState.spreadReleaseTimer) {
@@ -9066,9 +9182,15 @@ function reheatLayoutLikeRefresh(
 
 	const prevAlphaDecay = globalState.simulation.alphaDecay?.() ?? 0.0228;
 	const prevVelocityDecay = globalState.simulation.velocityDecay?.() ?? 0.4;
+	const nodeCount = globalState.layoutNodes.length;
 	try {
 		globalState.simulation.alphaDecay(cooling.alphaDecay);
 		globalState.simulation.velocityDecay(cooling.velocityDecay);
+		// Roomier collision while local nodes settle so stacks can separate.
+		globalState.simulation.force('collision')?.radius?.((d: any) => {
+			const base = getNodeCollisionRadius(d, nodeCount);
+			return d?._clickReflowLoose ? base * 1.4 : base;
+		});
 	} catch {
 		/* ignore */
 	}
@@ -9080,12 +9202,14 @@ function reheatLayoutLikeRefresh(
 				delete node._fetchLayoutBiasY;
 				delete node._fetchLayoutBiasStrength;
 				delete node._fetchPlacementKind;
+				delete node._clickReflowLoose;
 				if (node.fx != null || node.fy != null) {
 					node.fx = null;
 					node.fy = null;
 				}
 			}
 			refreshSoftLocationGroupingForces(globalState.layoutNodes);
+			globalState.simulation?.force('collision')?.radius?.((d: any) => getNodeCollisionRadius(d, globalState.layoutNodes?.length || 0));
 			globalState.simulation?.alphaDecay?.(prevAlphaDecay);
 			globalState.simulation?.velocityDecay?.(prevVelocityDecay);
 			globalState.simulation?.alphaTarget?.(0);
@@ -16788,6 +16912,7 @@ function appendFetchedImpl(
 			uniqNodes.length > 0 ? undefined : Math.max(0.1, getIncrementalRestartAlpha(globalState.layoutNodes.length, Math.max(1, impactedIds?.length || 0))),
 		eventName: resolvedReflowKind === 'click' ? 'click-reflow' : 'fetch-reflow',
 		priorNodeIds: priorLayoutNodeIds,
+		seedNodeIds: [globalState.selectedId, globalState.focusedNodeId, globalState.lastExpandOriginNode?.id].filter(Boolean),
 		centerComponentIds: fetchPlacement?.centerComponentIds,
 		placementCenter: fetchPlacement?.center,
 		outerRadius: fetchPlacement?.outerRadius,
@@ -22081,8 +22206,15 @@ function spreadNeighbors(
 		: getNeighborIds(clickedNode.id);
 	if (neighborIdSet.size === 0) return;
 
-	// Unpin + reflow the whole graph; do not re-jitter already-placed neighbors.
-	reheatLayoutLikeRefresh({ eventName: 'neighbor-reflow' });
+	// Local reflow around the clicked node and its neighbors so stacks can separate.
+	const neighborNodes = Array.from(neighborIdSet)
+		.map((id) => (globalState.layoutNodes || []).find((node) => String(node?.id || '') === String(id)))
+		.filter(Boolean);
+	reheatLayoutLikeRefresh({
+		eventName: 'neighbor-reflow',
+		newNodes: neighborNodes,
+		seedNodeIds: [clickedNode?.id, ...Array.from(neighborIdSet)].filter(Boolean),
+	});
 	return;
 
 	// The animation code below is being bypassed for performance.
