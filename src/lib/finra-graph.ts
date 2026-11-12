@@ -1175,6 +1175,38 @@ if (typeof window !== 'undefined') {
 			sharedPersonIds: shared.map(({ crd }) => `person:${crd}`),
 		};
 	};
+	/** Test/debug: after controls are on canvas, hydrate them and reveal other current employers. */
+	(window as any).__fgExpandFirmControlEmployerHop = async (crdOrId: string) => {
+		const raw = String(crdOrId || '').trim();
+		const id = raw.startsWith('firm:') ? raw : `firm:${raw.replace(/^\D+/, '')}`;
+		const node =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id) === id) ||
+			(globalState.graphData?.nodes || []).find((entry) => String(entry?.id) === id) ||
+			null;
+		if (!node) return { ok: false, reason: 'node-missing', id };
+		const beforeFirms = (globalState.layoutNodes || []).filter((entry) => entry?.group === 'firm').length;
+		const controls = collectFirmControlPersonNodes(node).map((entry) => ({
+			id: entry.id,
+			label: entry.label,
+			stub: !!entry.stub,
+		}));
+		// Own the expand run id so concurrent route cascades cannot cancel this hop mid-flight.
+		const runId = ++globalState.nonGrayExpandRunId;
+		const result = await expandFirmControlCurrentEmployerHop(node, runId);
+		const afterFirms = (globalState.layoutNodes || []).filter((entry) => entry?.group === 'firm').map((entry) => ({
+			id: entry.id,
+			label: entry.label,
+		}));
+		return {
+			ok: true,
+			id,
+			controls,
+			...result,
+			beforeFirms,
+			afterFirmCount: afterFirms.length,
+			firms: afterFirms,
+		};
+	};
 	/** Test/debug helper: continue firm current-connection reveal batches (100 per call). */
 	(window as any).__fgExpandFirmCurrentConnections = async (crdOrId: string) => {
 		const raw = String(crdOrId || '').trim();
@@ -7165,15 +7197,69 @@ function isPersonClickEmploymentLink(link) {
 	return isPreviousEmploymentLink(link);
 }
 
-// Firm-click wave filter: Form BD control links plus current employment/registration
-// links already on the graph. Large employment rosters are batched separately via
-// expandSecOnlyFirmCurrentConnections (FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT per click).
+// Firm-click wave filter: Form BD control links only. Live control people's other
+// current employers are handled by expandFirmControlCurrentEmployerHop (+1 hop).
+// Large employment rosters are batched separately via expandSecOnlyFirmCurrentConnections.
 function isFirmControlOnlyLink(link) {
 	if (!link) return false;
 	const rel = String(link.relationship || '')
 		.trim()
 		.toLowerCase();
-	return rel === 'controls' || rel === 'controlled_by' || rel === 'owner' || rel === 'officer' || rel.includes('employed') || rel.includes('registered');
+	return rel === 'controls' || rel === 'controlled_by' || rel === 'owner' || rel === 'officer';
+}
+
+/** Live Form BD control people currently linked to a firm (red controls), excluding NotInScope stubs. */
+export function collectFirmControlPersonNodes(firmNode: any): any[] {
+	const firmId = String(firmNode?.id || '').trim();
+	if (!firmId || firmNode?.group !== 'firm') return [];
+	const byId = new Map<string, any>();
+	const rememberPerson = (personId: string, options: { allowUnstubActiveOwner?: boolean } = {}) => {
+		const id = String(personId || '').trim();
+		if (!id.startsWith('person:') || byId.has(id)) return;
+		const node =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id || '') === id) ||
+			(globalState.graphData?.nodes || []).find((entry) => String(entry?.id || '') === id) ||
+			null;
+		if (!node || node.group !== 'individual') return;
+		// Form BD Active owners sometimes get stubbed by later owner-evidence passes.
+		// For the control +1 hop, treat Active-scope people with a CRD as live.
+		if (options.allowUnstubActiveOwner) {
+			const scope = String(node.bcScope || '')
+				.trim()
+				.toLowerCase()
+				.replace(/\s+/g, '');
+			if (scope && scope !== 'notinscope') {
+				node.stub = false;
+				if (node.orphanParentCrd) {
+					delete node.orphanParentCrd;
+					delete node.orphanParentType;
+				}
+			}
+		}
+		if (node.stub || node.orphanParentCrd) return;
+		byId.set(id, node);
+	};
+	// Prefer Form BD Direct Owners with live CRDs (Active / not NotInScope).
+	for (const owner of Array.isArray(firmNode.directOwners) ? firmNode.directOwners : []) {
+		const crd = String(owner?.crdNumber || owner?.crd || owner?.personId || '').trim();
+		if (!/^\d+$/.test(crd)) continue;
+		const ownerScope = String(owner?.bcScope || '')
+			.trim()
+			.toLowerCase()
+			.replace(/\s+/g, '');
+		if (!ownerScope || ownerScope === 'notinscope') continue;
+		rememberPerson(`person:${crd}`, { allowUnstubActiveOwner: true });
+	}
+	const considerLink = (link: any) => {
+		if (!isControlRelationship(link)) return;
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		if (sourceId === firmId && targetId.startsWith('person:')) rememberPerson(targetId);
+		if (targetId === firmId && sourceId.startsWith('person:')) rememberPerson(sourceId);
+	};
+	for (const link of globalState.layoutLinks || []) considerLink(link);
+	for (const link of globalState.graphData?.links || []) considerLink(link);
+	return Array.from(byId.values()).slice(0, MAX_FIRM_CONTROL_OWNERS_ON_CANVAS);
 }
 
 function getDirectAutoExpansionNeighborCount(node) {
@@ -20085,6 +20171,118 @@ function revealPersonEmploymentNeighbors(personNode) {
 	revealIncidentRenderedLinks(personNode, revealFilter);
 }
 
+/** Current employer firm ids for a person (arrays + current auto-expansion links). */
+function collectPersonCurrentEmployerFirmIds(personNode: any, options: { excludeFirmIds?: Iterable<string> | Set<string> | null } = {}) {
+	const firmIds = new Set<string>();
+	const exclude = new Set(
+		Array.from(options.excludeFirmIds || [])
+			.map((id) => String(id || '').trim())
+			.filter(Boolean),
+	);
+	if (!personNode?.id || personNode.group !== 'individual') return firmIds;
+
+	for (const employment of flattenEmploymentRecords(personNode)) {
+		if (employment?._isCurrent === false) continue;
+		const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
+		if (firmNodeId && !exclude.has(firmNodeId)) firmIds.add(firmNodeId);
+	}
+	const considerLink = (link: any) => {
+		if (!isAutoExpansionLink(link) || isPreviousEmploymentLink(link)) return;
+		const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
+		const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
+		if (sourceId === personNode.id && targetId.startsWith('firm:') && !exclude.has(targetId)) firmIds.add(targetId);
+		if (targetId === personNode.id && sourceId.startsWith('firm:') && !exclude.has(sourceId)) firmIds.add(sourceId);
+	};
+	for (const link of globalState.layoutLinks || []) considerLink(link);
+	for (const link of globalState.graphData?.links || []) considerLink(link);
+	return firmIds;
+}
+
+/**
+ * Reveal only current employer firms for a person (used as the +1 hop from firm BD/control people).
+ * Returns how many previously hidden firm ids were targeted for reveal.
+ */
+export function revealPersonCurrentEmploymentNeighbors(
+	personNode: any,
+	options: { excludeFirmIds?: Iterable<string> | Set<string> | null } = {},
+) {
+	if (!personNode?.id || personNode.group !== 'individual' || !globalState.graphData || !globalState.layoutNodes) return 0;
+	const employmentFirmIds = collectPersonCurrentEmployerFirmIds(personNode, options);
+	const renderedIds = new Set((globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
+	const personEmploymentRevealLimit = Math.max(MAX_AUTO_REVEAL_NEIGHBORS_PER_EXPAND, 64);
+	const hiddenIds = Array.from(employmentFirmIds)
+		.filter((id) => id && !renderedIds.has(id))
+		.slice(0, personEmploymentRevealLimit);
+	const revealFilter = (link: any) => isAutoExpansionLink(link) && !isPreviousEmploymentLink(link);
+	if (hiddenIds.length) {
+		// Do not markSelected — this hop runs under a firm click and must not
+		// steal selection / route away from the firm onto control people.
+		revealNeighbors(personNode, 'all', {
+			linkFilter: revealFilter,
+			restrictToIds: new Set(hiddenIds),
+			markSelected: false,
+		});
+		spreadNeighbors(personNode, new Set(hiddenIds), {
+			duration: getNodeExpansionRevealTiming(globalState.layoutNodes?.length || 0, { isUserInitiated: true }).animationMs,
+		});
+	}
+	revealIncidentRenderedLinks(personNode, revealFilter);
+	return hiddenIds.length;
+}
+
+/**
+ * After firm BD/control (red) people paint, hydrate each live control person and reveal
+ * their other current employer firms (+1 hop). Skips NotInScope stubs.
+ */
+async function expandFirmControlCurrentEmployerHop(firmNode: any, runId = globalState.nonGrayExpandRunId) {
+	if (!firmNode?.id || firmNode.group !== 'firm') return { hydrated: 0, revealedFirms: 0 };
+	const controlPeople = collectFirmControlPersonNodes(firmNode);
+	if (!controlPeople.length) return { hydrated: 0, revealedFirms: 0 };
+
+	const excludeFirmIds = new Set([String(firmNode.id)]);
+	const selectedIdBefore = globalState.selectedId;
+	let hydrated = 0;
+	let revealedFirms = 0;
+	const concurrency = 4;
+	for (let i = 0; i < controlPeople.length; i += concurrency) {
+		if (runId !== globalState.nonGrayExpandRunId) break;
+		const batch = controlPeople.slice(i, i + concurrency);
+		await Promise.all(
+			batch.map(async (person) => {
+				if (runId !== globalState.nonGrayExpandRunId) return;
+				try {
+					// Load detail without injecting previous employers into the graph.
+					await ensureIndividualDetail(person, {
+						allowOwnerEvidenceFirmFetch: false,
+						injectEmploymentGraph: false,
+					});
+					if (runId !== globalState.nonGrayExpandRunId) return;
+					if (person._detailMissing) return;
+					syncIndividualConnectionsFromDetail(person, person, { includePrevious: false });
+					hydrated += 1;
+					revealedFirms += revealPersonCurrentEmploymentNeighbors(person, { excludeFirmIds });
+				} catch (error) {
+					console.warn('Failed to expand control current employers:', person?.id, error);
+				}
+			}),
+		);
+	}
+	// Keep selection on the clicked firm — hydration/reveal must not route away.
+	if (selectedIdBefore && globalState.selectedId !== selectedIdBefore) {
+		const selectedNode =
+			(globalState.layoutNodes || []).find((entry) => String(entry?.id || '') === String(selectedIdBefore)) || firmNode;
+		if (selectedNode?.id) {
+			globalState.selectedId = selectedNode.id;
+			try {
+				reapplySelectionState();
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+	return { hydrated, revealedFirms };
+}
+
 async function expandNodeThroughNonGrayHops(clickedNode, hops: number | 'all' = getDefaultExpansionHops()) {
 	if (!clickedNode?.id || !globalState.graphData) return;
 
@@ -20188,6 +20386,16 @@ async function expandNodeThroughNonGrayHopsBody(clickedNode, hops: number | 'all
 			if (runId !== globalState.nonGrayExpandRunId) return;
 		}
 
+		// +1 hop from live BD/control (red) people: their other current employer firms.
+		const beforeControlHop = globalState.layoutNodes?.length || 0;
+		const controlHop = await expandFirmControlCurrentEmployerHop(clickedNode, runId);
+		if (runId !== globalState.nonGrayExpandRunId) return;
+		didRevealOrMerge =
+			didRevealOrMerge ||
+			controlHop.revealedFirms > 0 ||
+			(globalState.layoutNodes?.length || 0) > beforeControlHop;
+		didRevealOrMerge = revealIncidentRenderedLinks(clickedNode, expansionLinkFilter) > 0 || didRevealOrMerge;
+
 		// Then open current employment roster (bridges to on-screen firms first, else newest),
 		// up to FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT; click again for the next batch.
 		if (shouldExpandFirmCurrentConnections(clickedNode)) {
@@ -20205,6 +20413,19 @@ async function expandNodeThroughNonGrayHopsBody(clickedNode, hops: number | 'all
 		} catch {
 			/* non-critical paint refresh */
 		}
+
+		// Firm click owns its reveal path (controls → control current-employer hop →
+		// roster batch). Skip the generic multi-wave walk so employment edges from
+		// control people cannot fan out into further firm→control→employer hops.
+		if (didRevealOrMerge) {
+			refreshTraceState({ deferMs: 120 });
+			try {
+				saveSession();
+			} catch {
+				/* ignore */
+			}
+		}
+		return;
 	}
 
 	const visitedIds = new Set([clickedNode.id]);
@@ -20873,12 +21094,20 @@ async function materializeRouteSelectionNeighborhood(node, hops: number = getDef
 			console.warn('Failed to fetch route-selected neighborhood from server:', error);
 		}
 
-		// Firms auto-reveal Form BD "controls" plus a batched current employment roster
+		// Firms auto-reveal Form BD "controls", then +1 hop of those people's other
+		// current employers, then a batched current employment roster
 		// (FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT new people per open; click again for more).
 		revealNeighbors(node, normalizedHops, {
 			linkFilter: isFirmControlOnlyLink,
 			markSelected: true,
 		});
+		try {
+			const controlHopRunId = ++globalState.nonGrayExpandRunId;
+			await expandFirmControlCurrentEmployerHop(node, controlHopRunId);
+			revealIncidentRenderedLinks(node, isFirmControlOnlyLink);
+		} catch (error) {
+			console.warn('Failed to expand firm control current employers:', error);
+		}
 		if (shouldExpandFirmCurrentConnections(node)) {
 			try {
 				await expandSecOnlyFirmCurrentConnections(node);
