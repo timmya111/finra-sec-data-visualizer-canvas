@@ -5,17 +5,18 @@ import {
 	DEFAULT_FIRM_REVEAL_LIMIT,
 	graphSearchConfigQueryKeyPart,
 	graphSearchConfigToLegacySearchType,
-	nodeMatchesClickRevealKeyword,
+	matchesClickRevealKeywords,
 	normalizeFirmRevealLimit,
 	normalizeGraphSearchClickConfig,
 	normalizeGraphSearchScope,
+	parseClickRevealKeywordTags,
 	searchConfigActivityMode,
 	searchConfigIncludesFirms,
 	searchConfigIncludesPeople,
 } from '@/lib/graphSearchClickConfig';
 
 describe('graphSearchClickConfig', () => {
-	it('normalizes scope and firm-only click reveal settings; people stay uncapped', () => {
+	it('normalizes scope and firm-only click reveal settings with keyword tags', () => {
 		expect(normalizeGraphSearchScope('FIRMS')).toBe('firms');
 		expect(normalizeGraphSearchScope('nope')).toBe('people');
 		expect(normalizeFirmRevealLimit(0)).toBe(DEFAULT_FIRM_REVEAL_LIMIT);
@@ -26,19 +27,24 @@ describe('graphSearchClickConfig', () => {
 			includeInactive: true,
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
-			clickRevealKeyword: '  hopper  ',
-			// Legacy field from older persisted configs must be ignored.
-			peopleRevealPrevious: false,
+			clickRevealKeywords: ['  hopper  ', 'smith'],
+			clickRevealStrict: true,
+			// Legacy single-string field migrates into tags.
+			clickRevealKeyword: 'ignored-when-array-present',
 		} as any);
 		expect(config).toEqual({
 			searchScope: 'firms',
 			includeInactive: true,
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
-			clickRevealKeyword: 'hopper',
+			clickRevealKeywords: ['hopper', 'smith'],
+			clickRevealStrict: true,
 		});
-		expect(config).not.toHaveProperty('peopleRevealPrevious');
-		expect(config).not.toHaveProperty('peopleRevealLimit');
+		expect(normalizeGraphSearchClickConfig({ clickRevealKeyword: 'jane, hopper' } as any).clickRevealKeywords).toEqual([
+			'jane',
+			'hopper',
+		]);
+		expect(parseClickRevealKeywordTags('a, a, B')).toEqual(['a', 'B']);
 	});
 
 	it('maps include-inactive to active+inactive (no inactive-only mode)', () => {
@@ -50,11 +56,16 @@ describe('graphSearchClickConfig', () => {
 		expect(graphSearchConfigToLegacySearchType({ searchScope: 'people', includeInactive: true })).toBe('people-inactive');
 	});
 
-	it('matches firm click-reveal keyword tokens against node/connection fields', () => {
-		expect(nodeMatchesClickRevealKeyword({ label: 'Jane Hopper', crd: '123' }, '')).toBe(true);
-		expect(nodeMatchesClickRevealKeyword({ label: 'Jane Hopper', crd: '123' }, 'hopper')).toBe(true);
-		expect(nodeMatchesClickRevealKeyword({ label: 'Jane Hopper', crd: '123' }, 'hopper 999')).toBe(false);
-		expect(connectionMatchesClickRevealKeyword({ name: 'Jane Hopper', crd: '55' }, '55')).toBe(true);
-		expect(connectionMatchesClickRevealKeyword({ firstName: 'Jane', lastName: 'Doe' }, 'hopper')).toBe(false);
+	it('matches firm click-reveal tags with fuzzy or strict modes', () => {
+		expect(matchesClickRevealKeywords('Jane Hopper', [], false)).toBe(true);
+		// Fuzzy: tokens anywhere
+		expect(matchesClickRevealKeywords('Jane Ann Hopper', ['jane hopper'], false)).toBe(true);
+		expect(connectionMatchesClickRevealKeyword({ name: 'Jane Hopper', crd: '55' }, ['55'], false)).toBe(true);
+		expect(connectionMatchesClickRevealKeyword({ firstName: 'Jane', lastName: 'Doe' }, ['hopper'], false)).toBe(false);
+		// Strict: contiguous phrase required
+		expect(matchesClickRevealKeywords('Jane Ann Hopper', ['jane hopper'], true)).toBe(false);
+		expect(matchesClickRevealKeywords('Jane Hopper Smith', ['jane hopper'], true)).toBe(true);
+		// OR across tags
+		expect(matchesClickRevealKeywords('Bob Smith', ['hopper', 'smith'], true)).toBe(true);
 	});
 });

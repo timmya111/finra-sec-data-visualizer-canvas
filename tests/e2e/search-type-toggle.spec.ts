@@ -217,7 +217,14 @@ test.describe('Header search type toggle (All / People / Firms)', () => {
 		await expect(page.locator('#fg-search-config-panel')).toBeVisible();
 		await expect(page.locator('#fg-click-firm-limit')).toBeVisible();
 		await expect(page.locator('#fg-click-keyword')).toBeVisible();
+		await expect(page.locator('#fg-click-keyword-strict')).toBeVisible();
 		await expect(page.getByText('Firm click reveal')).toBeVisible();
 		await expect(page.getByText('Previous connections (people)')).toHaveCount(0);
+
+		await page.locator('#fg-click-keyword').fill('hopper');
+		await page.locator('#fg-click-keyword').press('Enter');
+		await expect(page.locator('.fg-click-keyword-chip', { hasText: 'hopper' })).toBeVisible();
+		await page.locator('#fg-click-keyword-strict').check();
+		await expect(page.locator('#finra-app')).toHaveAttribute('data-fg-click-strict', 'true');
 	});
 });

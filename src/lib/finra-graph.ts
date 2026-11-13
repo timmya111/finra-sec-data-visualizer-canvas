@@ -19780,8 +19780,12 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 
 	const currentRaw = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
 	const previousRaw = includePrevious && Array.isArray(firmNode.previousConnections) ? firmNode.previousConnections : [];
-	const current = currentRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeyword));
-	const previous = previousRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeyword));
+	const current = currentRaw.filter((connection) =>
+		connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeywords, clickConfig.clickRevealStrict),
+	);
+	const previous = previousRaw.filter((connection) =>
+		connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeywords, clickConfig.clickRevealStrict),
+	);
 	if (!current.length && !previous.length) {
 		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
 		// Stamp exhausted so paint can darken; allow retry only if connections later hydrate.

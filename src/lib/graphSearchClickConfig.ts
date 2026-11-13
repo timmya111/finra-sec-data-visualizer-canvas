@@ -9,8 +9,14 @@ export type GraphSearchClickConfig = {
 	firmRevealLimit: number;
 	/** When true, firm clicks also reveal previous (inactive) roster people. */
 	firmRevealPrevious: boolean;
-	/** Firm click only: only reveal roster people whose name/CRD matches (empty = all). */
-	clickRevealKeyword: string;
+	/** Firm click only: reveal roster people matching any of these keyword tags (empty = all). */
+	clickRevealKeywords: string[];
+	/**
+	 * Firm click keyword matching mode.
+	 * false (default) = fuzzy: every token of a tag may appear anywhere in the name/CRD.
+	 * true = strict: tag must appear as an exact contiguous phrase within the name/CRD.
+	 */
+	clickRevealStrict: boolean;
 };
 
 export const GRAPH_SEARCH_CLICK_CONFIG_STORAGE_KEY = 'finra_graph_search_click_config_v1';
@@ -21,7 +27,8 @@ export const DEFAULT_GRAPH_SEARCH_CLICK_CONFIG: GraphSearchClickConfig = {
 	includeInactive: false,
 	firmRevealLimit: DEFAULT_FIRM_REVEAL_LIMIT,
 	firmRevealPrevious: false,
-	clickRevealKeyword: '',
+	clickRevealKeywords: [],
+	clickRevealStrict: false,
 };
 
 export function normalizeGraphSearchScope(value: unknown): GraphSearchScope {
@@ -39,14 +46,46 @@ export function normalizeFirmRevealLimit(value: unknown): number {
 	return Math.min(500, n);
 }
 
-export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickConfig> | null | undefined): GraphSearchClickConfig {
+/** Split raw keyword text into committed tags (comma / newline separated). */
+export function parseClickRevealKeywordTags(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		const tags: string[] = [];
+		const seen = new Set<string>();
+		for (const entry of value) {
+			for (const tag of parseClickRevealKeywordTags(entry)) {
+				const key = tag.toLowerCase();
+				if (seen.has(key)) continue;
+				seen.add(key);
+				tags.push(tag);
+			}
+		}
+		return tags;
+	}
+	const tags: string[] = [];
+	const seen = new Set<string>();
+	for (const part of String(value || '').split(/[,\n]+/)) {
+		const tag = part.trim();
+		if (!tag) continue;
+		const key = tag.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		tags.push(tag);
+	}
+	return tags;
+}
+
+export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickConfig> & { clickRevealKeyword?: unknown } | null | undefined): GraphSearchClickConfig {
 	const base = raw && typeof raw === 'object' ? raw : {};
+	const legacyKeyword = (base as { clickRevealKeyword?: unknown }).clickRevealKeyword;
+	const fromArray = Array.isArray(base.clickRevealKeywords) ? base.clickRevealKeywords : null;
+	const clickRevealKeywords = parseClickRevealKeywordTags(fromArray ?? legacyKeyword ?? []);
 	return {
 		searchScope: normalizeGraphSearchScope(base.searchScope),
 		includeInactive: Boolean(base.includeInactive),
 		firmRevealLimit: normalizeFirmRevealLimit(base.firmRevealLimit),
 		firmRevealPrevious: Boolean(base.firmRevealPrevious),
-		clickRevealKeyword: String(base.clickRevealKeyword || '').trim(),
+		clickRevealKeywords,
+		clickRevealStrict: Boolean(base.clickRevealStrict),
 	};
 }
 
@@ -88,7 +127,6 @@ export function saveGraphSearchClickConfig(config: GraphSearchClickConfig) {
 	try {
 		window.localStorage.setItem(GRAPH_SEARCH_CLICK_CONFIG_STORAGE_KEY, JSON.stringify(normalized));
 		// Keep legacy key roughly in sync for older readers / e2e helpers.
-		// includeInactive on "all" still maps to 'all' (no activity filter).
 		const legacy =
 			normalized.searchScope === 'all' ? 'all'
 			: normalized.includeInactive ?
@@ -136,34 +174,50 @@ export function graphSearchConfigToLegacySearchType(config: Pick<GraphSearchClic
 	return scope === 'firms' ? 'firms' : 'people';
 }
 
-/** Split keyword filter into tokens; empty string → no filter. */
-export function parseClickRevealKeywordTokens(keyword: string | null | undefined): string[] {
-	return String(keyword || '')
-		.trim()
+function tokenizeClickRevealPhrase(phrase: string): string[] {
+	return String(phrase || '')
 		.toLowerCase()
-		.split(/[\s,]+/)
+		.split(/[^a-z0-9#]+/i)
 		.map((token) => token.trim())
 		.filter(Boolean);
 }
 
-export function nodeMatchesClickRevealKeyword(
-	node: { id?: unknown; label?: unknown; name?: unknown; firmName?: unknown; crd?: unknown } | null | undefined,
-	keyword: string | null | undefined,
-): boolean {
-	const tokens = parseClickRevealKeywordTokens(keyword);
-	if (!tokens.length) return true;
-	if (!node) return false;
-	const id = String(node.id || '');
-	const crd = String(node.crd || id.replace(/^(?:person|firm):/i, ''));
-	const haystack = [node.label, node.name, node.firmName, id, crd]
-		.map((value) => String(value || '').toLowerCase())
-		.join(' ');
-	return tokens.every((token) => haystack.includes(token));
+function normalizeClickRevealPhrase(value: string): string {
+	return String(value || '')
+		.toLowerCase()
+		.replace(/[’']/g, '')
+		.replace(/[^a-z0-9]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
 }
 
-export function connectionMatchesClickRevealKeyword(connection: any, keyword: string | null | undefined): boolean {
-	const tokens = parseClickRevealKeywordTokens(keyword);
+function haystackMatchesClickRevealTag(haystack: string, tag: string, strict: boolean): boolean {
+	const normalizedTag = normalizeClickRevealPhrase(tag);
+	if (!normalizedTag) return true;
+	const normalizedHaystack = normalizeClickRevealPhrase(haystack);
+	if (strict) {
+		// Exact contiguous phrase within the name/CRD.
+		return normalizedHaystack.includes(normalizedTag);
+	}
+	// Fuzzy: every token may appear anywhere (order-independent).
+	const tokens = tokenizeClickRevealPhrase(tag);
 	if (!tokens.length) return true;
+	const lower = haystack.toLowerCase();
+	return tokens.every((token) => lower.includes(token));
+}
+
+/** True when haystack matches any keyword tag (OR). Empty tags → match all. */
+export function matchesClickRevealKeywords(
+	haystack: string,
+	keywords: string[] | string | null | undefined,
+	strict = false,
+): boolean {
+	const tags = parseClickRevealKeywordTags(keywords);
+	if (!tags.length) return true;
+	return tags.some((tag) => haystackMatchesClickRevealTag(haystack, tag, strict));
+}
+
+function connectionClickRevealHaystack(connection: any): string {
 	const crd = String(connection?.crd || connection?.individualId || connection?.ind_crd || connection?.id || '').trim();
 	const name = [
 		connection?.label,
@@ -177,8 +231,43 @@ export function connectionMatchesClickRevealKeyword(connection: any, keyword: st
 		.map((value) => String(value || '').trim())
 		.filter(Boolean)
 		.join(' ');
-	const haystack = `${name} ${crd}`.toLowerCase();
-	return tokens.every((token) => haystack.includes(token));
+	return `${name} ${crd}`.trim();
+}
+
+function nodeClickRevealHaystack(node: { id?: unknown; label?: unknown; name?: unknown; firmName?: unknown; crd?: unknown } | null | undefined): string {
+	if (!node) return '';
+	const id = String(node.id || '');
+	const crd = String(node.crd || id.replace(/^(?:person|firm):/i, ''));
+	return [node.label, node.name, node.firmName, id, crd]
+		.map((value) => String(value || '').trim())
+		.filter(Boolean)
+		.join(' ');
+}
+
+export function nodeMatchesClickRevealKeyword(
+	node: { id?: unknown; label?: unknown; name?: unknown; firmName?: unknown; crd?: unknown } | null | undefined,
+	keywords: string[] | string | null | undefined,
+	strict = false,
+): boolean {
+	const tags = parseClickRevealKeywordTags(keywords);
+	if (!tags.length) return true;
+	if (!node) return false;
+	return matchesClickRevealKeywords(nodeClickRevealHaystack(node), tags, strict);
+}
+
+export function connectionMatchesClickRevealKeyword(
+	connection: any,
+	keywords: string[] | string | null | undefined,
+	strict = false,
+): boolean {
+	const tags = parseClickRevealKeywordTags(keywords);
+	if (!tags.length) return true;
+	return matchesClickRevealKeywords(connectionClickRevealHaystack(connection), tags, strict);
+}
+
+/** @deprecated Prefer parseClickRevealKeywordTags / matchesClickRevealKeywords. */
+export function parseClickRevealKeywordTokens(keyword: string | null | undefined): string[] {
+	return tokenizeClickRevealPhrase(String(keyword || ''));
 }
 
 /** Apply config onto #finra-app dataset so non-React graph code can read it. */
@@ -191,7 +280,10 @@ export function syncGraphSearchClickConfigToDom(config: GraphSearchClickConfig, 
 	el.dataset.fgSearchIncludeInactive = normalized.includeInactive ? 'true' : 'false';
 	el.dataset.fgClickFirmLimit = String(normalized.firmRevealLimit);
 	el.dataset.fgClickFirmPrevious = normalized.firmRevealPrevious ? 'true' : 'false';
-	el.dataset.fgClickKeyword = normalized.clickRevealKeyword;
+	el.dataset.fgClickKeywords = JSON.stringify(normalized.clickRevealKeywords);
+	el.dataset.fgClickStrict = normalized.clickRevealStrict ? 'true' : 'false';
+	// Legacy single-string dataset for older readers.
+	el.dataset.fgClickKeyword = normalized.clickRevealKeywords.join(', ');
 	delete el.dataset.fgClickPeoplePrevious;
 }
 
@@ -199,11 +291,22 @@ export function readGraphSearchClickConfigFromDom(root: HTMLElement | null = nul
 	if (typeof document === 'undefined') return { ...DEFAULT_GRAPH_SEARCH_CLICK_CONFIG };
 	const el = root || document.getElementById('finra-app');
 	if (!el?.dataset) return loadGraphSearchClickConfig();
+	let keywords: unknown = el.dataset.fgClickKeywords;
+	if (typeof keywords === 'string' && keywords.trim().startsWith('[')) {
+		try {
+			keywords = JSON.parse(keywords);
+		} catch {
+			keywords = el.dataset.fgClickKeyword || '';
+		}
+	} else {
+		keywords = el.dataset.fgClickKeyword || '';
+	}
 	return normalizeGraphSearchClickConfig({
 		searchScope: el.dataset.fgSearchScope as GraphSearchScope,
 		includeInactive: el.dataset.fgSearchIncludeInactive === 'true',
 		firmRevealLimit: Number(el.dataset.fgClickFirmLimit),
 		firmRevealPrevious: el.dataset.fgClickFirmPrevious === 'true',
-		clickRevealKeyword: el.dataset.fgClickKeyword || '',
+		clickRevealKeywords: keywords as string[],
+		clickRevealStrict: el.dataset.fgClickStrict === 'true',
 	});
 }

@@ -7,7 +7,8 @@ export type E2ESearchClickConfig = {
 	includeInactive?: boolean;
 	firmRevealLimit?: number;
 	firmRevealPrevious?: boolean;
-	clickRevealKeyword?: string;
+	clickRevealKeywords?: string[];
+	clickRevealStrict?: boolean;
 };
 
 /** Clear persisted search/click prefs so tests start from defaults. */
@@ -51,8 +52,21 @@ export async function setGraphSearchClickConfig(page: Page, patch: E2ESearchClic
 		if (patch.firmRevealPrevious) await box.check();
 		else await box.uncheck();
 	}
-	if (typeof patch.clickRevealKeyword === 'string') {
-		await page.locator('#fg-click-keyword').fill(patch.clickRevealKeyword);
+	if (Array.isArray(patch.clickRevealKeywords)) {
+		// Clear existing chips then add each tag via Enter.
+		const removeButtons = panel.locator('.fg-click-keyword-chip-remove');
+		while ((await removeButtons.count()) > 0) {
+			await removeButtons.first().click();
+		}
+		for (const tag of patch.clickRevealKeywords) {
+			await page.locator('#fg-click-keyword').fill(tag);
+			await page.locator('#fg-click-keyword').press('Enter');
+		}
+	}
+	if (typeof patch.clickRevealStrict === 'boolean') {
+		const box = page.locator('#fg-click-keyword-strict');
+		if (patch.clickRevealStrict) await box.check();
+		else await box.uncheck();
 	}
 
 	if (patch.searchScope) {

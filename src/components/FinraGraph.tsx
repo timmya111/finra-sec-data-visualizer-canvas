@@ -20,6 +20,7 @@ import {
 	loadGraphSearchClickConfig,
 	normalizeFirmRevealLimit,
 	normalizeGraphSearchClickConfig,
+	parseClickRevealKeywordTags,
 	saveGraphSearchClickConfig,
 	syncGraphSearchClickConfigToDom,
 	type GraphSearchClickConfig,
@@ -318,6 +319,7 @@ export default function FinraGraph() {
 	const [browserPathname, setBrowserPathname] = useState('');
 	const [fetchQuery, setFetchQuery] = useState('');
 	const [searchClickConfig, setSearchClickConfig] = useState<GraphSearchClickConfig>(DEFAULT_GRAPH_SEARCH_CLICK_CONFIG);
+	const [clickKeywordDraft, setClickKeywordDraft] = useState('');
 	const [isSearchConfigOpen, setIsSearchConfigOpen] = useState(false);
 	const [isFindBarOpen, setIsFindBarOpen] = useState(false);
 	const [findQuery, setFindQuery] = useState('');
@@ -440,6 +442,16 @@ export default function FinraGraph() {
 	const updateSearchClickConfig = useCallback((patch: Partial<GraphSearchClickConfig>) => {
 		setSearchClickConfig((prev) => normalizeGraphSearchClickConfig({ ...prev, ...patch }));
 	}, []);
+
+	const commitClickKeywordDraft = useCallback(() => {
+		const newTags = parseClickRevealKeywordTags(clickKeywordDraft);
+		if (!newTags.length) return false;
+		updateSearchClickConfig({
+			clickRevealKeywords: [...searchClickConfig.clickRevealKeywords, ...newTags],
+		});
+		setClickKeywordDraft('');
+		return true;
+	}, [clickKeywordDraft, searchClickConfig.clickRevealKeywords, updateSearchClickConfig]);
 
 	// Persist sticky query prefs (disable_analytics, safe_gpu) and keep them on the URL
 	// across client navigations / refresh — same machine only via localStorage.
@@ -1280,17 +1292,81 @@ export default function FinraGraph() {
 														/>
 														<span>Previous connections</span>
 													</label>
-													<label className='fg-search-config-field'>
+													<div className='fg-search-config-field'>
 														<span>Keyword filter</span>
+														<div
+															id='fg-click-keyword-tags'
+															className='fg-click-keyword-tags'
+															role='group'
+															aria-label='Firm click keyword tags'>
+															{searchClickConfig.clickRevealKeywords.map((tag) => (
+																<span key={tag} className='fg-click-keyword-chip'>
+																	{tag}
+																	<button
+																		type='button'
+																		className='fg-click-keyword-chip-remove'
+																		aria-label={`Remove keyword ${tag}`}
+																		onClick={() =>
+																			updateSearchClickConfig({
+																				clickRevealKeywords: searchClickConfig.clickRevealKeywords.filter((t) => t !== tag),
+																			})
+																		}>
+																		×
+																	</button>
+																</span>
+															))}
+															<input
+																id='fg-click-keyword'
+																type='text'
+																value={clickKeywordDraft}
+																placeholder={
+																	searchClickConfig.clickRevealKeywords.length ?
+																		'Add another keyword…'
+																	:	'name / CRD, Enter to add'
+																}
+																autoComplete='off'
+																spellCheck={false}
+																onChange={(e) => setClickKeywordDraft(e.target.value)}
+																onPaste={(e) => {
+																	const pasted = e.clipboardData.getData('text');
+																	if (!pasted.includes(',')) return;
+																	e.preventDefault();
+																	const newTags = parseClickRevealKeywordTags(pasted);
+																	if (!newTags.length) return;
+																	updateSearchClickConfig({
+																		clickRevealKeywords: [...searchClickConfig.clickRevealKeywords, ...newTags],
+																	});
+																}}
+																onKeyDown={(e) => {
+																	if (e.key === 'Enter' || e.key === ',') {
+																		e.preventDefault();
+																		commitClickKeywordDraft();
+																	} else if (
+																		e.key === 'Backspace' &&
+																		!clickKeywordDraft &&
+																		searchClickConfig.clickRevealKeywords.length > 0
+																	) {
+																		updateSearchClickConfig({
+																			clickRevealKeywords: searchClickConfig.clickRevealKeywords.slice(0, -1),
+																		});
+																	}
+																}}
+																onBlur={() => {
+																	commitClickKeywordDraft();
+																}}
+															/>
+														</div>
+													</div>
+													<label
+														className='fg-search-config-option fg-search-config-option--check'
+														title='Strict: tag must appear as an exact phrase in the name. Unchecked uses fuzzy token matching.'>
 														<input
-															id='fg-click-keyword'
-															type='search'
-															value={searchClickConfig.clickRevealKeyword}
-															placeholder='only reveal matching names/CRDs'
-															autoComplete='off'
-															spellCheck={false}
-															onChange={(e) => updateSearchClickConfig({ clickRevealKeyword: e.target.value })}
+															id='fg-click-keyword-strict'
+															type='checkbox'
+															checked={searchClickConfig.clickRevealStrict}
+															onChange={(e) => updateSearchClickConfig({ clickRevealStrict: e.target.checked })}
 														/>
+														<span>Strict match</span>
 													</label>
 												</div>
 											</div>
