@@ -1203,7 +1203,37 @@ function writeCachedNewCrds(entries: NewCrdEntry[]) {
 			}),
 		);
 	} catch {
-		// ignore storage failures
+		// ignore storage failures (quota / private mode)
+	}
+}
+
+/** Drop regenerable dashboard caches so tiny prefs (panel open/closed) can still persist. */
+function freeDashboardLocalStoragePressure() {
+	if (typeof window === 'undefined') return;
+	try {
+		window.localStorage.removeItem(NEW_CRD_CLIENT_CACHE_KEY);
+	} catch {
+		/* ignore */
+	}
+}
+
+function safeDashboardLocalStorageSetItem(key: string, value: string) {
+	if (typeof window === 'undefined') return false;
+	try {
+		window.localStorage.setItem(key, value);
+		return true;
+	} catch (error) {
+		const isQuota =
+			(error instanceof DOMException && (error.name === 'QuotaExceededError' || error.code === 22)) ||
+			(error && typeof error === 'object' && 'name' in error && (error as { name?: string }).name === 'QuotaExceededError');
+		if (!isQuota) return false;
+		freeDashboardLocalStoragePressure();
+		try {
+			window.localStorage.setItem(key, value);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 }
 
@@ -2369,7 +2399,9 @@ function DashboardPageInner() {
 	const toggleNewCrdsOpen = useCallback(() => {
 		setNewCrdsOpen((prev) => {
 			const next = !prev;
-			localStorage.setItem('finra_new_crds_state', next ? 'open' : 'closed');
+			// Keep side-effect out of a throwing path: a full localStorage used to crash
+			// Hide/Show Panel with QuotaExceededError on this tiny open/closed write.
+			safeDashboardLocalStorageSetItem('finra_new_crds_state', next ? 'open' : 'closed');
 			return next;
 		});
 	}, []);

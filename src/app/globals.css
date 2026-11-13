@@ -2080,9 +2080,16 @@ a,
 }
 
 @media (max-width: 720px) {
+	/* Anchor to .fg-fetch (position:relative) so the panel spans the search row
+	   instead of hanging left from the narrow toggle and clipping off-screen. */
+	.fg-search-config {
+		position: static;
+	}
 	.fg-search-config-panel {
-		left: auto;
+		left: 0;
 		right: 0;
+		width: auto;
+		max-width: none;
 	}
 }
 
