@@ -67,6 +67,9 @@ import {
 	shouldRenderNodeSelected,
 	selectHopHighlightRoots,
 	shouldSuppressFirmSelectionPersonLink,
+	isFirmHopHighlightRootId,
+	hasClearableHopHighlightSelections,
+	computeNodeLargeLabelEnabled,
 	MAX_HOP_HIGHLIGHT_ROOTS,
 	rebuildLayoutLinkIndexes,
 	layoutHasLinkIdentity,
@@ -1897,6 +1900,56 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(shouldSuppressFirmSelectionPersonLink({ ...base, hoveredNodeId: 'person:2' })).toBe(false);
 		expect(shouldSuppressFirmSelectionPersonLink({ ...base, isSelection: false, hoveredNodeId: null })).toBe(false);
 		expect(shouldSuppressFirmSelectionPersonLink({ ...base, entryGroup: 'individual', hoveredNodeId: null })).toBe(false);
+	});
+
+	it('computeNodeLargeLabelEnabled requires log membership so a second person is not already Hide', () => {
+		expect(
+			computeNodeLargeLabelEnabled('person:2', {
+				selectionLogBold: true,
+				selectedLogIds: ['person:1'],
+				clearedLabelIds: [],
+			}),
+		).toBe(false);
+		expect(
+			computeNodeLargeLabelEnabled('person:2', {
+				selectionLogBold: true,
+				selectedLogIds: ['person:1', 'person:2'],
+				clearedLabelIds: ['person:2'],
+			}),
+		).toBe(false);
+		expect(
+			computeNodeLargeLabelEnabled('person:2', {
+				selectionLogBold: true,
+				selectedLogIds: ['person:1', 'person:2'],
+				clearedLabelIds: [],
+			}),
+		).toBe(true);
+		expect(
+			computeNodeLargeLabelEnabled('person:2', {
+				selectionLogBold: false,
+				selectedLogIds: ['person:2'],
+				clearedLabelIds: [],
+			}),
+		).toBe(false);
+	});
+
+	it('hasClearableHopHighlightSelections ignores firm-only roots for Clear Highlight', () => {
+		expect(isFirmHopHighlightRootId('firm:250')).toBe(true);
+		expect(isFirmHopHighlightRootId('person:123')).toBe(false);
+		expect(hasClearableHopHighlightSelections([{ id: 'firm:250', hops: 1 } as any])).toBe(false);
+		expect(hasClearableHopHighlightSelections([{ id: 'person:123', hops: 1 } as any])).toBe(true);
+		expect(
+			hasClearableHopHighlightSelections([
+				{ id: 'firm:250', hops: 1 } as any,
+				{ id: 'person:123', hops: 1 } as any,
+			]),
+		).toBe(true);
+		const nodeById = new Map([
+			['legacy-firm', { id: 'legacy-firm', group: 'firm' }],
+			['legacy-person', { id: 'legacy-person', group: 'individual' }],
+		]);
+		expect(hasClearableHopHighlightSelections([{ id: 'legacy-firm' }], nodeById)).toBe(false);
+		expect(hasClearableHopHighlightSelections([{ id: 'legacy-person' }], nodeById)).toBe(true);
 	});
 
 	it('selectHopHighlightRoots keeps only the most recent selection roots within the hop BFS cap', () => {

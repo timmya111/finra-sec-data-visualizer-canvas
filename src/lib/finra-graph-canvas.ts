@@ -309,12 +309,21 @@ function onCanvasPointerMove(e: PointerEvent) {
 			if (canvas) {
 				canvas.style.cursor = hit ? 'pointer' : 'default';
 			}
+			if (typeof window !== 'undefined') {
+				if (newHover) {
+					window.dispatchEvent(new CustomEvent('finra:overlay-hover', { detail: { id: newHover } }));
+				} else {
+					window.dispatchEvent(new CustomEvent('finra:overlay-hover-end'));
+				}
+			}
 			drawCanvasFrame(currentNodes, currentLinks, currentTransform, currentOpts);
 		}
 	});
 }
 
 function onCanvasPointerDown(e: PointerEvent) {
+	// Left button only — right-click opens the node context menu instead of dragging.
+	if (e.button !== 0) return;
 	const hit = getHitNode(e.clientX, e.clientY);
 	if (!hit || !canvas) return;
 	hideCanvasTooltip();
@@ -334,6 +343,25 @@ function onCanvasPointerDown(e: PointerEvent) {
 	canvas.setPointerCapture?.(e.pointerId);
 	canvas.style.cursor = 'grabbing';
 	e.preventDefault();
+}
+
+function onCanvasContextMenu(e: MouseEvent) {
+	const hit = getHitNode(e.clientX, e.clientY);
+	if (!hit?.id) return;
+	e.preventDefault();
+	e.stopPropagation();
+	hideCanvasTooltip();
+	if (typeof window === 'undefined') return;
+	window.dispatchEvent(
+		new CustomEvent('finra:node-context-menu', {
+			detail: {
+				nodeId: String(hit.id),
+				clientX: e.clientX,
+				clientY: e.clientY,
+				source: 'canvas',
+			},
+		}),
+	);
 }
 
 function endCanvasDrag(e: PointerEvent) {
@@ -387,7 +415,10 @@ export function createCanvasOverlay(parent: HTMLElement) {
 	canvas.style.transformOrigin = '0 0';
 	canvas.tabIndex = 0;
 	canvas.setAttribute('role', 'application');
-	canvas.setAttribute('aria-label', 'Network graph canvas. Use arrow keys to move focus between nodes, Enter to open.');
+	canvas.setAttribute(
+		'aria-label',
+		'Network graph canvas. Use arrow keys to move focus between nodes, Enter to open, Ctrl+Enter or right-click for the node menu.',
+	);
 	// Avoid the browser's thick focus ring around the whole canvas.
 	canvas.style.outline = 'none';
 	canvas.style.boxShadow = 'none';
@@ -401,10 +432,13 @@ export function createCanvasOverlay(parent: HTMLElement) {
 	canvas.addEventListener('pointerup', endCanvasDrag);
 	canvas.addEventListener('pointercancel', endCanvasDrag);
 	canvas.addEventListener('pointerleave', onCanvasPointerLeave);
+	canvas.addEventListener('contextmenu', onCanvasContextMenu);
 	return {
 		drawFrame: drawCanvasFrame,
 		resize,
 		destroy: destroyCanvas,
+		getHoverNodeId: () => hoverNodeId,
+		hitNodeAt: (clientX: number, clientY: number) => getHitNode(clientX, clientY),
 		/** Last-draw label hit boxes (ids + screen bounds) for tests/debug. */
 		getLabelHitBounds: () =>
 			canvasLabelHitBounds.map(({ node, x0, y0, x1, y1 }) => ({
@@ -427,6 +461,7 @@ function destroyCanvas() {
 		canvas.removeEventListener('pointerup', endCanvasDrag);
 		canvas.removeEventListener('pointercancel', endCanvasDrag);
 		canvas.removeEventListener('pointerleave', onCanvasPointerLeave);
+		canvas.removeEventListener('contextmenu', onCanvasContextMenu);
 		// Leave the host <canvas id="fg-canvas"> in the DOM (React owns it).
 	}
 	activeCanvasDrag = null;
@@ -1808,4 +1843,9 @@ function destroy() {
 let onNodeClickCallback: ((event: any, node: any) => void) | null = null;
 export function setOnNodeClickCallback(cb: (event: any, node: any) => void) {
 	onNodeClickCallback = cb;
+}
+
+/** Current canvas hover target (local to the canvas overlay). */
+export function getCanvasHoverNodeId() {
+	return hoverNodeId;
 }

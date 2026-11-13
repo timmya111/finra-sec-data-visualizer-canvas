@@ -1,6 +1,114 @@
 {
   "firms": [
     {
+      "id": 3801,
+      "name": "WOOD GUNDY, INCORPORATED"
+    },
+    {
+      "id": 1481,
+      "name": "LAIDLAW ANSBACHER INCORPORATED"
+    },
+    {
+      "id": 4425,
+      "name": "BRAULT, STAFFORD & CO., INC."
+    },
+    {
+      "id": 13098,
+      "name": "MCKINLEY ALLSOPP, INC."
+    },
+    {
+      "id": 31170,
+      "name": "EATON PARTNERS, LLC"
+    },
+    {
+      "id": 127422,
+      "name": "MOORELAND PARTNERS LLC"
+    },
+    {
+      "id": 104156,
+      "name": "MILLER BUCKFIRE & CO., LLC"
+    },
+    {
+      "id": 111861,
+      "name": "LWI FINANCIAL INC."
+    },
+    {
+      "id": 46337,
+      "name": "LORING WARD SECURITIES INC."
+    },
+    {
+      "id": 103747,
+      "name": "AW SECURITIES"
+    },
+    {
+      "id": 140800,
+      "name": "PARALLEL ADVISORS, LLC"
+    },
+    {
+      "id": 104595,
+      "name": "COLUMBUS INVESTMENT ADVISORY INC."
+    },
+    {
+      "id": 8174,
+      "name": "UBS FINANCIAL SERVICES INC."
+    },
+    {
+      "id": 7556,
+      "name": "MORGAN STANLEY DW INC."
+    },
+    {
+      "id": 8209,
+      "name": "MORGAN STANLEY & CO. INCORPORATED"
+    },
+    {
+      "id": 47788,
+      "name": "BETTERMENT SECURITIES"
+    },
+    {
+      "id": 28832,
+      "name": "JANUS HENDERSON DISTRIBUTORS"
+    },
+    {
+      "id": 104555,
+      "name": "STRATEGIC ADVISERS, INC."
+    },
+    {
+      "id": 7870,
+      "name": "TD WATERHOUSE INVESTOR SERVICES, INC."
+    },
+    {
+      "id": 6580,
+      "name": "HARRIS INVESTORLINE"
+    },
+    {
+      "id": 6362,
+      "name": "HARRIS INVESTORLINE INC."
+    },
+    {
+      "id": 5167,
+      "name": "NYLIFE SECURITIES INC."
+    },
+    {
+      "id": 131226,
+      "name": "STERN CAPITAL LLC"
+    },
+    {
+      "id": 131489,
+      "name": "TROUT CAPITAL LLC"
+    },
+    {
+      "id": 141892,
+      "name": "CGS - CIMB SECURITIES (USA), INC."
+    },
+    {
+      "id": 288632,
+      "name": "TORREYA CAPITAL, LLC"
+    },
+    {
+      "id": 101020,
+      "name": "CASCADIA CAPITAL, LLC"
+    },
+    {
       "id": 134416,
       "name": "BRADESCO GLOBAL ADVISORS"
     },
@@ -191,10 +299,6 @@
     {
       "id": 6627,
       "name": "EQUICO SECURITIES, INC."
-    },
-    {
-      "id": 8174,
-      "name": "PAINEWEBBER INCORPORATED"
     },
     {
       "id": 7616,
@@ -435,10 +539,6 @@
     {
       "id": 7059,
       "name": "CITIGROUP GLOBAL MARKETS INC."
-    },
-    {
-      "id": 8209,
-      "name": "MORGAN STANLEY & CO. LLC"
     },
     {
       "id": 135112,
@@ -923,10 +1023,6 @@
     {
       "id": 7702,
       "name": "BROADCHILD SECURITIES CORP."
-    },
-    {
-      "id": 1481,
-      "name": "KUHNS BROTHERS & LAIDLAW, INC."
     },
     {
       "id": 19018,
@@ -1749,10 +1845,6 @@
       "name": "GILFORD SECURITIES INCORPORATED"
     },
     {
-      "id": 7556,
-      "name": "DEAN WITTER REYNOLDS INC."
-    },
-    {
       "id": 5685,
       "name": "PRUCO SECURITIES CORPORATION"
     },
@@ -1861,10 +1953,6 @@
       "name": "THE MAIN STREET GROUP"
     },
     {
-      "id": 104555,
-      "name": "STRATEGIC ADVISERS LLC"
-    },
-    {
       "id": 30343,
       "name": "FIMCO SECURITIES GROUP, INC."
     },
@@ -1879,10 +1967,6 @@
     {
       "id": 6940,
       "name": "TD WEALTH MANAGEMENT SERVICES INC."
-    },
-    {
-      "id": 7870,
-      "name": "TD AMERITRADE, INC."
     },
     {
       "id": 866,
@@ -2167,10 +2251,6 @@
     {
       "id": 112308,
       "name": "CENTURY MANAGEMENT FINANCIAL ADVISORS"
-    },
-    {
-      "id": 5167,
-      "name": "NYLIFE SECURITIES LLC"
     },
     {
       "id": 104487,
@@ -4257,10 +4337,6 @@
       "name": "DAVID ALLSOPP & ASSOCIATES, INC."
     },
     {
-      "id": 13098,
-      "name": "MCKINLEY SQUARE, ALLSOPP SECURITIES INC."
-    },
-    {
       "id": 7656,
       "name": "PRESCOTT, BALL & TURBEN, INC."
     },
@@ -4395,10 +4471,6 @@
     {
       "id": 104097,
       "name": "NORTH WOODWARD FINANCIAL CORP."
-    },
-    {
-      "id": 47788,
-      "name": "PARK HILL CAPITAL, INC."
     },
     {
       "id": 46003,
@@ -8946,6 +9018,54 @@
     }
   ],
   "individuals": [
+    {
+      "id": 1170408,
+      "name": "MARY CARLTON JOHNSTONE"
+    },
+    {
+      "id": 1070502,
+      "name": "Carla Beth Minckley"
+    },
+    {
+      "id": 5020667,
+      "name": "Carl Scott Lamb"
+    },
+    {
+      "id": 1934808,
+      "name": "H CARL JUCKETT"
+    },
+    {
+      "id": 4811434,
+      "name": "CHARLES NICHOLS"
+    },
+    {
+      "id": 6403083,
+      "name": "DENNIS WILLARD HOWARD"
+    },
+    {
+      "id": 4026128,
+      "name": "JAMES CHARLES WOODS"
+    },
+    {
+      "id": 6744921,
+      "name": "Ashley Bloom"
+    },
+    {
+      "id": 1837514,
+      "name": "HALE HALASY"
+    },
+    {
+      "id": 5834716,
+      "name": "Elizabeth E O'Hanlon"
+    },
+    {
+      "id": 2662524,
+      "name": "Kristin Michele Johnson"
+    },
+    {
+      "id": 3254042,
+      "name": "David Chubak"
+    },
     {
       "id": 5885341,
       "name": "Maria Estibaliz IncerRomeo"

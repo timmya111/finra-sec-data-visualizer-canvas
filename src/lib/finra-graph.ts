@@ -53,7 +53,13 @@ import { isValidLocationStateFilter, isZipLikeLocationQuery, normalizeLocationSt
 import { buildParentFirmSummaryLinks } from './finra-graph/externalLinks';
 import { resolveIndividualSourceDetail, hasIndividualSourceCoverage } from './sourceTruth';
 import { normalizeNodeRouteId, buildNodeRouteHref, buildNodeRoutePath } from './node-route';
-import { requestRender, setOnNodeClickCallback, createCanvasOverlay, syncCanvasFocusTooltip } from './finra-graph-canvas';
+import {
+	requestRender,
+	setOnNodeClickCallback,
+	createCanvasOverlay,
+	syncCanvasFocusTooltip,
+	getCanvasHoverNodeId,
+} from './finra-graph-canvas';
 import {
 	getFilterEnabled,
 	getFilterTags,
@@ -3271,6 +3277,8 @@ const FIND_NEXT_EVENT = 'finra:find-next';
 const FIND_MOVE_EVENT = 'finra:find-move';
 const FIND_CLOSE_EVENT = 'finra:find-close';
 const FIND_STATE_EVENT = 'finra:find-state';
+const NODE_CONTEXT_MENU_EVENT = 'finra:node-context-menu';
+const NODE_CONTEXT_MENU_SELECTOR = '.fg-node-context-menu';
 const MOBILE_SIDEBAR_COLLAPSE_REQUEST_EVENT = 'finra:mobile-sidebar-collapse-request';
 const MOBILE_FIND_CLOSE_REQUEST_EVENT = 'finra:mobile-find-close-request';
 const TRACE_LOG_GUARD_WARNING_PREFIX = '[finra-graph] Trace with Log guard:';
@@ -3815,6 +3823,221 @@ function isSelectionLogEntryBold(nodeId: string | null | undefined) {
 	const id = String(nodeId || '').trim();
 	if (!id || !isSelectionLogBold) return false;
 	return !clearedSelectionLogLabelNodeIds.has(id);
+}
+
+/**
+ * Large-label menu/graph state for a CRD.
+ * Requires Log Bold on, membership in the selection log, and not cleared.
+ * Unlogged nodes must read as off — otherwise the second person menu shows Hide.
+ */
+export function computeNodeLargeLabelEnabled(
+	nodeId: string | null | undefined,
+	options: {
+		selectionLogBold?: boolean;
+		selectedLogIds?: Iterable<string | null | undefined> | null;
+		clearedLabelIds?: Iterable<string | null | undefined> | null;
+	} = {},
+) {
+	const id = String(nodeId || '').trim();
+	if (!id || !options.selectionLogBold) return false;
+	const selected = new Set(
+		Array.from(options.selectedLogIds || [])
+			.map((entryId) => String(entryId || '').trim())
+			.filter(Boolean),
+	);
+	if (!selected.has(id)) return false;
+	const cleared = new Set(
+		Array.from(options.clearedLabelIds || [])
+			.map((entryId) => String(entryId || '').trim())
+			.filter(Boolean),
+	);
+	return !cleared.has(id);
+}
+
+/** True when this CRD currently shows a large Log Bold label on the graph. */
+export function isNodeLargeLabelEnabled(nodeId: string | null | undefined) {
+	return computeNodeLargeLabelEnabled(nodeId, {
+		selectionLogBold: isSelectionLogBold,
+		selectedLogIds: selectedNodesLog.map((entry) => entry?.id),
+		clearedLabelIds: clearedSelectionLogLabelNodeIds,
+	});
+}
+
+/**
+ * Turn a CRD's large graph label on/off without selecting the node.
+ * Adds the node to the selection log when needed and enables Log Bold if off.
+ */
+export function setNodeLargeLabelEnabled(node: any, enabled: boolean) {
+	if (!node?.id) return false;
+	const id = String(node.id || '').trim();
+	if (!id) return false;
+
+	const preferredLabel = String(getPreferredNodeLabel(node) || node?.label || '').trim();
+	const group = String(node?.group || '').trim();
+	if (isGenericOrPlaceholderLabel(preferredLabel, group || undefined)) return false;
+
+	const currentlyEnabled = isNodeLargeLabelEnabled(id);
+
+	if (!enabled) {
+		if (!currentlyEnabled) return false;
+		clearedSelectionLogLabelNodeIds.add(id);
+		forgetSelectionLogBoldId(id);
+	} else {
+		if (currentlyEnabled) return true;
+		// Quiet log membership — no selectNode / route / expand side effects.
+		// skipBold keeps this CRD cleared until we explicitly turn Bold on below,
+		// so enabling Log Bold for the first time does not light every prior row.
+		addToSelectionLog(node, { skipBold: true, skipPaint: true, skipPersist: true });
+		if (!isSelectionLogBold) {
+			isSelectionLogBold = true;
+			selectedNodesLog.forEach((entry) => {
+				const entryId = String(entry?.id || '').trim();
+				if (!entryId) return;
+				if (rememberedSelectionLogBoldNodeIds.has(entryId) || entryId === id) {
+					clearedSelectionLogLabelNodeIds.delete(entryId);
+				} else {
+					clearedSelectionLogLabelNodeIds.add(entryId);
+				}
+			});
+			saveSelectionLogBoldPreference();
+		}
+		clearedSelectionLogLabelNodeIds.delete(id);
+		rememberSelectionLogBoldId(id);
+	}
+
+	saveClearedSelectionLogLabelsPreference();
+	invalidateSelectionLogLabelNodeIdCache();
+	saveSelectionLog();
+	saveSession();
+	updateSelectionLogUI();
+	syncSelectionLogActionButtonStates();
+	reapplySelectionState();
+	syncTraceLabelPresentation();
+	syncSelectionLogAuxiliaryRenderers();
+	scheduleGraphTickPositions(null, null, null);
+	return true;
+}
+
+export function toggleNodeLargeLabel(node: any) {
+	if (!node?.id) return false;
+	const id = String(node.id || '').trim();
+	const nextEnabled = !isNodeLargeLabelEnabled(id);
+	return setNodeLargeLabelEnabled(node, nextEnabled);
+}
+
+function resolveContextMenuNodeId(preferredId?: string | null) {
+	// Prefer the node under the cursor, then keyboard focus. Do not fall back to
+	// the selected node — Ctrl+Enter should target hover/focus only.
+	const candidates = [
+		preferredId,
+		typeof getCanvasHoverNodeId === 'function' ? getCanvasHoverNodeId() : null,
+		globalState.hoveredNodeId,
+		globalState.focusedNodeId,
+	];
+	for (const candidate of candidates) {
+		const id = String(candidate || '').trim();
+		if (!id) continue;
+		if (getNodeById(id)) return id;
+	}
+	return null;
+}
+
+function hideNodeContextMenu() {
+	document.querySelectorAll(NODE_CONTEXT_MENU_SELECTOR).forEach((el) => el.remove());
+}
+
+function handleNodeContextMenuOutsidePointer(event: PointerEvent) {
+	const menu = document.querySelector(NODE_CONTEXT_MENU_SELECTOR);
+	if (!menu) return;
+	const target = event.target instanceof Element ? event.target : null;
+	if (target?.closest(NODE_CONTEXT_MENU_SELECTOR)) return;
+	hideNodeContextMenu();
+}
+
+function handleNodeContextMenuKeydown(event: KeyboardEvent) {
+	const menuOpen = Boolean(document.querySelector(NODE_CONTEXT_MENU_SELECTOR));
+	if (event.key === 'Escape' && menuOpen) {
+		event.preventDefault();
+		event.stopPropagation();
+		hideNodeContextMenu();
+		return;
+	}
+
+	// Ctrl/Cmd+Enter on a focused/hovered graph node opens the context menu.
+	const isEnter = event.key === 'Enter' || event.code === 'Enter';
+	if (!isEnter || !(event.ctrlKey || event.metaKey)) return;
+	if (event.defaultPrevented) return;
+	const target = event.target as Element | null;
+	if (target?.closest('input,textarea,select') || (target instanceof HTMLElement && target.isContentEditable)) return;
+	// SVG node keydown handler already covers focused SVG nodes.
+	if (target?.closest?.('.fg-node')) return;
+
+	const nodeId = resolveContextMenuNodeId(null);
+	if (!nodeId) return;
+	event.preventDefault();
+	event.stopPropagation();
+	openNodeContextMenuForId(nodeId);
+}
+
+function showNodeContextMenu(options: { nodeId: string; clientX: number; clientY: number }) {
+	const nodeId = String(options.nodeId || '').trim();
+	const node = getNodeById(nodeId);
+	if (!node) return;
+	hideNodeContextMenu();
+
+	const menu = document.createElement('div');
+	menu.className = 'fg-node-context-menu';
+	menu.setAttribute('role', 'menu');
+	menu.dataset.nodeId = nodeId;
+
+	const largeOn = isNodeLargeLabelEnabled(nodeId);
+	const labelBtn = document.createElement('button');
+	labelBtn.type = 'button';
+	labelBtn.className = 'fg-node-context-menu__item';
+	labelBtn.setAttribute('role', 'menuitem');
+	labelBtn.dataset.fgNodeContextAction = 'toggle-large-label';
+	labelBtn.dataset.nodeId = nodeId;
+	labelBtn.textContent = largeOn ? 'Hide large label' : 'Show large label';
+	labelBtn.title = largeOn ?
+		'Shrink this CRD label on the graph'
+	:	'Show a large label for this CRD without selecting it';
+	labelBtn.addEventListener('click', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+		// Re-resolve at click time so the action always targets this menu's CRD.
+		const liveNode = getNodeById(nodeId) || node;
+		toggleNodeLargeLabel(liveNode);
+		hideNodeContextMenu();
+	});
+	menu.appendChild(labelBtn);
+
+	const pad = 8;
+	const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+	const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+	menu.style.left = `${Math.max(pad, Math.min(options.clientX, Math.max(pad, vw - 220)))}px`;
+	menu.style.top = `${Math.max(pad, Math.min(options.clientY, Math.max(pad, vh - 80)))}px`;
+	document.body.appendChild(menu);
+
+	// Keep the menu on-screen after layout.
+	requestAnimationFrame(() => {
+		const rect = menu.getBoundingClientRect();
+		if (!rect.width || !rect.height) return;
+		let left = rect.left;
+		let top = rect.top;
+		if (rect.right > vw - pad) left = Math.max(pad, vw - pad - rect.width);
+		if (rect.bottom > vh - pad) top = Math.max(pad, vh - pad - rect.height);
+		menu.style.left = `${left}px`;
+		menu.style.top = `${top}px`;
+	});
+}
+
+function openNodeContextMenuForId(nodeId: string | null | undefined, clientX?: number, clientY?: number) {
+	const id = resolveContextMenuNodeId(nodeId);
+	if (!id) return false;
+	const x = Number.isFinite(clientX) ? Number(clientX) : Math.round((window.innerWidth || 0) / 2);
+	const y = Number.isFinite(clientY) ? Number(clientY) : Math.round((window.innerHeight || 0) / 2);
+	showNodeContextMenu({ nodeId: id, clientX: x, clientY: y });
+	return true;
 }
 
 function applySelectionLogLabelState({
@@ -6093,9 +6316,37 @@ function syncClearNonLogButtonState() {
 	}
 }
 
+/** Firm selection does not create hop/line emphasis (hover-only), so it must not arm Clear Highlight. */
+export function isFirmHopHighlightRootId(id: string | null | undefined, nodeById?: Map<string, any> | null) {
+	const normalized = String(id || '').trim();
+	if (!normalized) return false;
+	if (normalized.startsWith('firm:')) return true;
+	const node = nodeById?.get(normalized) || null;
+	return node?.group === 'firm' || node?.type === 'firm';
+}
+
+/** True when at least one stored highlight root would produce hop/line emphasis to clear. */
+export function hasClearableHopHighlightSelections(
+	selections: Array<{ id?: string | null } | null | undefined> = [],
+	nodeById?: Map<string, any> | null,
+) {
+	if (!Array.isArray(selections) || selections.length === 0) return false;
+	return selections.some((entry) => {
+		const id = String(entry?.id || '').trim();
+		return Boolean(id) && !isFirmHopHighlightRootId(id, nodeById);
+	});
+}
+
 function syncClearHighlightsButtonState() {
-	// Blue only while hop/line highlights are active. After Clear Highlight, return to default gray.
-	const hasHighlights = Array.isArray(globalState.highlightedSelections) && globalState.highlightedSelections.length > 0;
+	// Blue only while hop/line highlights are active (person roots). Firm selection
+	// does not create hop/line emphasis, so it must not arm Clear Highlight.
+	let layoutNodeById: Map<string, any> | null = null;
+	try {
+		layoutNodeById = ensureLayoutNodeByIdMap();
+	} catch {
+		layoutNodeById = null;
+	}
+	const hasHighlights = hasClearableHopHighlightSelections(globalState.highlightedSelections, layoutNodeById);
 	document.querySelectorAll<HTMLButtonElement>('[data-fg-action="clear-highlights"]').forEach((button) => {
 		button.classList.add('fg-clear-highlights-btn');
 		button.classList.toggle('fg-clear-highlights-btn--active', hasHighlights);
@@ -7261,7 +7512,25 @@ function bindHoverAndFocus(selection) {
 				setFocusedNode(null);
 			})
 			.on('keydown', function (event, d) {
+				// Ctrl/Cmd+Enter opens the label context menu instead of selecting.
+				if ((event?.ctrlKey || event?.metaKey) && (event?.key === 'Enter' || event?.code === 'Enter')) {
+					event.preventDefault?.();
+					event.stopPropagation?.();
+					const rect = typeof this.getBoundingClientRect === 'function' ? this.getBoundingClientRect() : null;
+					openNodeContextMenuForId(
+						d?.id,
+						rect ? rect.left + rect.width / 2 : undefined,
+						rect ? rect.top + rect.height / 2 : undefined,
+					);
+					return;
+				}
 				handleNodeKeyboardActivation(event, d);
+			})
+			.on('contextmenu', function (event, d) {
+				if (!d?.id) return;
+				event.preventDefault?.();
+				event.stopPropagation?.();
+				openNodeContextMenuForId(d.id, event?.clientX, event?.clientY);
 			})
 	);
 }
@@ -9906,6 +10175,15 @@ export function init(
 	document.addEventListener('click', handleSelectionLogClearLabelsOutsideClick);
 	document.addEventListener('click', handleSelectToolOutsideClick);
 	document.addEventListener('click', handleClearNonLogOutsideClick);
+	document.addEventListener('pointerdown', handleNodeContextMenuOutsidePointer, true);
+	document.addEventListener('keydown', handleNodeContextMenuKeydown, true);
+	if (typeof window !== 'undefined' && !(window as any).__fgNodeContextMenuBound) {
+		window.addEventListener(NODE_CONTEXT_MENU_EVENT, ((event: Event) => {
+			const detail = (event as CustomEvent<{ nodeId?: string; clientX?: number; clientY?: number }>).detail || {};
+			openNodeContextMenuForId(detail.nodeId, detail.clientX, detail.clientY);
+		}) as EventListener);
+		(window as any).__fgNodeContextMenuBound = true;
+	}
 	syncSelectToolControlState();
 	bindSelectionLogTemplateActions();
 	// Fetch/search status stays until the close button (#fg-subset-info-pin) is used.

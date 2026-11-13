@@ -6914,6 +6914,53 @@ body.fg-select-to-keep-active .fg-canvas-group {
 	cursor: crosshair !important;
 }
 
+/* Graph node context menu (right-click / Ctrl+Enter) */
+.fg-node-context-menu {
+	position: fixed;
+	z-index: 80;
+	min-width: 180px;
+	padding: 6px;
+	border-radius: 8px;
+	border: 1px solid rgba(15, 23, 42, 0.14);
+	background: #ffffff;
+	box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+	color: #0f172a;
+}
+
+.fg-node-context-menu__item {
+	display: block;
+	width: 100%;
+	margin: 0;
+	padding: 8px 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	font: 13px/1.3 var(--sans);
+	text-align: left;
+	cursor: pointer;
+}
+
+.fg-node-context-menu__item:hover,
+.fg-node-context-menu__item:focus-visible {
+	background: rgba(37, 99, 235, 0.1);
+	color: #1d4ed8;
+	outline: none;
+}
+
+html[data-theme='dark'] .fg-node-context-menu {
+	background: #0f172a;
+	border-color: rgba(148, 163, 184, 0.28);
+	color: #e2e8f0;
+	box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
+}
+
+html[data-theme='dark'] .fg-node-context-menu__item:hover,
+html[data-theme='dark'] .fg-node-context-menu__item:focus-visible {
+	background: rgba(59, 130, 246, 0.22);
+	color: #93c5fd;
+}
+
 /* Clear Labels / Select tool (enabled state matches clear highlight blue) */
 button.fg-clear-labels-control__toggle:not(:disabled),
 .fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled),
