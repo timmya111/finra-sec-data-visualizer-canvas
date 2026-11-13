@@ -218,6 +218,7 @@ test.describe('Header search type toggle (All / People / Firms)', () => {
 		await expect(page.locator('#fg-click-firm-limit')).toBeVisible();
 		await expect(page.locator('#fg-click-keyword')).toBeVisible();
 		await expect(page.locator('#fg-click-keyword-strict')).toBeVisible();
+		await expect(page.locator('#fg-search-strict')).toBeVisible();
 		await expect(page.getByText('Firm click reveal')).toBeVisible();
 		await expect(page.getByText('Previous connections (people)')).toHaveCount(0);
 

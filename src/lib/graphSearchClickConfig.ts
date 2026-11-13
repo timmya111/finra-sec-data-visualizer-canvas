@@ -5,6 +5,12 @@ export type GraphSearchScope = 'all' | 'people' | 'firms';
 export type GraphSearchClickConfig = {
 	searchScope: GraphSearchScope;
 	includeInactive: boolean;
+	/**
+	 * Header Search matching mode.
+	 * false (default) = fuzzy ranking/token match.
+	 * true = only keep hits whose name/CRD contains the query as an exact contiguous phrase.
+	 */
+	searchStrict: boolean;
 	/** Firm click batch size. People clicks are uncapped and unfiltered. */
 	firmRevealLimit: number;
 	/** When true, firm clicks also reveal previous (inactive) roster people. */
@@ -25,6 +31,7 @@ export const DEFAULT_FIRM_REVEAL_LIMIT = 100;
 export const DEFAULT_GRAPH_SEARCH_CLICK_CONFIG: GraphSearchClickConfig = {
 	searchScope: 'people',
 	includeInactive: false,
+	searchStrict: false,
 	firmRevealLimit: DEFAULT_FIRM_REVEAL_LIMIT,
 	firmRevealPrevious: false,
 	clickRevealKeywords: [],
@@ -82,6 +89,7 @@ export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickCon
 	return {
 		searchScope: normalizeGraphSearchScope(base.searchScope),
 		includeInactive: Boolean(base.includeInactive),
+		searchStrict: Boolean(base.searchStrict),
 		firmRevealLimit: normalizeFirmRevealLimit(base.firmRevealLimit),
 		firmRevealPrevious: Boolean(base.firmRevealPrevious),
 		clickRevealKeywords,
@@ -159,11 +167,44 @@ export function searchConfigActivityMode(config: Pick<GraphSearchClickConfig, 's
 	return 'active';
 }
 
-/** Stable key for progressive search continuation (scope + inactive flag). */
-export function graphSearchConfigQueryKeyPart(config: Pick<GraphSearchClickConfig, 'searchScope' | 'includeInactive'>) {
+/** Stable key for progressive search continuation (scope + inactive + strict). */
+export function graphSearchConfigQueryKeyPart(
+	config: Pick<GraphSearchClickConfig, 'searchScope' | 'includeInactive' | 'searchStrict'>,
+) {
 	const scope = normalizeGraphSearchScope(config.searchScope);
 	const inactive = config.includeInactive ? 'inactive' : 'active';
-	return `${scope}:${inactive}`;
+	const strict = config.searchStrict ? 'strict' : 'fuzzy';
+	return `${scope}:${inactive}:${strict}`;
+}
+
+/** Build a searchable name/CRD haystack from a FINRA/SEC search hit. */
+export function searchHitLabelHaystack(hit: any): string {
+	const src = hit?._source || hit || {};
+	const basic = src?.basicInformation && typeof src.basicInformation === 'object' ? src.basicInformation : {};
+	const personLabel = [src?.ind_firstname, src?.ind_middlename, src?.ind_lastname, basic?.firstName, basic?.middleName, basic?.lastName]
+		.filter(Boolean)
+		.join(' ');
+	const firmLabel = String(
+		src?.label || src?.firm_name || src?.firmName || src?.name || basic?.firmName || basic?.name || '',
+	).trim();
+	const crd = String(
+		src?.ind_source_id || src?.ind_crd || src?.firm_id || src?.firm_source_id || src?.firmId || basic?.individualId || basic?.firmId || src?.crd || '',
+	).trim();
+	return [personLabel, firmLabel, src?.label, src?.name, crd].map((value) => String(value || '').trim()).filter(Boolean).join(' ');
+}
+
+/**
+ * When searchStrict is on, require the query as an exact contiguous phrase in the hit name/CRD.
+ * Numeric CRD queries always match on id equality. Empty query always matches.
+ */
+export function searchHitMatchesSearchQuery(hit: any, rawQuery: string, strict: boolean): boolean {
+	const query = String(rawQuery || '').trim();
+	if (!query || !strict) return true;
+	if (/^\d+$/.test(query)) {
+		const haystack = searchHitLabelHaystack(hit);
+		return haystack.includes(query);
+	}
+	return matchesClickRevealKeywords(searchHitLabelHaystack(hit), [query], true);
 }
 
 /** Map new config onto legacy search-type strings still used by helpers / e2e. */
@@ -278,6 +319,7 @@ export function syncGraphSearchClickConfigToDom(config: GraphSearchClickConfig, 
 	const normalized = normalizeGraphSearchClickConfig(config);
 	el.dataset.fgSearchScope = normalized.searchScope;
 	el.dataset.fgSearchIncludeInactive = normalized.includeInactive ? 'true' : 'false';
+	el.dataset.fgSearchStrict = normalized.searchStrict ? 'true' : 'false';
 	el.dataset.fgClickFirmLimit = String(normalized.firmRevealLimit);
 	el.dataset.fgClickFirmPrevious = normalized.firmRevealPrevious ? 'true' : 'false';
 	el.dataset.fgClickKeywords = JSON.stringify(normalized.clickRevealKeywords);
@@ -304,6 +346,7 @@ export function readGraphSearchClickConfigFromDom(root: HTMLElement | null = nul
 	return normalizeGraphSearchClickConfig({
 		searchScope: el.dataset.fgSearchScope as GraphSearchScope,
 		includeInactive: el.dataset.fgSearchIncludeInactive === 'true',
+		searchStrict: el.dataset.fgSearchStrict === 'true',
 		firmRevealLimit: Number(el.dataset.fgClickFirmLimit),
 		firmRevealPrevious: el.dataset.fgClickFirmPrevious === 'true',
 		clickRevealKeywords: keywords as string[],

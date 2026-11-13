@@ -13,6 +13,7 @@ import {
 	searchConfigActivityMode,
 	searchConfigIncludesFirms,
 	searchConfigIncludesPeople,
+	searchHitMatchesSearchQuery,
 } from '@/lib/graphSearchClickConfig';
 
 describe('graphSearchClickConfig', () => {
@@ -25,6 +26,7 @@ describe('graphSearchClickConfig', () => {
 		const config = normalizeGraphSearchClickConfig({
 			searchScope: 'firms',
 			includeInactive: true,
+			searchStrict: true,
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
 			clickRevealKeywords: ['  hopper  ', 'smith'],
@@ -35,6 +37,7 @@ describe('graphSearchClickConfig', () => {
 		expect(config).toEqual({
 			searchScope: 'firms',
 			includeInactive: true,
+			searchStrict: true,
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
 			clickRevealKeywords: ['hopper', 'smith'],
@@ -52,7 +55,12 @@ describe('graphSearchClickConfig', () => {
 		expect(searchConfigIncludesFirms('people')).toBe(false);
 		expect(searchConfigActivityMode({ searchScope: 'people', includeInactive: false })).toBe('active');
 		expect(searchConfigActivityMode({ searchScope: 'people', includeInactive: true })).toBeNull();
-		expect(graphSearchConfigQueryKeyPart({ searchScope: 'people', includeInactive: true })).toBe('people:inactive');
+		expect(graphSearchConfigQueryKeyPart({ searchScope: 'people', includeInactive: true, searchStrict: false })).toBe(
+			'people:inactive:fuzzy',
+		);
+		expect(graphSearchConfigQueryKeyPart({ searchScope: 'people', includeInactive: false, searchStrict: true })).toBe(
+			'people:active:strict',
+		);
 		expect(graphSearchConfigToLegacySearchType({ searchScope: 'people', includeInactive: true })).toBe('people-inactive');
 	});
 
@@ -67,5 +75,20 @@ describe('graphSearchClickConfig', () => {
 		expect(matchesClickRevealKeywords('Jane Hopper Smith', ['jane hopper'], true)).toBe(true);
 		// OR across tags
 		expect(matchesClickRevealKeywords('Bob Smith', ['hopper', 'smith'], true)).toBe(true);
+	});
+
+	it('filters header search hits with searchStrict exact-phrase matching', () => {
+		const hit = {
+			_source: {
+				ind_firstname: 'Jane',
+				ind_middlename: 'Ann',
+				ind_lastname: 'Hopper',
+				ind_crd: '55',
+			},
+		};
+		expect(searchHitMatchesSearchQuery(hit, 'jane hopper', false)).toBe(true);
+		expect(searchHitMatchesSearchQuery(hit, 'jane hopper', true)).toBe(false);
+		expect(searchHitMatchesSearchQuery(hit, 'ann hopper', true)).toBe(true);
+		expect(searchHitMatchesSearchQuery(hit, '55', true)).toBe(true);
 	});
 });

@@ -5,6 +5,7 @@ export type E2ESearchScope = 'all' | 'people' | 'firms';
 export type E2ESearchClickConfig = {
 	searchScope?: E2ESearchScope;
 	includeInactive?: boolean;
+	searchStrict?: boolean;
 	firmRevealLimit?: number;
 	firmRevealPrevious?: boolean;
 	clickRevealKeywords?: string[];
@@ -42,6 +43,11 @@ export async function setGraphSearchClickConfig(page: Page, patch: E2ESearchClic
 	if (typeof patch.includeInactive === 'boolean') {
 		const box = panel.locator('label', { hasText: 'Include inactive' }).locator('input[type="checkbox"]');
 		if (patch.includeInactive) await box.check();
+		else await box.uncheck();
+	}
+	if (typeof patch.searchStrict === 'boolean') {
+		const box = page.locator('#fg-search-strict');
+		if (patch.searchStrict) await box.check();
 		else await box.uncheck();
 	}
 	if (typeof patch.firmRevealLimit === 'number') {

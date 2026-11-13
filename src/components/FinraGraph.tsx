@@ -1257,14 +1257,27 @@ export default function FinraGraph() {
 															</label>
 														))}
 													</div>
-													<label className='fg-search-config-option fg-search-config-option--check'>
-														<input
-															type='checkbox'
-															checked={searchClickConfig.includeInactive}
-															onChange={(e) => updateSearchClickConfig({ includeInactive: e.target.checked })}
-														/>
-														<span>Include inactive</span>
-													</label>
+													<div className='fg-search-config-checks'>
+														<label className='fg-search-config-option fg-search-config-option--check'>
+															<input
+																type='checkbox'
+																checked={searchClickConfig.includeInactive}
+																onChange={(e) => updateSearchClickConfig({ includeInactive: e.target.checked })}
+															/>
+															<span>Include inactive</span>
+														</label>
+														<label
+															className='fg-search-config-option fg-search-config-option--check'
+															title='Strict: only keep hits whose name/CRD contains the query as an exact phrase. Unchecked uses fuzzy matching.'>
+															<input
+																id='fg-search-strict'
+																type='checkbox'
+																checked={searchClickConfig.searchStrict}
+																onChange={(e) => updateSearchClickConfig({ searchStrict: e.target.checked })}
+															/>
+															<span>Strict match</span>
+														</label>
+													</div>
 												</div>
 												<div className='fg-search-config-section'>
 													<div className='fg-search-config-label'>Firm click reveal</div>

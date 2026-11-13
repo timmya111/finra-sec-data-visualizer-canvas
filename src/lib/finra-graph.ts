@@ -85,6 +85,7 @@ import {
 	searchConfigActivityMode,
 	searchConfigIncludesFirms,
 	searchConfigIncludesPeople,
+	searchHitMatchesSearchQuery,
 } from './graphSearchClickConfig';
 import {
 	FIRM_SEC_ONLY_FILL,
@@ -10877,6 +10878,7 @@ export function init(
 					const includePeople = searchConfigIncludesPeople(headerSearchConfig.searchScope);
 					const includeFirms = searchConfigIncludesFirms(headerSearchConfig.searchScope);
 					const activityMode = searchConfigActivityMode(headerSearchConfig);
+					const searchStrict = Boolean(headerSearchConfig.searchStrict);
 					return (hits || []).filter((hit) => {
 						const isPerson = hitHasIndividualId(hit);
 						const isFirm = hitHasFirmId(hit);
@@ -10886,6 +10888,7 @@ export function init(
 						// Mixed SEC hits: keep only kinds in scope.
 						if (headerSearchConfig.searchScope === 'people' && !isPerson) return false;
 						if (headerSearchConfig.searchScope === 'firms' && !isFirm) return false;
+						if (!searchHitMatchesSearchQuery(hit, q, searchStrict)) return false;
 						if (!activityMode) return true;
 						if (isPerson) return searchHitLooksActive(hit, 'individual');
 						if (isFirm) return searchHitLooksActive(hit, 'firm');

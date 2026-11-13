@@ -2002,7 +2002,18 @@ a,
 	cursor: pointer;
 	user-select: none;
 }
+.fg-search-config-checks {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+}
 .fg-search-config-option--check {
+	width: auto;
+	flex: 0 1 auto;
+}
+.fg-search-config-section .fg-search-config-option--check:only-child,
+.fg-search-config-section > .fg-search-config-option--check {
 	width: 100%;
 }
 .fg-search-config-field {
