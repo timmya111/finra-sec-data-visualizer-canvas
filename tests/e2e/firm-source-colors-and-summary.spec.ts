@@ -6,6 +6,7 @@ import {
 	resetBrowserGraphState,
 	setClearedGraphSession,
 } from './helpers/finra-e2e';
+import { setGraphSearchClickConfig } from './helpers/search-click-config';
 
 type FirmCoverage = 'finra_only' | 'sec_only' | 'both';
 
@@ -209,7 +210,7 @@ async function prepareEmptyGraph(page: Page) {
 }
 
 async function fetchFirmCrd(page: Page, crd: string) {
-	await page.locator('#fg-search-type').selectOption('firms');
+	await setGraphSearchClickConfig(page, { searchScope: 'firms', includeInactive: false });
 	const fetchInput = page.locator('#fg-fetch-input');
 	const fetchButton = page.locator('#fg-database-search');
 	await fetchInput.fill(crd);

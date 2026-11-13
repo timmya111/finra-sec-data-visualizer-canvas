@@ -76,12 +76,16 @@ import {
 } from './filterTags';
 import { forgetVisited, readVisited, readVisitedSync, rememberVisited, visitConnectionsKey, visitDetailKey } from './clientVisitCache';
 import { createGraphLayoutWorker } from './graphLayoutWorker';
+import { searchHitLooksActive } from './searchHitActivity';
 import {
-	searchHitMatchesActivityFilter,
-	searchTypeActivityFilter,
-	searchTypeIncludesFirms,
-	searchTypeIncludesPeople,
-} from './searchHitActivity';
+	connectionMatchesClickRevealKeyword,
+	DEFAULT_FIRM_REVEAL_LIMIT,
+	graphSearchConfigQueryKeyPart,
+	readGraphSearchClickConfigFromDom,
+	searchConfigActivityMode,
+	searchConfigIncludesFirms,
+	searchConfigIncludesPeople,
+} from './graphSearchClickConfig';
 import {
 	FIRM_SEC_ONLY_FILL,
 	FIRM_SEC_ONLY_STROKE,
@@ -10795,17 +10799,10 @@ export function init(
 						};
 					}, options);
 
-				// Respect header search type selector (all | people | people-inactive | firms | firms-inactive)
-				// before issuing requests so a people-only search does not spend the hit budget on firm pages first.
-				let headerSearchType = 'all';
-				try {
-					const stEl = document.getElementById('fg-search-type') as HTMLSelectElement | null;
-					if (stEl && stEl.value)
-						headerSearchType = String(stEl.value || 'all')
-							.trim()
-							.toLowerCase();
-				} catch {}
-				const searchQueryKey = normalizeDatabaseSearchQueryKey(q, headerSearchType);
+				// Respect header search config (scope + include inactive) from the React dropdown
+				// synced onto #finra-app dataset before issuing requests.
+				const headerSearchConfig = readGraphSearchClickConfigFromDom();
+				const searchQueryKey = normalizeDatabaseSearchQueryKey(q, graphSearchConfigQueryKeyPart(headerSearchConfig));
 				const isRepeatSameSearch = Boolean(searchQueryKey && searchQueryKey === lastDatabaseSearchQueryKey);
 				const getSearchHitIndividualId = (hit) => {
 					const src = hit?._source || hit || {};
@@ -10877,18 +10874,21 @@ export function init(
 				const hitHasFirmId = (hit) => Boolean(getSearchHitFirmId(hit));
 
 				const filterHitsBySearchType = (hits: any[]) => {
-					const activityFilter = searchTypeActivityFilter(headerSearchType);
+					const includePeople = searchConfigIncludesPeople(headerSearchConfig.searchScope);
+					const includeFirms = searchConfigIncludesFirms(headerSearchConfig.searchScope);
+					const activityMode = searchConfigActivityMode(headerSearchConfig);
 					return (hits || []).filter((hit) => {
-						if (headerSearchType === 'people' || headerSearchType === 'people-inactive') {
-							if (!hitHasIndividualId(hit)) return false;
-							if (activityFilter) return searchHitMatchesActivityFilter(hit, activityFilter);
-							return true;
-						}
-						if (headerSearchType === 'firms' || headerSearchType === 'firms-inactive') {
-							if (!hitHasFirmId(hit)) return false;
-							if (activityFilter) return searchHitMatchesActivityFilter(hit, activityFilter);
-							return true;
-						}
+						const isPerson = hitHasIndividualId(hit);
+						const isFirm = hitHasFirmId(hit);
+						if (isPerson && !includePeople) return false;
+						if (isFirm && !includeFirms) return false;
+						if (!isPerson && !isFirm) return false;
+						// Mixed SEC hits: keep only kinds in scope.
+						if (headerSearchConfig.searchScope === 'people' && !isPerson) return false;
+						if (headerSearchConfig.searchScope === 'firms' && !isFirm) return false;
+						if (!activityMode) return true;
+						if (isPerson) return searchHitLooksActive(hit, 'individual');
+						if (isFirm) return searchHitLooksActive(hit, 'firm');
 						return true;
 					});
 				};
@@ -10907,8 +10907,8 @@ export function init(
 					onPage: ((pageHits: any[]) => void | Promise<void>) | null = null,
 					options: { limit?: number; skipIds?: Set<string> } = {},
 				) => {
-					const includePeople = searchTypeIncludesPeople(headerSearchType);
-					const includeFirms = searchTypeIncludesFirms(headerSearchType);
+					const includePeople = searchConfigIncludesPeople(headerSearchConfig.searchScope);
+					const includeFirms = searchConfigIncludesFirms(headerSearchConfig.searchScope);
 					const limit = Math.max(0, Number(options.limit ?? MAX_TEXT_SEARCH_HITS) || 0);
 					if (!limit) return [];
 					const skipIds = options.skipIds || getCanvasSkipIds();
@@ -19539,6 +19539,8 @@ export function buildFirmCurrentConnectionGraphBatch(
 		bridgeContext?: FirmRosterCanvasBridgeContext | null;
 		/** Prefer canvas bridges (default true when bridgeContext is provided). */
 		preferCanvasBridges?: boolean;
+		/** Current roster links when true (default); previous when false. */
+		isCurrent?: boolean;
 	} = {},
 ) {
 	const firmNodeId = String(firmNode?.id || '').trim();
@@ -19576,15 +19578,16 @@ export function buildFirmCurrentConnectionGraphBatch(
 	let remainingNew = 0;
 	let bridgedNew = 0;
 
+	const linkIsCurrent = options.isCurrent !== false;
 	const pushLink = (personId: string, targetFirmId: string) => {
-		const key = `${personId}|${targetFirmId}|employed_by`;
+		const key = `${personId}|${targetFirmId}|employed_by|${linkIsCurrent ? 'current' : 'previous'}`;
 		if (pendingLinkKeys.has(key)) return;
 		pendingLinkKeys.add(key);
 		links.push({
 			source: personId,
 			target: targetFirmId,
-			relationship: 'employed_by',
-			isCurrent: true,
+			relationship: linkIsCurrent ? 'employed_by' : 'previous_employed_by',
+			isCurrent: linkIsCurrent,
 		});
 	};
 
@@ -19739,14 +19742,20 @@ function stampFirmRosterExhaustedIfComplete(firmNode: any) {
 }
 
 /**
- * Firm click: fetch /connections and add up to FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT
- * new current people onto the graph. Click again to continue with the next batch.
+ * Firm click: fetch /connections and add up to the configured firmRevealLimit
+ * new people onto the graph. Click again to continue with the next batch.
+ * People node clicks remain uncapped elsewhere.
  */
 async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	if (!firmNode || firmNode.group !== 'firm') return { added: 0, linked: 0, remaining: 0, bridged: 0 };
 	if (!shouldExpandFirmCurrentConnections(firmNode)) return { added: 0, linked: 0, remaining: 0, bridged: 0 };
+	const clickConfig = readGraphSearchClickConfigFromDom();
+	const firmRevealLimit = Number.isFinite(clickConfig.firmRevealLimit) ? clickConfig.firmRevealLimit : DEFAULT_FIRM_REVEAL_LIMIT;
+	const includePrevious = Boolean(clickConfig.firmRevealPrevious);
 	// Already fully revealed — do not re-hit /connections or rebuild batches.
-	if (firmNode._secOnlyCurrentConnectionsExpanded === true || firmHasAllCurrentConnectionsOnCanvas(firmNode)) {
+	// When previous is enabled, current-only completeness is not enough to bail out.
+	const currentComplete = firmHasAllCurrentConnectionsOnCanvas(firmNode);
+	if (firmNode._secOnlyCurrentConnectionsExpanded === true || (currentComplete && !includePrevious)) {
 		stampFirmRosterExhaustedIfComplete(firmNode);
 		const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
 		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
@@ -19761,12 +19770,19 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	const firmLabel = String(firmNode.label || firmNode.id || 'firm').trim();
 	updateFetchStatus(`Loading current connections for ${firmLabel}…`, true);
 	const existingCurrent = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections.length : 0;
+	const existingPrevious = Array.isArray(firmNode.previousConnections) ? firmNode.previousConnections.length : 0;
 	// Graph expand needs names/scopes only — skip Redis individual enrichment (light=1).
 	// Force refetch when a prior empty/CDN miss stuck `_connectionsLoaded` with no people.
-	await ensureFirmConnections(firmNode, { light: true, force: existingCurrent === 0 });
+	await ensureFirmConnections(firmNode, {
+		light: true,
+		force: existingCurrent === 0 && (!includePrevious || existingPrevious === 0),
+	});
 
-	const current = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
-	if (!current.length) {
+	const currentRaw = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
+	const previousRaw = includePrevious && Array.isArray(firmNode.previousConnections) ? firmNode.previousConnections : [];
+	const current = currentRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeyword));
+	const previous = previousRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeyword));
+	if (!current.length && !previous.length) {
 		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
 		// Stamp exhausted so paint can darken; allow retry only if connections later hydrate.
 		firmNode._secOnlyCurrentConnectionsExpanded = true;
@@ -19784,12 +19800,35 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 		layoutNodes: globalState.layoutNodes,
 		links: [...(globalState.layoutLinks || []), ...(globalState.graphData?.links || [])],
 	});
-	const batch = buildFirmCurrentConnectionGraphBatch(firmNode, current, {
+	const currentBatch = buildFirmCurrentConnectionGraphBatch(firmNode, current, {
 		existingNodeIds: existingIds,
-		limit: FIRM_CURRENT_CONNECTIONS_REVEAL_LIMIT,
+		limit: firmRevealLimit,
 		bridgeContext,
 		preferCanvasBridges: true,
+		isCurrent: true,
 	});
+	const remainingLimit = Math.max(0, firmRevealLimit - currentBatch.nodes.length);
+	const existingAfterCurrent = new Set<string>(existingIds.map((id) => String(id || '').trim()).filter(Boolean));
+	for (const node of currentBatch.nodes) {
+		const id = String(node?.id || '').trim();
+		if (id) existingAfterCurrent.add(id);
+	}
+	const previousBatch =
+		remainingLimit > 0 && previous.length ?
+			buildFirmCurrentConnectionGraphBatch(firmNode, previous, {
+				existingNodeIds: existingAfterCurrent,
+				limit: remainingLimit,
+				bridgeContext,
+				preferCanvasBridges: true,
+				isCurrent: false,
+			})
+		:	{ nodes: [] as any[], links: [] as any[], remainingNew: 0, bridgedNew: 0 };
+	const batch = {
+		nodes: [...currentBatch.nodes, ...previousBatch.nodes],
+		links: [...currentBatch.links, ...previousBatch.links],
+		remainingNew: (Number(currentBatch.remainingNew) || 0) + (Number(previousBatch.remainingNew) || 0),
+		bridgedNew: (Number(currentBatch.bridgedNew) || 0) + (Number(previousBatch.bridgedNew) || 0),
+	};
 	if (!batch.nodes.length && !batch.links.length) {
 		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
 		firmNode._secOnlyCurrentConnectionsExpanded = true;
@@ -20561,7 +20600,7 @@ function isPersonEmploymentGraphComplete(personNode) {
 function revealPersonEmploymentNeighbors(personNode) {
 	if (!personNode?.id || personNode.group !== 'individual' || !globalState.graphData || !globalState.layoutNodes) return;
 	const employmentFirmIds = new Set<string>();
-	// Include previous employers so inactive people (history-only) still open their gray firm links.
+	// People clicks are uncapped and unfiltered: current + previous employers in one click.
 	for (const employment of flattenEmploymentRecords(personNode)) {
 		const firmNodeId = resolveEmploymentConnectionFirmNodeId(employment);
 		if (firmNodeId) employmentFirmIds.add(firmNodeId);
@@ -20581,11 +20620,7 @@ function revealPersonEmploymentNeighbors(personNode) {
 		if (targetId === personNode.id && sourceId) employmentFirmIds.add(sourceId);
 	}
 	const renderedIds = new Set(globalState.layoutNodes.map((node) => node.id));
-	// Person employment history is usually small; allow the full direct employer set through.
-	const personEmploymentRevealLimit = Math.max(MAX_AUTO_REVEAL_NEIGHBORS_PER_EXPAND, 64);
-	const hiddenIds = Array.from(employmentFirmIds)
-		.filter((id) => id && !renderedIds.has(id))
-		.slice(0, personEmploymentRevealLimit);
+	const hiddenIds = Array.from(employmentFirmIds).filter((id) => id && !renderedIds.has(id));
 	const revealFilter = (link) => isPersonClickEmploymentLink(link);
 	if (hiddenIds.length) {
 		revealNeighbors(personNode, 'all', {

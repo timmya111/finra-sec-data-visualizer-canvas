@@ -45,13 +45,6 @@ import {
 	type CachedFirmConnectionsPayload,
 } from '@/lib/clientVisitCache';
 import { requestSelectionRefresh } from '@/lib/selectionRefreshClient';
-import {
-	type HeaderSearchType,
-	searchHitMatchesActivityFilter,
-	searchTypeActivityFilter,
-	searchTypeIncludesFirms,
-	searchTypeIncludesPeople,
-} from '@/lib/searchHitActivity';
 import styles from './dashboard.module.css';
 
 type DashboardAction = 'fetch-crds' | 'list-new-crds';
@@ -2037,7 +2030,6 @@ function DashboardPageInner() {
 	const [searchResults, setSearchResults] = useState<SearchResultCard[]>([]);
 	const [searchSkippedCount, setSearchSkippedCount] = useState(0);
 	const [hasSearchRun, setHasSearchRun] = useState(false);
-	const [searchType, setSearchType] = useState<HeaderSearchType>('all');
 	const [crawlProgress, setCrawlProgress] = useState<{
 		active: boolean;
 		current: number;
@@ -4547,21 +4539,18 @@ function DashboardPageInner() {
 		setSearchSkippedCount(0);
 
 		try {
-			const includePeople = searchTypeIncludesPeople(searchType);
-			const includeFirms = searchTypeIncludesFirms(searchType);
-			const activityFilter = searchTypeActivityFilter(searchType);
 			const [finraIndividualRes, finraFirmRes, secIndividualRes, secFirmRes] = await Promise.all([
-				includePeople ? fetch(`/api/finra/search?type=individual&query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
-				includeFirms ? fetch(`/api/finra/search?type=firm&query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
-				includePeople ? fetch(`/api/finra/sec-search?query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
-				includeFirms ? fetch(`/api/finra/sec-search-firm?query=${encodeURIComponent(query)}&rows=24`) : Promise.resolve(null),
+				fetch(`/api/finra/search?type=individual&query=${encodeURIComponent(query)}&rows=24`),
+				fetch(`/api/finra/search?type=firm&query=${encodeURIComponent(query)}&rows=24`),
+				fetch(`/api/finra/sec-search?query=${encodeURIComponent(query)}&rows=24`),
+				fetch(`/api/finra/sec-search-firm?query=${encodeURIComponent(query)}&rows=24`),
 			]);
 
 			const [finraIndividualJson, finraFirmJson, secIndividualJson, secFirmJson] = await Promise.all([
-				finraIndividualRes ? finraIndividualRes.json() : Promise.resolve(null),
-				finraFirmRes ? finraFirmRes.json() : Promise.resolve(null),
-				secIndividualRes ? secIndividualRes.json() : Promise.resolve(null),
-				secFirmRes ? secFirmRes.json() : Promise.resolve(null),
+				finraIndividualRes.json(),
+				finraFirmRes.json(),
+				secIndividualRes.json(),
+				secFirmRes.json(),
 			]);
 
 			const getItems = (payload: any) =>
@@ -4577,9 +4566,6 @@ function DashboardPageInner() {
 				for (const item of items) {
 					if (isCorruptSearchItem(item)) {
 						skipped += 1;
-						continue;
-					}
-					if (activityFilter && activityFilter.kind === entity && !searchHitMatchesActivityFilter(item, activityFilter)) {
 						continue;
 					}
 
@@ -4615,10 +4601,10 @@ function DashboardPageInner() {
 				return { cards, skipped };
 			};
 
-			const finraIndividuals = includePeople ? normalize(getItems(finraIndividualJson), 'finra', 'individual') : { cards: [], skipped: 0 };
-			const finraFirms = includeFirms ? normalize(getItems(finraFirmJson), 'finra', 'firm') : { cards: [], skipped: 0 };
-			const secIndividuals = includePeople ? normalize(getItems(secIndividualJson), 'sec', 'individual') : { cards: [], skipped: 0 };
-			const secFirms = includeFirms ? normalize(getItems(secFirmJson), 'sec', 'firm') : { cards: [], skipped: 0 };
+			const finraIndividuals = normalize(getItems(finraIndividualJson), 'finra', 'individual');
+			const finraFirms = normalize(getItems(finraFirmJson), 'finra', 'firm');
+			const secIndividuals = normalize(getItems(secIndividualJson), 'sec', 'individual');
+			const secFirms = normalize(getItems(secFirmJson), 'sec', 'firm');
 
 			const skippedTotal = finraIndividuals.skipped + finraFirms.skipped + secIndividuals.skipped + secFirms.skipped;
 			if (skippedTotal > 0) {
@@ -4815,24 +4801,7 @@ function DashboardPageInner() {
 									data-fetching={searchBusy ? 'true' : 'false'}
 									disabled={searchBusy}
 									onClick={() => void runRedisSearch()}>
-									<span className='fg-search-button-content'>
-										Search
-										<select
-											id='fg-search-type'
-											className='fg-search-type-inside'
-											value={searchType}
-											onChange={(event) => setSearchType(event.target.value as HeaderSearchType)}
-											onClick={(event) => event.stopPropagation()}
-											onMouseDown={(event) => event.stopPropagation()}
-											title='Search type: all, active people/firms, or inactive-only'
-											aria-label='Search type'>
-											<option value='all'>All</option>
-											<option value='people'>People</option>
-											<option value='people-inactive'>People inactive</option>
-											<option value='firms'>Firms</option>
-											<option value='firms-inactive'>Firms inactive</option>
-										</select>
-									</span>
+									Search
 								</button>
 							</div>
 						</div>

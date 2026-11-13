@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { resetBrowserGraphState } from './helpers/finra-e2e';
+import {
+	clearGraphSearchClickConfig,
+	graphNodeLabels,
+	setLegacyHeaderSearchType,
+} from './helpers/search-click-config';
 
 const INDIVIDUAL_HIT = {
 	_source: {
@@ -69,6 +74,47 @@ async function mockSearchEndpoints(page: Page) {
 			body: JSON.stringify({ hits: { total: 0, hits: [] }, results: [], total: 0 }),
 		});
 	});
+
+	// People text hits stay off-canvas until detail hydration; stub individual fetches.
+	await page.route('**/api/finra/individual/**', async (route) => {
+		const crd = decodeURIComponent(route.request().url().split('/').pop() || '').split('?')[0];
+		const hit =
+			crd === '9999001' ? INDIVIDUAL_HIT._source
+			: crd === '9999003' ? INACTIVE_INDIVIDUAL_HIT._source
+			: null;
+		if (!hit) {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ found: false }),
+			});
+			return;
+		}
+		await route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				found: true,
+				basicInformation: {
+					individualId: hit.ind_source_id || hit.ind_crd,
+					firstName: hit.ind_firstname,
+					middleName: hit.ind_middlename,
+					lastName: hit.ind_lastname,
+					bcScope: hit.ind_bc_scope,
+					iaScope: hit.ind_ia_scope,
+				},
+				ind_source_id: hit.ind_source_id,
+				ind_crd: hit.ind_crd,
+				ind_firstname: hit.ind_firstname,
+				ind_middlename: hit.ind_middlename,
+				ind_lastname: hit.ind_lastname,
+				ind_bc_scope: hit.ind_bc_scope,
+				ind_ia_scope: hit.ind_ia_scope,
+				currentEmployments: [],
+				previousEmployments: [],
+			}),
+		});
+	});
 }
 
 async function runHeaderSearch(
@@ -76,17 +122,43 @@ async function runHeaderSearch(
 	query: string,
 	type: 'all' | 'people' | 'firms' | 'people-inactive' | 'firms-inactive',
 ) {
-	await page.locator('#fg-search-type').selectOption(type);
+	await setLegacyHeaderSearchType(page, type);
 	const fetchInput = page.locator('#fg-fetch-input');
 	await fetchInput.fill(query);
 	await page.locator('#fg-database-search').click();
 	await expect(page.locator('#fg-database-search')).toBeEnabled({ timeout: 10_000 });
 }
 
+async function waitForGraphLabel(page: Page, label: string) {
+	await expect
+		.poll(
+			async () => {
+				const nodes = await graphNodeLabels(page);
+				return nodes.some((node) => node.label.includes(label)) ? 1 : 0;
+			},
+			{
+				timeout: 10_000,
+				message: `expected graph node label containing ${label}`,
+			},
+		)
+		.toBe(1);
+}
+
+async function countGraphLabels(page: Page, label: string) {
+	const nodes = await graphNodeLabels(page);
+	return nodes.filter((node) => node.label.includes(label)).length;
+}
+
+async function countGraphGroup(page: Page, group: 'individual' | 'firm') {
+	const nodes = await graphNodeLabels(page);
+	return nodes.filter((node) => node.group === group || node.id.startsWith(group === 'firm' ? 'firm:' : 'person:')).length;
+}
+
 test.describe('Header search type toggle (All / People / Firms)', () => {
 	test.beforeEach(async ({ page }) => {
 		await page.goto('/');
 		await resetBrowserGraphState(page);
+		await clearGraphSearchClickConfig(page);
 		await page.reload();
 		await mockSearchEndpoints(page);
 	});
@@ -94,83 +166,58 @@ test.describe('Header search type toggle (All / People / Firms)', () => {
 	test('People keeps only active people', async ({ page }) => {
 		await runHeaderSearch(page, 'toggle-query', 'people');
 
-		await expect
-			.poll(async () => page.locator('.fg-node--individual', { hasText: 'Toggle Person' }).count(), {
-				timeout: 10_000,
-				message: 'expected the active individual hit to render as a node when filtering to People',
-			})
-			.toBeGreaterThan(0);
-
-		expect(await page.locator('.fg-node--individual', { hasText: 'Inactive Person' }).count()).toBe(0);
-		expect(await page.locator('.fg-node--firm', { hasText: 'Toggle Firm Inc' }).count()).toBe(0);
+		await waitForGraphLabel(page, 'Toggle Person');
+		expect(await countGraphLabels(page, 'Inactive Person')).toBe(0);
+		expect(await countGraphGroup(page, 'firm')).toBe(0);
 	});
 
 	test('Firms keeps only active firms', async ({ page }) => {
 		await runHeaderSearch(page, 'toggle-query', 'firms');
 
-		await expect
-			.poll(async () => page.locator('.fg-node--firm', { hasText: 'Toggle Firm Inc' }).count(), {
-				timeout: 10_000,
-				message: 'expected the active firm hit to render as a node when filtering to Firms',
-			})
-			.toBeGreaterThan(0);
-
-		expect(await page.locator('.fg-node--firm', { hasText: 'Inactive Firm Inc' }).count()).toBe(0);
-		expect(await page.locator('.fg-node--individual', { hasText: 'Toggle Person' }).count()).toBe(0);
+		await waitForGraphLabel(page, 'Toggle Firm Inc');
+		expect(await countGraphLabels(page, 'Inactive Firm Inc')).toBe(0);
+		expect(await countGraphGroup(page, 'individual')).toBe(0);
 	});
 
 	test('All shows both people and firm hits', async ({ page }) => {
 		await runHeaderSearch(page, 'toggle-query', 'all');
 
-		await expect
-			.poll(async () => page.locator('.fg-node--individual', { hasText: 'Toggle Person' }).count(), {
-				timeout: 10_000,
-				message: 'expected the individual hit to render when search type is All',
-			})
-			.toBeGreaterThan(0);
-
-		await expect
-			.poll(async () => page.locator('.fg-node--firm', { hasText: 'Toggle Firm Inc' }).count(), {
-				timeout: 10_000,
-				message: 'expected the firm hit to render when search type is All',
-			})
-			.toBeGreaterThan(0);
+		await waitForGraphLabel(page, 'Toggle Person');
+		await waitForGraphLabel(page, 'Toggle Firm Inc');
 	});
 
-	test('Selected search type persists across reload', async ({ page }) => {
-		await page.locator('#fg-search-type').selectOption('firms');
-		await expect(page.locator('#fg-search-type')).toHaveValue('firms');
+	test('Selected search scope persists across reload', async ({ page }) => {
+		await page.locator('#fg-search-config-toggle').click();
+		await page.locator('input[name="fg-search-scope"][value="firms"]').check();
+		await expect(page.locator('#finra-app')).toHaveAttribute('data-fg-search-scope', 'firms');
 
 		await page.reload();
 
-		await expect(page.locator('#fg-search-type')).toHaveValue('firms');
+		await expect(page.locator('#finra-app')).toHaveAttribute('data-fg-search-scope', 'firms');
 	});
 
-	test('People inactive keeps only inactive people', async ({ page }) => {
+	test('Include inactive shows active and inactive people', async ({ page }) => {
 		await runHeaderSearch(page, 'toggle-query', 'people-inactive');
 
-		await expect
-			.poll(async () => page.locator('.fg-node--individual', { hasText: 'Inactive Person' }).count(), {
-				timeout: 10_000,
-				message: 'expected the inactive individual hit to render',
-			})
-			.toBeGreaterThan(0);
-
-		expect(await page.locator('.fg-node--individual', { hasText: 'Toggle Person' }).count()).toBe(0);
-		expect(await page.locator('.fg-node--firm').count()).toBe(0);
+		await waitForGraphLabel(page, 'Inactive Person');
+		await waitForGraphLabel(page, 'Toggle Person');
+		expect(await countGraphGroup(page, 'firm')).toBe(0);
 	});
 
-	test('Firms inactive keeps only inactive firms', async ({ page }) => {
+	test('Include inactive shows active and inactive firms', async ({ page }) => {
 		await runHeaderSearch(page, 'toggle-query', 'firms-inactive');
 
-		await expect
-			.poll(async () => page.locator('.fg-node--firm', { hasText: 'Inactive Firm Inc' }).count(), {
-				timeout: 10_000,
-				message: 'expected the inactive firm hit to render',
-			})
-			.toBeGreaterThan(0);
+		await waitForGraphLabel(page, 'Inactive Firm Inc');
+		await waitForGraphLabel(page, 'Toggle Firm Inc');
+		expect(await countGraphGroup(page, 'individual')).toBe(0);
+	});
 
-		expect(await page.locator('.fg-node--firm', { hasText: 'Toggle Firm Inc' }).count()).toBe(0);
-		expect(await page.locator('.fg-node--individual').count()).toBe(0);
+	test('Search config toggle opens firm click-reveal options', async ({ page }) => {
+		await page.locator('#fg-search-config-toggle').click();
+		await expect(page.locator('#fg-search-config-panel')).toBeVisible();
+		await expect(page.locator('#fg-click-firm-limit')).toBeVisible();
+		await expect(page.locator('#fg-click-keyword')).toBeVisible();
+		await expect(page.getByText('Firm click reveal')).toBeVisible();
+		await expect(page.getByText('Previous connections (people)')).toHaveCount(0);
 	});
 });

@@ -15,6 +15,16 @@ import {
 	probeWebGlGpuInfo,
 	resolveSafeGpuEnabled,
 } from '@/lib/gpu-capability';
+import {
+	DEFAULT_GRAPH_SEARCH_CLICK_CONFIG,
+	loadGraphSearchClickConfig,
+	normalizeFirmRevealLimit,
+	normalizeGraphSearchClickConfig,
+	saveGraphSearchClickConfig,
+	syncGraphSearchClickConfigToDom,
+	type GraphSearchClickConfig,
+	type GraphSearchScope,
+} from '@/lib/graphSearchClickConfig';
 
 const MOBILE_TOUCH_SLOP_PX = 12;
 const MOBILE_TOUCH_CLICK_SUPPRESSION_MS = 250;
@@ -307,7 +317,8 @@ export default function FinraGraph() {
 	const [graphReady, setGraphReady] = useState(false);
 	const [browserPathname, setBrowserPathname] = useState('');
 	const [fetchQuery, setFetchQuery] = useState('');
-	const [searchType, setSearchType] = useState<'all' | 'people' | 'firms' | 'people-inactive' | 'firms-inactive'>('people');
+	const [searchClickConfig, setSearchClickConfig] = useState<GraphSearchClickConfig>(DEFAULT_GRAPH_SEARCH_CLICK_CONFIG);
+	const [isSearchConfigOpen, setIsSearchConfigOpen] = useState(false);
 	const [isFindBarOpen, setIsFindBarOpen] = useState(false);
 	const [findQuery, setFindQuery] = useState('');
 	const [findMatchState, setFindMatchState] = useState({ total: 0, activeOrdinal: 0 });
@@ -334,13 +345,9 @@ export default function FinraGraph() {
 			setIsSidebarToolsOpen(stored === 'true');
 		}
 
-		// Load persisted search type for the header search control
-		try {
-			const st = localStorage.getItem('finra_search_type');
-			if (st === 'people' || st === 'firms' || st === 'all' || st === 'people-inactive' || st === 'firms-inactive') {
-				setSearchType(st);
-			}
-		} catch {}
+		const loadedConfig = loadGraphSearchClickConfig();
+		setSearchClickConfig(loadedConfig);
+		syncGraphSearchClickConfigToDom(loadedConfig);
 
 		// Lightweight heap beacon for navigation crash diagnosis (Chrome only).
 		let lastPostedMb = 0;
@@ -398,20 +405,41 @@ export default function FinraGraph() {
 		setFetchQuery(event.target.value);
 	}, []);
 
-	const isSearchTypeFirstRenderRef = useRef(true);
+	const isSearchConfigFirstRenderRef = useRef(true);
 	useEffect(() => {
 		// Skip the mount-time run: the load-from-storage effect above hasn't
-		// applied its (possibly different) persisted value to `searchType` yet
-		// during this same commit, so writing here would clobber storage with
-		// the initial default before the real value ever takes effect.
-		if (isSearchTypeFirstRenderRef.current) {
-			isSearchTypeFirstRenderRef.current = false;
+		// applied its persisted value yet during this same commit.
+		if (isSearchConfigFirstRenderRef.current) {
+			isSearchConfigFirstRenderRef.current = false;
+			syncGraphSearchClickConfigToDom(searchClickConfig);
 			return;
 		}
-		try {
-			localStorage.setItem('finra_search_type', searchType);
-		} catch {}
-	}, [searchType]);
+		const normalized = normalizeGraphSearchClickConfig(searchClickConfig);
+		saveGraphSearchClickConfig(normalized);
+		syncGraphSearchClickConfigToDom(normalized);
+	}, [searchClickConfig]);
+
+	useEffect(() => {
+		if (!isSearchConfigOpen) return;
+		const onPointerDown = (event: PointerEvent) => {
+			const target = event.target as Element | null;
+			if (target?.closest?.('.fg-search-config')) return;
+			setIsSearchConfigOpen(false);
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') setIsSearchConfigOpen(false);
+		};
+		document.addEventListener('pointerdown', onPointerDown, true);
+		document.addEventListener('keydown', onKeyDown);
+		return () => {
+			document.removeEventListener('pointerdown', onPointerDown, true);
+			document.removeEventListener('keydown', onKeyDown);
+		};
+	}, [isSearchConfigOpen]);
+
+	const updateSearchClickConfig = useCallback((patch: Partial<GraphSearchClickConfig>) => {
+		setSearchClickConfig((prev) => normalizeGraphSearchClickConfig({ ...prev, ...patch }));
+	}, []);
 
 	// Persist sticky query prefs (disable_analytics, safe_gpu) and keep them on the URL
 	// across client navigations / refresh — same machine only via localStorage.
@@ -1175,7 +1203,99 @@ export default function FinraGraph() {
 										spellCheck={false}
 										data-gramm='false'
 									/>
-									{/* search type selector moved into the Search button to save horizontal space */}
+									<div className='fg-search-config'>
+										<button
+											id='fg-search-config-toggle'
+											type='button'
+											className={`fg-search-config-toggle${isSearchConfigOpen ? ' is-open' : ''}`}
+											aria-expanded={isSearchConfigOpen}
+											aria-controls='fg-search-config-panel'
+											title='Search and click-reveal options'
+											aria-label='Search and click-reveal options'
+											onClick={() => setIsSearchConfigOpen((open) => !open)}>
+											<span className='fg-search-config-toggle__glyph' aria-hidden='true'>
+												⚙
+											</span>
+										</button>
+										{isSearchConfigOpen ?
+											<div
+												id='fg-search-config-panel'
+												className='fg-search-config-panel'
+												role='dialog'
+												aria-label='Search and click-reveal options'>
+												<div className='fg-search-config-section'>
+													<div className='fg-search-config-label'>Search scope</div>
+													<div className='fg-search-config-radios' role='radiogroup' aria-label='Search scope'>
+														{(
+															[
+																['all', 'All'],
+																['people', 'People'],
+																['firms', 'Firms'],
+															] as Array<[GraphSearchScope, string]>
+														).map(([value, label]) => (
+															<label key={value} className='fg-search-config-option'>
+																<input
+																	type='radio'
+																	name='fg-search-scope'
+																	value={value}
+																	checked={searchClickConfig.searchScope === value}
+																	onChange={() => updateSearchClickConfig({ searchScope: value })}
+																/>
+																<span>{label}</span>
+															</label>
+														))}
+													</div>
+													<label className='fg-search-config-option fg-search-config-option--check'>
+														<input
+															type='checkbox'
+															checked={searchClickConfig.includeInactive}
+															onChange={(e) => updateSearchClickConfig({ includeInactive: e.target.checked })}
+														/>
+														<span>Include inactive</span>
+													</label>
+												</div>
+												<div className='fg-search-config-section'>
+													<div className='fg-search-config-label'>Firm click reveal</div>
+													<label className='fg-search-config-field'>
+														<span>Batch size</span>
+														<input
+															id='fg-click-firm-limit'
+															type='number'
+															min={1}
+															max={500}
+															step={1}
+															value={searchClickConfig.firmRevealLimit}
+															onChange={(e) =>
+																updateSearchClickConfig({
+																	firmRevealLimit: normalizeFirmRevealLimit(e.target.value),
+																})
+															}
+														/>
+													</label>
+													<label className='fg-search-config-option fg-search-config-option--check'>
+														<input
+															type='checkbox'
+															checked={searchClickConfig.firmRevealPrevious}
+															onChange={(e) => updateSearchClickConfig({ firmRevealPrevious: e.target.checked })}
+														/>
+														<span>Previous connections</span>
+													</label>
+													<label className='fg-search-config-field'>
+														<span>Keyword filter</span>
+														<input
+															id='fg-click-keyword'
+															type='search'
+															value={searchClickConfig.clickRevealKeyword}
+															placeholder='only reveal matching names/CRDs'
+															autoComplete='off'
+															spellCheck={false}
+															onChange={(e) => updateSearchClickConfig({ clickRevealKeyword: e.target.value })}
+														/>
+													</label>
+												</div>
+											</div>
+										:	null}
+									</div>
 									<div className='fg-toolbar-group fg-toolbar-status fg-toolbar-status--top'>
 										<span
 											id='fg-subset-info'
@@ -1200,22 +1320,7 @@ export default function FinraGraph() {
 									id='fg-database-search'
 									className='fg-btn-primary fg-action-btn'
 									title='Search all records in the local database'>
-									<span className='fg-search-button-content'>
-										Search
-										<select
-											id='fg-search-type'
-											className='fg-search-type-inside'
-											value={searchType}
-											onChange={(e) => setSearchType(e.target.value as any)}
-											title='Search type: all, active people/firms, or inactive-only'
-											aria-label='Search type'>
-											<option value='all'>All</option>
-											<option value='people'>People</option>
-											<option value='people-inactive'>People inactive</option>
-											<option value='firms'>Firms</option>
-											<option value='firms-inactive'>Firms inactive</option>
-										</select>
-									</span>
+									Search
 								</button>
 							</div>
 						</div>
