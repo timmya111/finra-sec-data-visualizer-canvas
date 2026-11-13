@@ -53,10 +53,10 @@ export const metadata: Metadata = {
 		type: 'website',
 		images: [
 			{
-				url: '/graph-screenshot.png',
+				url: '/og-preview.png',
 				width: 1200,
 				height: 630,
-				alt: 'FINRA SEC Graph Explorer — interactive network of firms, people, and employment connections',
+				alt: 'FINRA SEC Graph Explorer — dark-theme network of firms, people, and employment connections',
 			},
 		],
 	},
@@ -64,7 +64,7 @@ export const metadata: Metadata = {
 		card: 'summary_large_image',
 		title: 'FINRA SEC Graph Explorer',
 		description: 'Browse FINRA BrokerCheck and SEC AdviserInfo records as an interactive relationship graph.',
-		images: ['/graph-screenshot.png'],
+		images: ['/og-preview.png'],
 	},
 	robots: {
 		index: true,

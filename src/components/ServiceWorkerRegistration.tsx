@@ -53,6 +53,21 @@ export default function ServiceWorkerRegistration() {
 					process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ||
 					process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID ||
 					'static';
+
+				// One-shot purge so the old light OG screenshot leaves Cache Storage.
+				const purgeKey = 'finra-sw-cache-purged:og-preview-dark-1';
+				let shouldPurgeCaches = false;
+				try {
+					shouldPurgeCaches = window.localStorage.getItem(purgeKey) !== '1';
+					if (shouldPurgeCaches && window.caches) {
+						const names = await window.caches.keys();
+						await Promise.all(names.map((name) => window.caches.delete(name)));
+						window.localStorage.setItem(purgeKey, '1');
+					}
+				} catch {
+					/* storage/caches may be unavailable */
+				}
+
 				const registration = await navigator.serviceWorker.register(`/sw.js?v=${buildStamp}`, {
 					updateViaCache: 'none',
 				});
@@ -62,6 +77,10 @@ export default function ServiceWorkerRegistration() {
 				registration.addEventListener('updatefound', () => {
 					watchInstallingWorker(registration);
 				});
+
+				if (shouldPurgeCaches && registration.active) {
+					registration.active.postMessage({ type: 'CLEAR_CACHES' });
+				}
 
 				void registration.update();
 

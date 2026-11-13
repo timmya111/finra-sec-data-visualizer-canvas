@@ -37,7 +37,7 @@ export default function manifest(): MetadataRoute.Manifest {
 		screenshots: [
 			{
 				src: '/graph-screenshot.png',
-				sizes: '1280x720',
+				sizes: '1600x1083',
 				type: 'image/png',
 				form_factor: 'wide',
 				label: 'FINRA SEC Graph Explorer overview',

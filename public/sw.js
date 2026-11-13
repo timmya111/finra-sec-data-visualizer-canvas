@@ -1,5 +1,7 @@
 const serviceWorkerVersion = new URL(self.location.href).searchParams.get('v') ?? 'dev';
-const VERSION = `v-${serviceWorkerVersion}`;
+// Bump when cached assets or preview images must be dropped for all clients.
+const CACHE_EPOCH = 'og-preview-dark-1';
+const VERSION = `v-${serviceWorkerVersion}-${CACHE_EPOCH}`;
 const STATIC_CACHE = `finra-static-${VERSION}`;
 const RUNTIME_CACHE = `finra-runtime-${VERSION}`;
 const OFFLINE_URL = '/offline.html';
@@ -14,26 +16,60 @@ const PRECACHE_URLS = [
 	'/icon-512.png',
 	'/icon-512-maskable.png',
 	'/apple-touch-icon.png',
+	'/og-preview.png',
 ];
+
+async function deleteAllCaches() {
+	const keys = await caches.keys();
+	await Promise.all(keys.map((key) => caches.delete(key)));
+}
 
 self.addEventListener('install', (event) => {
 	event.waitUntil(
-		caches
-			.open(STATIC_CACHE)
-			.then((cache) => cache.addAll(PRECACHE_URLS))
-			.catch(() => undefined),
+		(async () => {
+			// Drop every prior cache (including the old light OG screenshot) before precache.
+			await deleteAllCaches();
+			try {
+				const cache = await caches.open(STATIC_CACHE);
+				await cache.addAll(PRECACHE_URLS);
+			} catch {
+				/* precache is best-effort */
+			}
+		})(),
 	);
 	self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-	event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== STATIC_CACHE && key !== RUNTIME_CACHE).map((key) => caches.delete(key)))));
-	self.clients.claim();
+	event.waitUntil(
+		(async () => {
+			const keys = await caches.keys();
+			await Promise.all(keys.filter((key) => key !== STATIC_CACHE && key !== RUNTIME_CACHE).map((key) => caches.delete(key)));
+			await self.clients.claim();
+		})(),
+	);
 });
 
 self.addEventListener('message', (event) => {
 	if (event.data?.type === 'SKIP_WAITING') {
 		self.skipWaiting();
+		return;
+	}
+	if (event.data?.type === 'CLEAR_CACHES') {
+		event.waitUntil(
+			(async () => {
+				await deleteAllCaches();
+				try {
+					const cache = await caches.open(STATIC_CACHE);
+					await cache.addAll(PRECACHE_URLS);
+				} catch {
+					/* ignore */
+				}
+				if (event.source && 'postMessage' in event.source) {
+					event.source.postMessage({ type: 'CACHES_CLEARED' });
+				}
+			})(),
+		);
 	}
 });
 
