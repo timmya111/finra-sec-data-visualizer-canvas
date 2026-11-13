@@ -1482,13 +1482,40 @@ export default function FinraGraph() {
 									</button>
 								</div>
 							</div>
-							<button
-								type='button'
-								data-fg-graph-action='select-to-keep'
-								className='fg-ghost-btn fg-select-to-keep-btn'
-								title='Keep only nodes within the selection circle'>
-								Select to keep
-							</button>
+							<div className='fg-select-tool-control'>
+								<button
+									type='button'
+									data-fg-graph-action='select-tool-menu'
+									className='fg-sidebar-action-btn fg-sidebar-action-btn--secondary fg-select-tool-control__toggle fg-select-to-keep-btn'
+									aria-expanded='false'
+									title='Choose select to keep or select to delete'
+									style={{ width: 'auto', justifyContent: 'center' }}>
+									Select tool
+								</button>
+								<div
+									className='fg-select-tool-control__menu'
+									role='menu'
+									hidden>
+									<button
+										type='button'
+										data-fg-graph-action='select-to-keep'
+										className='fg-ghost-btn fg-btn-sm'
+										role='menuitem'
+										hidden
+										title='Keep only nodes within the selection circle'>
+										Select to keep
+									</button>
+									<button
+										type='button'
+										data-fg-graph-action='select-to-delete'
+										className='fg-ghost-btn fg-btn-sm'
+										role='menuitem'
+										hidden
+										title='Delete nodes within the selection circle'>
+										Select to delete
+									</button>
+								</div>
+							</div>
 
 							<button
 								type='button'
@@ -1504,20 +1531,13 @@ export default function FinraGraph() {
 								title='Click 1: keep logged nodes and connecting intermediaries. Click 2: also strip previous-employment lines and clear highlights.'>
 								<span className='fg-sidebar-action-label'>Clear non-log</span>
 							</button>
-							<button
-								type='button'
-								data-fg-selection-log-action='toggle-bold'
-								className='fg-ghost-btn'
-								title='Make log entries larger and bolder'>
-								Log Bold
-							</button>
 							<div className='fg-sidebar-session-row'>
 								<button
 									type='button'
-									data-fg-action='clear-session'
-									className='fg-danger-btn'
-									title='Clear saved session and reload fresh'>
-									Reset Session
+									data-fg-selection-log-action='toggle-bold'
+									className='fg-ghost-btn'
+									title='Make log entries larger and bolder'>
+									Log Bold
 								</button>
 								<button
 									type='button'
@@ -1526,6 +1546,13 @@ export default function FinraGraph() {
 									title='Re-run the graph layout'
 									aria-label='Reflow'>
 									Reflow
+								</button>
+								<button
+									type='button'
+									data-fg-action='clear-session'
+									className='fg-danger-btn'
+									title='Clear saved session and reload fresh'>
+									Reset Session
 								</button>
 							</div>
 						</div>

@@ -6244,22 +6244,64 @@ function clearNonLogCombinedAction(button?: HTMLButtonElement) {
 	}
 }
 
+type SelectToolKind = 'keep' | 'delete';
 let isSelectToKeepMode = false;
+let selectToolKind: SelectToolKind | null = null;
+let isSelectToolMenuOpen = false;
 let selectToKeepCircle: { x: number; y: number; r: number } | null = null;
 let selectToKeepDragBehavior: d3.DragBehavior<Element, unknown, unknown> | null = null;
 
-function toggleSelectToKeepMode(button?: HTMLButtonElement) {
-	isSelectToKeepMode = !isSelectToKeepMode;
+function syncSelectToolControlState() {
+	document.querySelectorAll<HTMLElement>('.fg-select-tool-control').forEach((control) => {
+		control.classList.toggle('is-open', isSelectToolMenuOpen);
+		control.setAttribute('data-open', isSelectToolMenuOpen ? 'true' : 'false');
+		const menu = control.querySelector<HTMLElement>('.fg-select-tool-control__menu');
+		if (menu) menu.hidden = !isSelectToolMenuOpen;
+	});
+
+	document.querySelectorAll<HTMLButtonElement>('.fg-select-tool-control__toggle').forEach((button) => {
+		button.setAttribute('aria-expanded', isSelectToolMenuOpen ? 'true' : 'false');
+		button.classList.toggle('active', isSelectToKeepMode);
+		if (isSelectToKeepMode) {
+			button.textContent = 'Apply';
+			button.title =
+				selectToolKind === 'delete' ?
+					'Apply: delete nodes inside the selection circle'
+				:	'Apply: keep only nodes inside the selection circle';
+		} else {
+			button.textContent = 'Select tool';
+			button.title = 'Choose select to keep or select to delete';
+		}
+	});
+
+	document.querySelectorAll<HTMLButtonElement>('[data-fg-graph-action="select-to-keep"], [data-fg-graph-action="select-to-delete"]').forEach((button) => {
+		button.hidden = !isSelectToolMenuOpen;
+	});
+}
+
+function closeSelectToolMenu() {
+	if (!isSelectToolMenuOpen) return;
+	isSelectToolMenuOpen = false;
+	syncSelectToolControlState();
+}
+
+function getSelectToolRingStyles(kind: SelectToolKind | null): { fill: string; stroke: string } {
+	if (kind === 'delete') {
+		return { fill: 'rgba(220, 38, 38, 0.12)', stroke: '#dc2626' };
+	}
+	return { fill: 'rgba(0, 100, 255, 0.1)', stroke: '#0064ff' };
+}
+
+function setSelectToolMode(active: boolean, kind: SelectToolKind | null = null) {
+	const wasActive = isSelectToKeepMode;
+	isSelectToKeepMode = active;
+	selectToolKind = active ? kind : null;
 	document.body.classList.toggle('fg-select-to-keep-active', isSelectToKeepMode);
+	isSelectToolMenuOpen = false;
 
 	const interactionTarget = d3.select('#fg-main');
 
 	if (isSelectToKeepMode) {
-		if (button) {
-			button.classList.add('active');
-			button.textContent = 'Apply';
-		}
-
 		if (!selectToKeepDragBehavior) {
 			selectToKeepDragBehavior = d3
 				.drag<Element, unknown>()
@@ -6270,14 +6312,15 @@ function toggleSelectToKeepMode(button?: HTMLButtonElement) {
 					selectToKeepCircle = { x: px, y: py, r: 0 };
 					if (globalState.rootGroup) globalState.rootGroup.selectAll('.fg-select-to-keep-ring').remove();
 					if (globalState.rootGroup) {
+						const ring = getSelectToolRingStyles(selectToolKind);
 						globalState.rootGroup
 							.append('circle')
 							.attr('class', 'fg-select-to-keep-ring')
 							.attr('cx', px)
 							.attr('cy', py)
 							.attr('r', 0)
-							.style('fill', 'rgba(0, 100, 255, 0.1)')
-							.style('stroke', '#0064ff')
+							.style('fill', ring.fill)
+							.style('stroke', ring.stroke)
 							.style('stroke-width', 2 / transform.k)
 							.style('pointer-events', 'none');
 					}
@@ -6297,12 +6340,7 @@ function toggleSelectToKeepMode(button?: HTMLButtonElement) {
 		if (globalState.svgSel) globalState.svgSel.on('.zoom', null);
 		interactionTarget.on('.zoom', null); // just in case
 		interactionTarget.call(selectToKeepDragBehavior);
-	} else {
-		if (button) {
-			button.classList.remove('active');
-			button.textContent = 'Select to keep';
-		}
-
+	} else if (wasActive) {
 		// Remove circle
 		selectToKeepCircle = null;
 		if (globalState.rootGroup) globalState.rootGroup.selectAll('.fg-select-to-keep-ring').remove();
@@ -6311,17 +6349,28 @@ function toggleSelectToKeepMode(button?: HTMLButtonElement) {
 		interactionTarget.on('.drag', null);
 		if (globalState.zoomBehavior && globalState.svgSel) globalState.svgSel.call(globalState.zoomBehavior);
 	}
+
+	syncSelectToolControlState();
 }
 
-function applySelectToKeep(button?: HTMLButtonElement) {
-	if (!isSelectToKeepMode || !selectToKeepCircle || selectToKeepCircle.r === 0) {
-		const selectBtn = document.querySelector('.fg-select-to-keep-btn') as HTMLButtonElement | null;
-		toggleSelectToKeepMode(selectBtn || button);
-		if (button) flashSelectionLogActionButton(button, 'No circle drawn');
+function enterSelectToolMode(kind: SelectToolKind, button?: HTMLButtonElement) {
+	if (isSelectToKeepMode && selectToolKind === kind) {
+		// Already in this mode — treat as cancel.
+		setSelectToolMode(false);
 		return;
 	}
+	if (isSelectToKeepMode) {
+		// Switch kind while active: clear any in-progress circle and restart.
+		selectToKeepCircle = null;
+		if (globalState.rootGroup) globalState.rootGroup.selectAll('.fg-select-to-keep-ring').remove();
+	}
+	setSelectToolMode(true, kind);
+}
 
-	const keepIds = new Set<string>();
+function collectNodesInsideSelectCircle(): Set<string> {
+	const insideIds = new Set<string>();
+	if (!selectToKeepCircle || selectToKeepCircle.r === 0) return insideIds;
+
 	const { x: cx, y: cy, r } = selectToKeepCircle;
 	const r2 = r * r;
 	const candidates =
@@ -6337,33 +6386,70 @@ function applySelectToKeep(button?: HTMLButtonElement) {
 		const dx = x - cx;
 		const dy = y - cy;
 		if (dx * dx + dy * dy <= r2) {
-			keepIds.add(String(node.id).trim());
+			insideIds.add(String(node.id).trim());
 		}
 	}
+	return insideIds;
+}
 
-	if (keepIds.size === 0) {
-		const selectBtn = document.querySelector('.fg-select-to-keep-btn') as HTMLButtonElement | null;
-		if (selectBtn) {
-			toggleSelectToKeepMode(selectBtn);
-		} else {
-			toggleSelectToKeepMode();
+function applySelectTool(button?: HTMLButtonElement) {
+	if (!isSelectToKeepMode || !selectToKeepCircle || selectToKeepCircle.r === 0) {
+		setSelectToolMode(false);
+		if (button) flashSelectionLogActionButton(button, 'No circle drawn');
+		return;
+	}
+
+	const kind = selectToolKind || 'keep';
+	const insideIds = collectNodesInsideSelectCircle();
+	const candidates =
+		Array.isArray(globalState.layoutNodes) && globalState.layoutNodes.length ? globalState.layoutNodes
+		: Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes
+		: [];
+	const allIds = new Set<string>();
+	for (const node of candidates) {
+		if (!node || typeof node.id === 'undefined') continue;
+		allIds.add(String(node.id).trim());
+	}
+
+	if (kind === 'keep') {
+		if (insideIds.size === 0) {
+			setSelectToolMode(false);
+			updateFetchStatus('No nodes are inside the selection circle');
+			if (button) flashSelectionLogActionButton(button, 'No nodes');
+			return;
 		}
+		pruneGraphDataToKeepIds(insideIds);
+		setSelectToolMode(false);
+		if (button) flashSelectionLogActionButton(button, 'Pruned!');
+		return;
+	}
+
+	// delete: remove nodes inside the circle
+	if (insideIds.size === 0) {
+		setSelectToolMode(false);
 		updateFetchStatus('No nodes are inside the selection circle');
 		if (button) flashSelectionLogActionButton(button, 'No nodes');
 		return;
 	}
 
-	pruneGraphDataToKeepIds(keepIds);
-
-	// Exit mode
-	const selectBtn = document.querySelector('.fg-select-to-keep-btn') as HTMLButtonElement | null;
-	if (selectBtn) {
-		toggleSelectToKeepMode(selectBtn);
-	} else {
-		toggleSelectToKeepMode();
+	const keepIds = new Set<string>();
+	for (const id of allIds) {
+		if (!insideIds.has(id)) keepIds.add(id);
 	}
-	if (button) flashSelectionLogActionButton(button, 'Pruned!');
+
+	if (keepIds.size === 0) {
+		clearGraphData();
+		setSelectToolMode(false);
+		if (button) flashSelectionLogActionButton(button, 'Cleared!');
+		return;
+	}
+
+	pruneGraphDataToKeepIds(keepIds);
+	setSelectToolMode(false);
+	if (button) flashSelectionLogActionButton(button, 'Deleted!');
 }
+
+
 
 let selectionLogUiFrame: number | null = null;
 
@@ -6684,6 +6770,13 @@ function closeSelectionLogClearLabelsMenu() {
 	syncSelectionLogActionButtonStates();
 }
 
+function handleSelectToolOutsideClick(event: MouseEvent) {
+	if (!isSelectToolMenuOpen) return;
+	const target = event.target instanceof Element ? event.target : null;
+	if (target?.closest('.fg-select-tool-control')) return;
+	closeSelectToolMenu();
+}
+
 
 /** True when the event originated from the Clear non-log control (including detached flash targets). */
 export function eventPathIncludesClearNonLogControl(event: Event): boolean {
@@ -6717,6 +6810,30 @@ function handleSelectionLogClearLabelsOutsideClick(event: MouseEvent) {
 	closeSelectionLogClearLabelsMenu();
 }
 
+function handleSelectToolGraphAction(action: string, button: HTMLButtonElement) {
+	if (action === 'select-tool-menu') {
+		closeSelectionLogClearLabelsMenu();
+		if (isSelectToKeepMode) {
+			applySelectTool(button);
+			return;
+		}
+		isSelectToolMenuOpen = !isSelectToolMenuOpen;
+		syncSelectToolControlState();
+		return;
+	}
+
+	if (action === 'select-to-keep') {
+		closeSelectionLogClearLabelsMenu();
+		enterSelectToolMode('keep', button);
+		return;
+	}
+
+	if (action === 'select-to-delete') {
+		closeSelectionLogClearLabelsMenu();
+		enterSelectToolMode('delete', button);
+	}
+}
+
 function handleDelegatedButtonClicks(event: MouseEvent) {
 	const target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null;
 	if (!target) return;
@@ -6728,6 +6845,7 @@ function handleDelegatedButtonClicks(event: MouseEvent) {
 
 	if (target.matches('#fg-trace-mode, [data-fg-trace-mode-button]')) {
 		closeSelectionLogClearLabelsMenu();
+		closeSelectToolMenu();
 		toggleTraceMode();
 		return;
 	}
@@ -6746,6 +6864,8 @@ function handleDelegatedButtonClicks(event: MouseEvent) {
 		| 'edit'
 		| undefined;
 	if (!action) return;
+
+	closeSelectToolMenu();
 
 	if (action === 'trace') {
 		closeSelectionLogClearLabelsMenu();
@@ -6808,6 +6928,7 @@ function handleDelegatedButtonClicks(event: MouseEvent) {
 	}
 
 	if (action === 'clear-labels-menu') {
+		closeSelectToolMenu();
 		if (!isSelectionLogBold || getSelectionLogLabelNodeIds().length === 0) {
 			flashSelectionLogActionButton(target, !isSelectionLogBold ? 'Enable Log Bold' : 'Empty');
 			syncSelectionLogActionButtonStates();
@@ -9783,7 +9904,9 @@ export function init(
 	(document.getElementById('btn-log-close') as HTMLButtonElement | null)?.addEventListener('click', closeLog);
 	document.addEventListener('click', handleDelegatedButtonClicks);
 	document.addEventListener('click', handleSelectionLogClearLabelsOutsideClick);
+	document.addEventListener('click', handleSelectToolOutsideClick);
 	document.addEventListener('click', handleClearNonLogOutsideClick);
+	syncSelectToolControlState();
 	bindSelectionLogTemplateActions();
 	// Fetch/search status stays until the close button (#fg-subset-info-pin) is used.
 	// Do not dismiss on click-outside or focus changes.
@@ -9877,24 +10000,46 @@ export function init(
 	(window as any).__fgClearNonLogDelegatedClick = clearNonLogDelegatedClick;
 	document.addEventListener('click', clearNonLogDelegatedClick as EventListener);
 
+	// Select tool dropdown — document delegation survives React remounts of the sidebar.
+	const selectToolDelegatedClick = (event: MouseEvent) => {
+		const target =
+			event.target instanceof Element ?
+				event.target.closest<HTMLButtonElement>(
+					'[data-fg-graph-action="select-tool-menu"], [data-fg-graph-action="select-to-keep"], [data-fg-graph-action="select-to-delete"]',
+				)
+			:	null;
+		if (!target || target.disabled) return;
+		const action = target.dataset.fgGraphAction;
+		if (!action) return;
+		target.closest('details')?.removeAttribute('open');
+		handleSelectToolGraphAction(action, target);
+	};
+	const prevSelectToolDelegated = (window as any).__fgSelectToolDelegatedClick as ((event: MouseEvent) => void) | undefined;
+	if (prevSelectToolDelegated) {
+		document.removeEventListener('click', prevSelectToolDelegated as EventListener);
+	}
+	(window as any).__fgSelectToolDelegatedClick = selectToolDelegatedClick;
+	document.addEventListener('click', selectToolDelegatedClick as EventListener);
+
 	const graphActionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-fg-graph-action]'));
 	graphActionButtons.forEach((button) => bindTouchDragClickSuppression(button));
 	graphActionButtons.forEach((graphActionBtn) => {
 		graphActionBtn.addEventListener('click', () => {
 			const action = graphActionBtn.dataset.fgGraphAction;
-			// clear-non-log / clear-non-connected handled by document delegation above (survives remounts).
-			if (action === 'clear-non-log' || action === 'clear-non-connected') return;
+			// clear-non-log / select-tool* handled by document delegation above (survives remounts).
+			if (
+				action === 'clear-non-log' ||
+				action === 'clear-non-connected' ||
+				action === 'select-tool-menu' ||
+				action === 'select-to-keep' ||
+				action === 'select-to-delete'
+			) {
+				return;
+			}
 			graphActionBtn.closest('details')?.removeAttribute('open');
 			switch (action) {
 				case 'clear':
 					clearGraphAction(graphActionBtn);
-					break;
-				case 'select-to-keep':
-					if (isSelectToKeepMode) {
-						applySelectToKeep(graphActionBtn);
-					} else {
-						toggleSelectToKeepMode(graphActionBtn);
-					}
 					break;
 
 				default:

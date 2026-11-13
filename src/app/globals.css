@@ -2257,6 +2257,12 @@ a,
 	height: 35px;
 }
 
+.fg-sidebar-mobile-actions .fg-clear-labels-control__toggle,
+.fg-sidebar-mobile-actions .fg-select-tool-control__toggle {
+	height: 42px;
+	min-height: 42px;
+}
+
 .fg-sidebar-session-row {
 	display: flex;
 	gap: 6px;
@@ -2265,11 +2271,12 @@ a,
 	min-width: 0;
 }
 
+.fg-sidebar-session-row > .fg-ghost-btn,
 .fg-sidebar-session-row > .fg-danger-btn,
 .fg-sidebar-session-row > .fg-sidebar-action-btn,
 .fg-sidebar-session-row > .fg-sidebar-reflow-btn {
-	flex: 1 1 calc(50% - 3px);
-	width: calc(50% - 3px);
+	flex: 1 1 calc(33.333% - 4px);
+	width: calc(33.333% - 4px);
 	min-width: 0;
 	height: 35px;
 }
@@ -3227,7 +3234,8 @@ html[data-theme='dark'].fg-clear-non-log-armed .fg-clear-non-log-btn:hover:not(:
 	width: 96px;
 }
 
-.fg-clear-labels-control {
+.fg-clear-labels-control,
+.fg-select-tool-control {
 	flex-direction: column-reverse;
 	flex: 1 1 calc(50% - 4px);
 	gap: 0;
@@ -3243,11 +3251,13 @@ html[data-theme='dark'].fg-clear-non-log-armed .fg-clear-non-log-btn:hover:not(:
 	align-items: stretch;
 }
 
-.fg-clear-labels-control__toggle {
+.fg-clear-labels-control__toggle,
+.fg-select-tool-control__toggle {
 	width: 100%;
 }
 
-.fg-clear-labels-control__menu {
+.fg-clear-labels-control__menu,
+.fg-select-tool-control__menu {
 	display: none;
 	position: absolute;
 	top: calc(100% + 4px);
@@ -3263,16 +3273,20 @@ html[data-theme='dark'].fg-clear-non-log-armed .fg-clear-non-log-btn:hover:not(:
 }
 
 .fg-clear-labels-control.is-open .fg-clear-labels-control__menu,
-.fg-clear-labels-control[data-open='true'] .fg-clear-labels-control__menu {
+.fg-clear-labels-control[data-open='true'] .fg-clear-labels-control__menu,
+.fg-select-tool-control.is-open .fg-select-tool-control__menu,
+.fg-select-tool-control[data-open='true'] .fg-select-tool-control__menu {
 	display: grid;
 }
 
-.fg-clear-labels-control__menu .fg-btn-sm {
+.fg-clear-labels-control__menu .fg-btn-sm,
+.fg-select-tool-control__menu .fg-btn-sm {
 	width: 100%;
 	justify-content: flex-start;
 }
 
-html[data-theme='dark'] .fg-clear-labels-control__menu {
+html[data-theme='dark'] .fg-clear-labels-control__menu,
+html[data-theme='dark'] .fg-select-tool-control__menu {
 	border-color: rgba(148, 163, 184, 0.28);
 	background: rgba(15, 23, 42, 0.98);
 	box-shadow: none;
@@ -6900,9 +6914,11 @@ body.fg-select-to-keep-active .fg-canvas-group {
 	cursor: crosshair !important;
 }
 
-/* Clear Labels (enabled state matches clear highlight blue) */
+/* Clear Labels / Select tool (enabled state matches clear highlight blue) */
 button.fg-clear-labels-control__toggle:not(:disabled),
-.fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled) {
+.fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled),
+button.fg-select-tool-control__toggle:not(:disabled),
+.fg-select-tool-control__menu button.fg-ghost-btn:not(:disabled) {
 	background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%) !important;
 	border-color: rgba(37, 99, 235, 0.45) !important;
 	color: #1d4ed8 !important;
@@ -6910,14 +6926,18 @@ button.fg-clear-labels-control__toggle:not(:disabled),
 }
 
 button.fg-clear-labels-control__toggle:not(:disabled):hover,
-.fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled):hover {
+.fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled):hover,
+button.fg-select-tool-control__toggle:not(:disabled):hover,
+.fg-select-tool-control__menu button.fg-ghost-btn:not(:disabled):hover {
 	background: linear-gradient(180deg, #dbeafe 0%, #bfdbfe 100%) !important;
 	border-color: rgba(37, 99, 235, 0.6) !important;
 	color: #1e40af !important;
 }
 
 html[data-theme='dark'] button.fg-clear-labels-control__toggle:not(:disabled),
-html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled) {
+html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled),
+html[data-theme='dark'] button.fg-select-tool-control__toggle:not(:disabled),
+html[data-theme='dark'] .fg-select-tool-control__menu button.fg-ghost-btn:not(:disabled) {
 	background: rgba(37, 99, 235, 0.22) !important;
 	border-color: rgba(96, 165, 250, 0.45) !important;
 	color: #93c5fd !important;
@@ -6925,7 +6945,9 @@ html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:
 }
 
 html[data-theme='dark'] button.fg-clear-labels-control__toggle:not(:disabled):hover,
-html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled):hover {
+html[data-theme='dark'] .fg-clear-labels-control__menu button.fg-ghost-btn:not(:disabled):hover,
+html[data-theme='dark'] button.fg-select-tool-control__toggle:not(:disabled):hover,
+html[data-theme='dark'] .fg-select-tool-control__menu button.fg-ghost-btn:not(:disabled):hover {
 	background: rgba(37, 99, 235, 0.32) !important;
 	border-color: rgba(147, 197, 253, 0.6) !important;
 	color: #bfdbfe !important;

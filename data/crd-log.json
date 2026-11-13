@@ -1,6 +1,246 @@
 {
   "firms": [
     {
+      "id": 134416,
+      "name": "BRADESCO GLOBAL ADVISORS"
+    },
+    {
+      "id": 315156,
+      "name": "WIZEST INC."
+    },
+    {
+      "id": 19453,
+      "name": "BRADESCO BAC FLORIDA INVESTMENTS CORP."
+    },
+    {
+      "id": 38913,
+      "name": "BANIF SECURITIES INC"
+    },
+    {
+      "id": 158569,
+      "name": "TOV CAPITAL MARKETS, INC."
+    },
+    {
+      "id": 155979,
+      "name": "ANDBANC BROKERAGE, LLC"
+    },
+    {
+      "id": 104005,
+      "name": "BULLTICK, LLC"
+    },
+    {
+      "id": 19616,
+      "name": "WELLS FARGO ADVISORS, LLC"
+    },
+    {
+      "id": 104316,
+      "name": "BRICKELL GLOBAL MARKETS, INC."
+    },
+    {
+      "id": 361,
+      "name": "GOLDMAN SACHS & CO. LLC"
+    },
+    {
+      "id": 156691,
+      "name": "XP INVESTMENTS US, LLC"
+    },
+    {
+      "id": 38986,
+      "name": "IRONHORSE SECURITIES INC."
+    },
+    {
+      "id": 39962,
+      "name": "GLOBAL SECURITIES (USA), INC."
+    },
+    {
+      "id": 37057,
+      "name": "ABN AMRO ASIA INC."
+    },
+    {
+      "id": 45813,
+      "name": "ONECORE SECURITIES, INC."
+    },
+    {
+      "id": 43512,
+      "name": "BBA SECURITIES CORP."
+    },
+    {
+      "id": 40634,
+      "name": "MACQUARIE CORPORATE FINANCE (USA) INC."
+    },
+    {
+      "id": 36370,
+      "name": "BBA ICATU SECURITIES INC."
+    },
+    {
+      "id": 45104,
+      "name": "ODDO SECURITIES CORPORATION"
+    },
+    {
+      "id": 125805,
+      "name": "PRIME GLOBAL SECURITIES, INC."
+    },
+    {
+      "id": 36368,
+      "name": "MACQUARIE SECURITIES (USA) INC."
+    },
+    {
+      "id": 145477,
+      "name": "ALTIMA SECURITIES LP"
+    },
+    {
+      "id": 47953,
+      "name": "ALPHA FINANCE US CORPORATION"
+    },
+    {
+      "id": 156173,
+      "name": "CELFIN CAPITAL SECURITIES, LLC"
+    },
+    {
+      "id": 153292,
+      "name": "RELIGARE CAPITAL MARKETS INC."
+    },
+    {
+      "id": 153974,
+      "name": "CITCO SECURITIES INC."
+    },
+    {
+      "id": 178524,
+      "name": "EQUATEX US INC"
+    },
+    {
+      "id": 168420,
+      "name": "CORPBANCA SECURITIES INC."
+    },
+    {
+      "id": 139788,
+      "name": "BANCO VOTORANTIM SECURITIES, INC."
+    },
+    {
+      "id": 152424,
+      "name": "LARRAINVIAL SECURITIES US LLC"
+    },
+    {
+      "id": 118817,
+      "name": "ITAU BBA USA SECURITIES, INC."
+    },
+    {
+      "id": 144769,
+      "name": "ITAU INTERNATIONAL SECURITIES INC."
+    },
+    {
+      "id": 150662,
+      "name": "BREVAN HOWARD US LLC"
+    },
+    {
+      "id": 311317,
+      "name": "THOMA BRAVO CAPITAL MARKETS, LLC"
+    },
+    {
+      "id": 317434,
+      "name": "TREE LINE CAPITAL MARKETS, LLC"
+    },
+    {
+      "id": 17053,
+      "name": "CITI INTERNATIONAL FINANCIAL SERVICES LLC"
+    },
+    {
+      "id": 190,
+      "name": "CREDIT AGRICOLE SECURITIES (USA) INC."
+    },
+    {
+      "id": 132701,
+      "name": "BB SECURITIES"
+    },
+    {
+      "id": 3227,
+      "name": "JOSEPHTHAL & CO., INC."
+    },
+    {
+      "id": 23568,
+      "name": "WALL STREET ADVISORS, LLC"
+    },
+    {
+      "id": 10012,
+      "name": "WALL STREET ACCESS"
+    },
+    {
+      "id": 79,
+      "name": "J.P. MORGAN SECURITIES LLC"
+    },
+    {
+      "id": 13698,
+      "name": "KANAN SECURITIES, INC."
+    },
+    {
+      "id": 14280,
+      "name": "VANDERBILT SECURITIES, INC."
+    },
+    {
+      "id": 5250,
+      "name": "M. RIMSON & CO., INC."
+    },
+    {
+      "id": 7206,
+      "name": "CLAIRMONT SECURITIES INC."
+    },
+    {
+      "id": 10570,
+      "name": "BUCKINGHAM SECURITIES, LTD."
+    },
+    {
+      "id": 6627,
+      "name": "EQUICO SECURITIES, INC."
+    },
+    {
+      "id": 8174,
+      "name": "PAINEWEBBER INCORPORATED"
+    },
+    {
+      "id": 7616,
+      "name": "SOCIETE GENERALE SECURITIES CORPORATION"
+    },
+    {
+      "id": 120444,
+      "name": "LAVAFLOW, INC."
+    },
+    {
+      "id": 133084,
+      "name": "CITIGROUP DERIVATIVES MARKETS INC."
+    },
+    {
+      "id": 103768,
+      "name": "AUTOMATED TRADING DESK FINANCIAL SERVICES, LLC"
+    },
+    {
+      "id": 36000,
+      "name": "AUTOMATED TRADING DESK BROKERAGE SERVICES, LLC"
+    },
+    {
+      "id": 30107,
+      "name": "STATE STREET GLOBAL ADVISORS FUNDS DISTRIBUTORS, LLC"
+    },
+    {
+      "id": 285852,
+      "name": "STATE STREET GLOBAL MARKETS, LLC"
+    },
+    {
+      "id": 153777,
+      "name": "CITI PRIVATE ALTERNATIVES, LLC"
+    },
+    {
+      "id": 279029,
+      "name": "HALO SECURITIES, LLC"
+    },
+    {
+      "id": 162442,
+      "name": "ROTHSCHILD WEALTH LLC"
+    },
+    {
+      "id": 342696,
+      "name": "ROTHSCHILD FINANCIAL PARTNERS, LLC"
+    },
+    {
       "id": 26601,
       "name": "DOLLAR DRY DOCK INVESTMENT SERVICES CORP."
     },
@@ -19,10 +259,6 @@
     {
       "id": 7654,
       "name": "UBS WARBURG LLC"
-    },
-    {
-      "id": 7616,
-      "name": "COWEN AND COMPANY"
     },
     {
       "id": 150959,
@@ -201,10 +437,6 @@
       "name": "CITIGROUP GLOBAL MARKETS INC."
     },
     {
-      "id": 79,
-      "name": "J.P. MORGAN SECURITIES INC."
-    },
-    {
       "id": 8209,
       "name": "MORGAN STANLEY & CO. LLC"
     },
@@ -243,10 +475,6 @@
     {
       "id": 282107,
       "name": "J.P. MORGAN PRIME INC."
-    },
-    {
-      "id": 361,
-      "name": "GOLDMAN, SACHS & CO."
     },
     {
       "id": 102920,
@@ -715,10 +943,6 @@
     {
       "id": 105061,
       "name": "CASIMIR CAPITAL L.P."
-    },
-    {
-      "id": 8174,
-      "name": "UBS FINANCIAL SERVICES INC."
     },
     {
       "id": 317903,
@@ -1293,10 +1517,6 @@
       "name": "BRADESCO SECURITIES, INC."
     },
     {
-      "id": 45104,
-      "name": "ODDO BHF NEW YORK CORPORATION"
-    },
-    {
       "id": 175456,
       "name": "BAIN CAPITAL MARKETS, LLC"
     },
@@ -1429,10 +1649,6 @@
       "name": "OWL ROCK SECURITIES"
     },
     {
-      "id": 132701,
-      "name": "BANCO DO BRASIL SECURITIES LLC"
-    },
-    {
       "id": 166555,
       "name": "FORGE MARKETS LLC"
     },
@@ -1493,10 +1709,6 @@
       "name": "J.P. MORGAN CLEARING CORP."
     },
     {
-      "id": 3227,
-      "name": "JOSEPHTHAL LYON & ROSS INCORPORATED"
-    },
-    {
       "id": 24790,
       "name": "C.E. UNTERBERG, TOWBIN (A CALIFORNIA LIMITED PARTNERSHIP)"
     },
@@ -1527,10 +1739,6 @@
     {
       "id": 39550,
       "name": "CITIZENS SECURITIES, INC."
-    },
-    {
-      "id": 19616,
-      "name": "WELLS FARGO CLEARING SERVICES, LLC"
     },
     {
       "id": 31204,
@@ -1763,10 +1971,6 @@
     {
       "id": 142775,
       "name": "DB SECURITIES SERVICES NJ INC."
-    },
-    {
-      "id": 6627,
-      "name": "AXA ADVISORS, LLC"
     },
     {
       "id": 104454,
@@ -3241,10 +3445,6 @@
       "name": "ECHOTRADE LLC"
     },
     {
-      "id": 153777,
-      "name": "CITI PRIVATE ADVISORY, LLC"
-    },
-    {
       "id": 7302,
       "name": "GLICKENHAUS & CO. - NEW JERSEY"
     },
@@ -3459,10 +3659,6 @@
     {
       "id": 17507,
       "name": "FIDELITY INVESTMENTS INSTITUTIONAL SERVICES COMPANY, INC."
-    },
-    {
-      "id": 30107,
-      "name": "STATE STREET CAPITAL MARKETS, LLC"
     },
     {
       "id": 572,
@@ -6337,10 +6533,6 @@
       "name": "METROPOLITAN LIFE INSURANCE COMPANY"
     },
     {
-      "id": 10012,
-      "name": "WALL STREET INVESTOR SERVICES"
-    },
-    {
       "id": 36369,
       "name": "BANKBOSTON INVESTOR SERVICES, INC."
     },
@@ -7195,10 +7387,6 @@
     {
       "id": 179512,
       "name": "THRIVENT DISTRIBUTORS, LLC"
-    },
-    {
-      "id": 23568,
-      "name": "SS&C MARKET SERVICES, LLC"
     },
     {
       "id": 932,
@@ -8758,6 +8946,70 @@
     }
   ],
   "individuals": [
+    {
+      "id": 5885341,
+      "name": "Maria Estibaliz IncerRomeo"
+    },
+    {
+      "id": 5083219,
+      "name": "Jeferson Munhoz Moreira"
+    },
+    {
+      "id": 5185735,
+      "name": "MELISSA BUENO FRANCA"
+    },
+    {
+      "id": 2977967,
+      "name": "DAVID ROSS PORTNOFF"
+    },
+    {
+      "id": 5136870,
+      "name": "Rodrigo  Noschese "
+    },
+    {
+      "id": 3160132,
+      "name": "DANIEL GLENN ODONNELL"
+    },
+    {
+      "id": 2210750,
+      "name": "Jeffrey J. Fahs"
+    },
+    {
+      "id": 1260456,
+      "name": "DOMINICK JOHN ANGIONE"
+    },
+    {
+      "id": 1584619,
+      "name": "John James Conway"
+    },
+    {
+      "id": 4485302,
+      "name": "JANET BILLUPS"
+    },
+    {
+      "id": 7517020,
+      "name": "Bernardo Carabelli"
+    },
+    {
+      "id": 8108524,
+      "name": "Abigail Talish"
+    },
+    {
+      "id": 3101145,
+      "name": "ADAM REID MESHEL"
+    },
+    {
+      "id": 2937015,
+      "name": "ROBERT FRANCIS KLEIN"
+    },
+    {
+      "id": 704990,
+      "name": "JOEL EDWARD SOLOMON"
+    },
+    {
+      "id": 6012133,
+      "name": "CURTIS ROBERT ELLERGODT"
+    },
     {
       "id": 1503100,
       "name": "NICHOLAS THOMAS GANZ"
