@@ -19,6 +19,11 @@ function applyTheme(theme: 'light' | 'dark') {
 	const root = document.documentElement;
 	root.dataset.theme = theme;
 	root.classList.toggle('theme-dark', theme === 'dark');
+	try {
+		window.dispatchEvent(new CustomEvent('finra:theme-change', { detail: { theme } }));
+	} catch {
+		/* ignore */
+	}
 }
 
 export default function ThemeToggle() {

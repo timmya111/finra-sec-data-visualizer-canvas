@@ -59,6 +59,7 @@ import {
 	createCanvasOverlay,
 	syncCanvasFocusTooltip,
 	getCanvasHoverNodeId,
+	invalidateCanvasThemeColors,
 } from './finra-graph-canvas';
 import {
 	getFilterEnabled,
@@ -10151,6 +10152,11 @@ export function init(
 			stopSearchPulseLoop();
 			updateFocusReadout(null);
 			clearFindMatches();
+		}) as EventListener);
+		window.addEventListener('finra:theme-change', (() => {
+			invalidateCanvasThemeColors();
+			requestRender();
+			scheduleGraphTickPositions(null, null, null);
 		}) as EventListener);
 		findRequestListenersBound = true;
 	}

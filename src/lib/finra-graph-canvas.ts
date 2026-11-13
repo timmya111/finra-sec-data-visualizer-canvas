@@ -387,7 +387,7 @@ function onCanvasPointerLeave() {
 }
 
 export function createCanvasOverlay(parent: HTMLElement) {
-	cachedThemeColors = null;
+	invalidateCanvasThemeColors();
 	destroyCanvas();
 	parentEl = parent;
 	parent.style.position = parent.style.position || 'relative';
@@ -649,12 +649,19 @@ function drawNode(ctx: CanvasRenderingContext2D, n: Node, transform: any, size =
 }
 
 let cachedThemeColors: Record<string, string> | null = null;
+let cachedThemeKey: string | null = null;
 
 function resolveCachedThemeColors() {
-	if (cachedThemeColors) return cachedThemeColors;
 	const root = document.documentElement;
+	const themeKey = root.getAttribute('data-theme') || 'light';
+	if (cachedThemeColors && cachedThemeKey === themeKey) return cachedThemeColors;
 	const computed = window.getComputedStyle(root);
+	const isDark = themeKey === 'dark';
+	cachedThemeKey = themeKey;
 	cachedThemeColors = {
+		// Opaque page background so right-click "Save image" keeps theme contrast
+		// (clearRect alone leaves transparency, which saves as white).
+		bg: computed.getPropertyValue('--bg').trim() || (isDark ? '#000000' : '#f6f8fc'),
 		individual: computed.getPropertyValue('--color-highlight-individual').trim() || '#0ea5a4',
 		stub: computed.getPropertyValue('--color-node-stub').trim() || '#8ab7ee',
 		firm: computed.getPropertyValue('--color-highlight-firm').trim() || '#7c3aed',
@@ -664,7 +671,7 @@ function resolveCachedThemeColors() {
 		defaultLine: computed.getPropertyValue('--color-default-line').trim() || 'rgba(100, 116, 139, 0.72)',
 		employed: computed.getPropertyValue('--color-highlight-employed').trim() || '#1a7af0',
 		controls: computed.getPropertyValue('--color-highlight-controls').trim() || '#ef4444',
-		label: '#cbd5e1',
+		label: isDark ? '#cbd5e1' : '#0f172a',
 		inactive: computed.getPropertyValue('--color-node-inactive').trim() || '#869ab944',
 		inactiveStroke: computed.getPropertyValue('--color-node-inactive-stroke').trim() || '#94a3b899',
 		inactiveLabel: computed.getPropertyValue('--color-node-inactive-label').trim() || '#334155',
@@ -679,6 +686,12 @@ function resolveCachedThemeColors() {
 		selectedActiveFirmStroke: computed.getPropertyValue('--color-node-firm-active-selected-stroke').trim() || '#083b38',
 	};
 	return cachedThemeColors;
+}
+
+/** Drop cached palette so the next draw picks up light/dark token changes. */
+export function invalidateCanvasThemeColors() {
+	cachedThemeColors = null;
+	cachedThemeKey = null;
 }
 
 function getColorForGroup(g: string) {
@@ -813,8 +826,11 @@ function drawCanvasFrame(
 	// Draw in device pixels while positioning labels in CSS-pixel screen space.
 	// The zoom transform is applied only by worldToScreen, never to the font.
 	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-	// clear canvas
+	// Fill opaque theme background (not transparent) so browser "Save image as"
+	// keeps dark-mode contrast instead of flattening onto white.
 	ctx.clearRect(0, 0, w, h);
+	ctx.fillStyle = colors.bg || '#000000';
+	ctx.fillRect(0, 0, w, h);
 
 	// compute world bounds that map to viewport
 	const invK = 1 / (transform.k || 1);
