@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next';
 
-const siteUrl = 'https://finra-data-chart-next-02.vercel.app';
+const siteUrl = 'https://finra-sec-data-visualizer-canvas.vercel.app';
 
 export default function robots(): MetadataRoute.Robots {
 	return {

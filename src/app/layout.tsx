@@ -19,7 +19,12 @@ const urbanist = Urbanist({
 	preload: false,
 });
 
-const siteUrl = 'https://finra-data-chart-next-02.vercel.app';
+// Canonical production host. Old alias finra-data-chart-next-02.vercel.app still
+// redirects here but serves stale OG tags pointing at graph-screenshot.png;
+// metadataBase must match the live app or og:image absolute URLs 404.
+const siteUrl = 'https://finra-sec-data-visualizer-canvas.vercel.app';
+/** Cache-bust query so crawlers that cached the old graph-screenshot re-fetch. */
+const ogImagePath = '/og-preview.png?v=20261114';
 
 export const viewport: Viewport = {
 	width: 'device-width',
@@ -53,7 +58,7 @@ export const metadata: Metadata = {
 		type: 'website',
 		images: [
 			{
-				url: '/og-preview.png',
+				url: ogImagePath,
 				width: 1200,
 				height: 630,
 				alt: 'FINRA SEC Graph Explorer — dark-theme network of firms, people, and employment connections',
@@ -64,7 +69,7 @@ export const metadata: Metadata = {
 		card: 'summary_large_image',
 		title: 'FINRA SEC Graph Explorer',
 		description: 'Browse FINRA BrokerCheck and SEC AdviserInfo records as an interactive relationship graph.',
-		images: ['/og-preview.png'],
+		images: [ogImagePath],
 	},
 	robots: {
 		index: true,

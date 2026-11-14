@@ -25,7 +25,7 @@ See `docs/search-sidecar.md` for the sidecar hydration path.
 
 ![FINRA Network Graph screenshot](public/graph-screenshot.png)
 
-- **Live app:** https://finra-data-chart-next-02.vercel.app
+- **Live app:** https://finra-sec-data-visualizer-canvas.vercel.app
 - **Best first click:** search a person, firm, or CRD, then open a node and explore the sidebar detail sections
 
 ---
