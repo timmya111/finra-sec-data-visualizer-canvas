@@ -1966,6 +1966,15 @@ describe('FinraGraph DOM helpers (unit)', () => {
 				clearedLabelIds: [],
 			}),
 		).toBe(false);
+		// Context-menu pins work with Log Bold off.
+		expect(
+			computeNodeLargeLabelEnabled('person:2', {
+				selectionLogBold: false,
+				selectedLogIds: [],
+				clearedLabelIds: [],
+				pinnedLabelIds: ['person:2'],
+			}),
+		).toBe(true);
 	});
 
 	it('hasClearableHopHighlightSelections ignores firm-only roots for Clear Highlight', () => {

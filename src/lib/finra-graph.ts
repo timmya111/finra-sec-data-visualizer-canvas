@@ -3174,6 +3174,11 @@ let forceFirmsBold = false;
 let clearedSelectionLogLabelNodeIds = new Set<string>();
 /** Explicit Bold-on CRDs. Survives turning Log Bold off and back on. */
 let rememberedSelectionLogBoldNodeIds = new Set<string>();
+/**
+ * Context-menu pinned large labels. Independent of Log Bold mode so right-click
+ * "Show large label" does not turn on auto-bold-for-every-click.
+ */
+let pinnedLargeLabelNodeIds = new Set<string>();
 type SelectionLogClearLabelsScope = 'all' | 'people';
 let isSelectionLogClearLabelsMenuOpen = false;
 let pendingRouteNodeId: string | null = null;
@@ -3204,6 +3209,7 @@ const LS_LOG_KEY = 'finra_selection_log';
 const LS_LOG_BOLD_KEY = 'finra_selection_log_bold';
 const LS_LOG_BOLD_IDS_KEY = 'finra_selection_log_bold_ids';
 const LS_CLEARED_LABELS_KEY = 'finra_selection_log_cleared_labels';
+const LS_PINNED_LARGE_LABELS_KEY = 'finra_pinned_large_labels';
 const LS_FIRMS_BOLD_KEY = 'finra_firms_bold';
 const SIDEBAR_VIEW_MODE_STORAGE_KEY = 'finra_sidebar_view_mode';
 const SESSION_RESTORE_SLOW_MS = 7000;
@@ -3801,6 +3807,40 @@ function saveRememberedSelectionLogBoldIds() {
 	}
 }
 
+function loadPinnedLargeLabelNodeIds(): Set<string> {
+	try {
+		const raw = localStorage.getItem(LS_PINNED_LARGE_LABELS_KEY);
+		if (!raw) return new Set();
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return new Set();
+		return new Set(parsed.map((id) => String(id || '').trim()).filter(Boolean));
+	} catch {
+		return new Set();
+	}
+}
+
+function savePinnedLargeLabelNodeIds() {
+	try {
+		localStorage.setItem(LS_PINNED_LARGE_LABELS_KEY, JSON.stringify(Array.from(pinnedLargeLabelNodeIds)));
+	} catch {
+		/* ignore persistence errors */
+	}
+}
+
+function pinLargeLabelNodeId(id: string) {
+	const normalized = String(id || '').trim();
+	if (!normalized) return;
+	pinnedLargeLabelNodeIds.add(normalized);
+	savePinnedLargeLabelNodeIds();
+}
+
+function unpinLargeLabelNodeId(id: string) {
+	const normalized = String(id || '').trim();
+	if (!normalized) return;
+	pinnedLargeLabelNodeIds.delete(normalized);
+	savePinnedLargeLabelNodeIds();
+}
+
 function rememberSelectionLogBoldId(id: string) {
 	const normalized = String(id || '').trim();
 	if (!normalized) return;
@@ -3832,10 +3872,19 @@ function isSelectionLogEntryBold(nodeId: string | null | undefined) {
 	return !clearedSelectionLogLabelNodeIds.has(id);
 }
 
+/** True when this CRD should paint a large label (Log Bold path or context-menu pin). */
+function isLargeLabelPainted(nodeId: string | null | undefined) {
+	const id = String(nodeId || '').trim();
+	if (!id) return false;
+	if (pinnedLargeLabelNodeIds.has(id)) return true;
+	return isSelectionLogEntryBold(id);
+}
+
 /**
  * Large-label menu/graph state for a CRD.
- * Requires Log Bold on, membership in the selection log, and not cleared.
- * Unlogged nodes must read as off — otherwise the second person menu shows Hide.
+ * Context-menu pins win on their own. Otherwise requires Log Bold on, membership
+ * in the selection log, and not cleared. Unlogged nodes must read as off —
+ * otherwise the second person menu shows Hide.
  */
 export function computeNodeLargeLabelEnabled(
 	nodeId: string | null | undefined,
@@ -3843,10 +3892,18 @@ export function computeNodeLargeLabelEnabled(
 		selectionLogBold?: boolean;
 		selectedLogIds?: Iterable<string | null | undefined> | null;
 		clearedLabelIds?: Iterable<string | null | undefined> | null;
+		pinnedLabelIds?: Iterable<string | null | undefined> | null;
 	} = {},
 ) {
 	const id = String(nodeId || '').trim();
-	if (!id || !options.selectionLogBold) return false;
+	if (!id) return false;
+	const pinned = new Set(
+		Array.from(options.pinnedLabelIds || [])
+			.map((entryId) => String(entryId || '').trim())
+			.filter(Boolean),
+	);
+	if (pinned.has(id)) return true;
+	if (!options.selectionLogBold) return false;
 	const selected = new Set(
 		Array.from(options.selectedLogIds || [])
 			.map((entryId) => String(entryId || '').trim())
@@ -3861,18 +3918,19 @@ export function computeNodeLargeLabelEnabled(
 	return !cleared.has(id);
 }
 
-/** True when this CRD currently shows a large Log Bold label on the graph. */
+/** True when this CRD currently shows a large label on the graph. */
 export function isNodeLargeLabelEnabled(nodeId: string | null | undefined) {
 	return computeNodeLargeLabelEnabled(nodeId, {
 		selectionLogBold: isSelectionLogBold,
 		selectedLogIds: selectedNodesLog.map((entry) => entry?.id),
 		clearedLabelIds: clearedSelectionLogLabelNodeIds,
+		pinnedLabelIds: pinnedLargeLabelNodeIds,
 	});
 }
 
 /**
  * Turn a CRD's large graph label on/off without selecting the node.
- * Adds the node to the selection log when needed and enables Log Bold if off.
+ * Pins the label independently of Log Bold so later clicks stay normal-sized.
  */
 export function setNodeLargeLabelEnabled(node: any, enabled: boolean) {
 	if (!node?.id) return false;
@@ -3887,27 +3945,15 @@ export function setNodeLargeLabelEnabled(node: any, enabled: boolean) {
 
 	if (!enabled) {
 		if (!currentlyEnabled) return false;
+		unpinLargeLabelNodeId(id);
 		clearedSelectionLogLabelNodeIds.add(id);
 		forgetSelectionLogBoldId(id);
 	} else {
 		if (currentlyEnabled) return true;
-		// Quiet log membership — no selectNode / route / expand side effects.
-		// skipBold keeps this CRD cleared until we explicitly turn Bold on below,
-		// so enabling Log Bold for the first time does not light every prior row.
+		// Quiet log membership — no selectNode / route / expand, and do not turn
+		// on Log Bold (that would bold every later click).
 		addToSelectionLog(node, { skipBold: true, skipPaint: true, skipPersist: true });
-		if (!isSelectionLogBold) {
-			isSelectionLogBold = true;
-			selectedNodesLog.forEach((entry) => {
-				const entryId = String(entry?.id || '').trim();
-				if (!entryId) return;
-				if (rememberedSelectionLogBoldNodeIds.has(entryId) || entryId === id) {
-					clearedSelectionLogLabelNodeIds.delete(entryId);
-				} else {
-					clearedSelectionLogLabelNodeIds.add(entryId);
-				}
-			});
-			saveSelectionLogBoldPreference();
-		}
+		pinLargeLabelNodeId(id);
 		clearedSelectionLogLabelNodeIds.delete(id);
 		rememberSelectionLogBoldId(id);
 	}
@@ -4330,6 +4376,7 @@ function loadFirmsBoldPreference() {
 isSelectionLogBold = loadSelectionLogBoldPreference();
 clearedSelectionLogLabelNodeIds = loadClearedSelectionLogLabelsPreference();
 rememberedSelectionLogBoldNodeIds = loadRememberedSelectionLogBoldIds();
+pinnedLargeLabelNodeIds = loadPinnedLargeLabelNodeIds();
 forceFirmsBold = loadFirmsBoldPreference();
 
 function isDevelopmentRuntime() {
@@ -4541,8 +4588,8 @@ function syncSelectionLogActionButtonStates() {
 
 	const enlargedNodeIds = getSelectionLogLabelNodeIds();
 	const enlargedPeopleNodeIds = filterSelectionLogLabelNodeIdsByScope(enlargedNodeIds, selectedNodesLog, 'people');
-	const clearLabelsDisabled = !isSelectionLogBold || enlargedNodeIds.length === 0;
-	const clearPeopleLabelsDisabled = !isSelectionLogBold || enlargedPeopleNodeIds.length === 0;
+	const clearLabelsDisabled = enlargedNodeIds.length === 0;
+	const clearPeopleLabelsDisabled = enlargedPeopleNodeIds.length === 0;
 
 	document.querySelectorAll<HTMLElement>('.fg-clear-labels-control').forEach((control) => {
 		control.classList.toggle('is-open', isSelectionLogClearLabelsMenuOpen);
@@ -4555,8 +4602,7 @@ function syncSelectionLogActionButtonStates() {
 		button.disabled = clearLabelsDisabled;
 		button.setAttribute('aria-expanded', isSelectionLogClearLabelsMenuOpen ? 'true' : 'false');
 		button.title =
-			!isSelectionLogBold ? 'Enable Log Bold to use large labels'
-			: enlargedNodeIds.length ? 'Choose whether to clear all large labels or only people labels'
+			enlargedNodeIds.length ? 'Choose whether to clear all large labels or only people labels'
 			: 'No enlarged labels to clear';
 		button.textContent = 'Clear Labels';
 	});
@@ -4568,8 +4614,7 @@ function syncSelectionLogActionButtonStates() {
 		button.disabled = disabled;
 		button.hidden = !isSelectionLogClearLabelsMenuOpen;
 		button.title =
-			!isSelectionLogBold ? 'Enable Log Bold to use large labels'
-			: scope === 'people' ?
+			scope === 'people' ?
 				scopedIds.length ?
 					'Shrink only enlarged people labels without clearing the log'
 				:	'No enlarged people labels to clear'
@@ -4792,20 +4837,20 @@ function invalidateSelectionLogLabelNodeIdCache() {
 }
 
 function getSelectionLogLabelNodeIds() {
-	if (!isSelectionLogBold) return [];
 	const layoutCount = globalState.layoutNodes?.length || 0;
-	const cacheKey = `${layoutCount}|${selectedNodesLog.length}|${clearedSelectionLogLabelNodeIds.size}|${rememberedSelectionLogBoldNodeIds.size}|${forceFirmsBold ? 1 : 0}`;
+	const cacheKey = `${layoutCount}|${selectedNodesLog.length}|${clearedSelectionLogLabelNodeIds.size}|${rememberedSelectionLogBoldNodeIds.size}|${pinnedLargeLabelNodeIds.size}|${isSelectionLogBold ? 1 : 0}|${forceFirmsBold ? 1 : 0}`;
 	if (cachedSelectionLogLabelNodeIds && cachedSelectionLogLabelCacheKey === cacheKey) {
 		return cachedSelectionLogLabelNodeIds;
 	}
 	const visibleNodeIds = new Set((globalState.layoutNodes || []).map((node) => String(node?.id || '').trim()).filter(Boolean));
-	cachedSelectionLogLabelNodeIds = Array.from(
-		new Set(
+	const fromLogBold =
+		isSelectionLogBold ?
 			selectedNodesLog
 				.map((entry) => String(entry?.id || '').trim())
-				.filter((id) => Boolean(id) && visibleNodeIds.has(id) && isSelectionLogEntryBold(id)),
-		),
-	);
+				.filter((id) => Boolean(id) && visibleNodeIds.has(id) && isSelectionLogEntryBold(id))
+		:	[];
+	const fromPinned = Array.from(pinnedLargeLabelNodeIds).filter((id) => visibleNodeIds.has(id));
+	cachedSelectionLogLabelNodeIds = Array.from(new Set([...fromLogBold, ...fromPinned]));
 	cachedSelectionLogLabelCacheKey = cacheKey;
 	return cachedSelectionLogLabelNodeIds;
 }
@@ -4826,8 +4871,10 @@ function clearSelectionLogLabels(scope: SelectionLogClearLabelsScope = 'all') {
 	enlargedNodeIds.forEach((id) => {
 		clearedSelectionLogLabelNodeIds.add(id);
 		forgetSelectionLogBoldId(id);
+		unpinLargeLabelNodeId(id);
 	});
-	saveClearedSelectionLogLabelsPreference(); invalidateSelectionLogLabelNodeIdCache();
+	saveClearedSelectionLogLabelsPreference();
+	invalidateSelectionLogLabelNodeIdCache();
 	saveSession();
 	isSelectionLogClearLabelsMenuOpen = false;
 	updateSelectionLogUI();
@@ -4835,7 +4882,7 @@ function clearSelectionLogLabels(scope: SelectionLogClearLabelsScope = 'all') {
 	reapplySelectionState();
 	syncTraceLabelPresentation();
 	syncSelectionLogAuxiliaryRenderers();
-			scheduleGraphTickPositions(null, null, null);
+	scheduleGraphTickPositions(null, null, null);
 	return enlargedNodeIds.length;
 }
 
@@ -6886,8 +6933,11 @@ function updateSelectionLogUI() {
 			entries.forEach((entry) => {
 				const div = document.createElement('div');
 				const entryId = String(entry.id || '').trim();
-				const isBoldChoice = rememberedSelectionLogBoldNodeIds.has(entryId) || isSelectionLogEntryBold(entryId);
-				const isLabelShown = isSelectionLogEntryBold(entryId);
+				const isBoldChoice =
+					rememberedSelectionLogBoldNodeIds.has(entryId) ||
+					pinnedLargeLabelNodeIds.has(entryId) ||
+					isSelectionLogEntryBold(entryId);
+				const isLabelShown = isLargeLabelPainted(entryId);
 				// Section membership is the source of truth for the type border. The Firms
 				// bucket includes non-people leftovers, so always paint those rows orange.
 				const entryGroupClass = groupKey === 'firms' ? 'firm' : 'individual';
@@ -6972,14 +7022,15 @@ function updateSelectionLogUI() {
 							flashSelectionLogActionButton(labelToggleBtn, 'Enable Log Bold');
 							return;
 						}
-						const wasCleared = clearedSelectionLogLabelNodeIds.has(id);
-						if (wasCleared) {
+						const wasCleared = clearedSelectionLogLabelNodeIds.has(id) && !pinnedLargeLabelNodeIds.has(id);
+						if (wasCleared || !isLargeLabelPainted(id)) {
 							clearedSelectionLogLabelNodeIds.delete(id);
 							rememberSelectionLogBoldId(id);
 							flashSelectionLogActionButton(labelToggleBtn, 'Bold on');
 						} else {
 							clearedSelectionLogLabelNodeIds.add(id);
 							forgetSelectionLogBoldId(id);
+							unpinLargeLabelNodeId(id);
 							flashSelectionLogActionButton(labelToggleBtn, 'Bold');
 						}
 						saveClearedSelectionLogLabelsPreference(); invalidateSelectionLogLabelNodeIdCache();
@@ -7187,8 +7238,8 @@ function handleDelegatedButtonClicks(event: MouseEvent) {
 
 	if (action === 'clear-labels-menu') {
 		closeSelectToolMenu();
-		if (!isSelectionLogBold || getSelectionLogLabelNodeIds().length === 0) {
-			flashSelectionLogActionButton(target, !isSelectionLogBold ? 'Enable Log Bold' : 'Empty');
+		if (getSelectionLogLabelNodeIds().length === 0) {
+			flashSelectionLogActionButton(target, 'Empty');
 			syncSelectionLogActionButtonStates();
 			return;
 		}
@@ -16147,9 +16198,8 @@ export function renderNodeContents(selection) {
 		const labelText = getNodeVisualLabelText(d);
 		const labelY = (d._vizHalf != null ? d._vizHalf : r) + DEFAULT_NODE_LABEL_GAP_PX;
 
-		// Log Bold On + this CRD's Bold toggle in the selection log.
-		const hasBeenClicked = Array.isArray(selectedNodesLog) && selectedNodesLog.some((e) => String(e?.id || '').trim() === String(d.id || '').trim());
-		const isLogged = hasBeenClicked && isSelectionLogEntryBold(d.id);
+		// Log Bold path or context-menu pinned large label.
+		const isLogged = isLargeLabelPainted(d.id);
 		const isFirmBold = forceFirmsBold && (d.group === 'firm' || d.type === 'firm' || (d.id && String(d.id).startsWith('firm:')));
 		const isBolded = isLogged || isFirmBold;
 
@@ -16312,9 +16362,9 @@ function getNodeRenderPriority(node, highlightState) {
 	if (!node) return 1;
 	const degreeBias = Math.max(0, Math.min(1000, getNodeDegreeValue(node)));
 
-	// Log-bold labels must paint above every other node so the large text stays readable.
+	// Large labels (Log Bold or context-menu pin) must paint above every other node.
 	if (
-		isSelectionLogEntryBold(node.id) ||
+		isLargeLabelPainted(node.id) ||
 		(forceFirmsBold && (node.group === 'firm' || node.type === 'firm' || String(node.id || '').startsWith('firm:')))
 	) {
 		return 30000 + degreeBias;
@@ -16717,7 +16767,7 @@ function markNodeSelected(node, options: { persist?: boolean } = {}) {
 
 function getNodeVisualLabelText(node) {
 	// Selection/highlights do not change label text. Log-bold names stay untruncatedated.
-	const isLogBoldLabel = isSelectionLogEntryBold(node?.id) || activeFindMatchIds.has(node.id);
+	const isLogBoldLabel = isLargeLabelPainted(node?.id) || activeFindMatchIds.has(node.id);
 
 	return isNodeInactive(node) && globalState.inactiveLabelCompactMode && !isLogBoldLabel ?
 			getCompactInactiveNodeLabel(node)
@@ -16761,7 +16811,7 @@ function updateNodeVisuals(
 		const isActiveParentConnectedNode = activeParentConnectedIds.has(String(d.id));
 
 		const hasBeenClicked = clickedNodeIds.has(String(d.id));
-		const isLogged = Boolean(loggedNodeIds?.has(String(d.id))) && isSelectionLogEntryBold(d.id);
+		const isLogged = isLargeLabelPainted(d.id);
 		const isFirmBold = forceFirmsBold && (d.group === 'firm' || d.type === 'firm' || (d.id && String(d.id).startsWith('firm:')));
 		const isBolded = isLogged || isFirmBold;
 		const isEmphasized = isSelectedNode || isHoveredNode || isBolded || isFindMatchNode || isHighlightRootNode || isHighlightHopNode || isActiveParentConnectedNode;
