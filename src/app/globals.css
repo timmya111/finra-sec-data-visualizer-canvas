@@ -7066,6 +7066,40 @@ body.fg-select-to-keep-active .fg-canvas-group {
 	cursor: crosshair !important;
 }
 
+/* Localhost-only corner nav (graph ↔ /local-ai) */
+.fg-local-corner-link {
+	position: fixed;
+	left: 12px;
+	bottom: 112px;
+	z-index: 70;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 36px;
+	padding: 8px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--border-strong, rgba(15, 23, 42, 0.16));
+	background: color-mix(in srgb, var(--surface, #fff) 92%, transparent);
+	backdrop-filter: blur(8px);
+	box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+	color: var(--text, #0f172a);
+	font: 600 12px/1.2 var(--sans);
+	text-decoration: none;
+	letter-spacing: 0.01em;
+}
+.fg-local-corner-link:hover {
+	border-color: #f97316;
+	color: #c2410c;
+}
+@media (max-width: 860px) {
+	.fg-local-corner-link {
+		left: 10px;
+		bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+		min-height: 40px;
+		padding: 10px 14px;
+	}
+}
+
 /* Graph node context menu (right-click / Ctrl+Enter) */
 .fg-node-context-menu {
 	position: fixed;

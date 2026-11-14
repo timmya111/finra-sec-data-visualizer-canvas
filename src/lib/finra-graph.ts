@@ -48,6 +48,7 @@ import {
 	setRuntimeHopDefaults,
 } from './finra-graph-defaults';
 import { mergeGraphNodesForAppend } from './graphIdentity';
+import { buildCanvasSnapshotFromGraph } from './localAi/canvasSnapshot';
 import { scheduleSelectionExternalRefresh } from './selectionRefreshClient';
 import { isValidLocationStateFilter, isZipLikeLocationQuery, normalizeLocationStateFilter, normalizeStateCode } from './locationSearch';
 import { buildParentFirmSummaryLinks } from './finra-graph/externalLinks';
@@ -3194,6 +3195,7 @@ const SELECTION_LOG_IDB_STORE_NAME = 'selection_log_store';
 const SELECTION_LOG_IDB_ENTRY_KEY = 'active_selection_log';
 let routeNodeRequestListenerBound = false;
 let findRequestListenersBound = false;
+let localAiCanvasBridgeBound = false;
 let traceShortestIds = new Set<string>(); // node and link IDs
 let traceLongestIds = new Set<string>(); // node and link IDs
 let traceLogIds = new Set<string>(); // node and link IDs
@@ -10162,6 +10164,39 @@ export function init(
 			}
 		}) as EventListener);
 		routeNodeRequestListenerBound = true;
+	}
+
+	// Local-AI page asks the open graph tab for a live lean snapshot over BroadcastChannel.
+	if (!localAiCanvasBridgeBound && typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+		try {
+			const channel = new BroadcastChannel('finra-local-ai-canvas');
+			channel.addEventListener('message', (event: MessageEvent) => {
+				const data = event?.data || {};
+				if (data?.type !== 'request-canvas-snapshot') return;
+				const requestId = String(data.requestId || '').trim();
+				if (!requestId) return;
+				try {
+					const snapshot = buildCanvasSnapshotFromGraph({
+						nodes: globalState.layoutNodes || [],
+						links: globalState.layoutLinks || [],
+						selectedId: globalState.selectedId != null ? String(globalState.selectedId) : null,
+						selectionLog: selectedNodesLog || [],
+						source: 'live',
+						href: typeof location !== 'undefined' ? location.href : null,
+					});
+					channel.postMessage({ type: 'canvas-snapshot', requestId, snapshot });
+				} catch (error) {
+					channel.postMessage({
+						type: 'canvas-snapshot',
+						requestId,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			});
+			localAiCanvasBridgeBound = true;
+		} catch {
+			/* BroadcastChannel unavailable */
+		}
 	}
 
 	if (!findRequestListenersBound && typeof window !== 'undefined') {

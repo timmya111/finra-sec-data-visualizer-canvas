@@ -1,6 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import LocalOnlyCornerLink from '@/components/LocalOnlyCornerLink';
+import { captureCanvasSnapshotForLocalAi } from '@/lib/localAi/captureCanvasSnapshotClient';
+import type { CanvasSnapshot } from '@/lib/localAi/canvasSnapshot';
 
 type ChatTurn = { role: 'user' | 'assistant'; content: string };
 
@@ -13,9 +16,9 @@ type StatusPayload = {
 };
 
 const EXAMPLES = [
-	'List people currently at 2+ firms. Return Name :: CRD# lines.',
-	'Who is currently at Deutsche Bank Securities CRD 2525 and also at another firm?',
-	'Find current bridges between Eaton Vance (37731, 104859) and Morgan Stanley (149777, 8209, 30344).',
+	'Summarize the nodes currently on my canvas.',
+	'Which people on the canvas connect to two different firms?',
+	'List people currently at 2+ firms in BrokerCheck data. Return Name :: CRD# lines.',
 	'Show the employment timeline for CRD 5417517 including begin/end dates.',
 ];
 
@@ -27,6 +30,8 @@ export default function LocalAiClient() {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [toolTrace, setToolTrace] = useState<any[] | null>(null);
+	const [canvasInfo, setCanvasInfo] = useState<string>('Checking canvas…');
+	const [aboutNodeGraph, setAboutNodeGraph] = useState(false);
 
 	const preferredModels = useMemo(() => {
 		const models = status?.models || [];
@@ -34,6 +39,23 @@ export default function LocalAiClient() {
 		const ordered = [...prefer.filter((m) => models.includes(m)), ...models.filter((m) => !prefer.includes(m))];
 		return ordered.length ? ordered : prefer;
 	}, [status]);
+
+	const refreshCanvasInfo = useCallback(async () => {
+		try {
+			const snap = await captureCanvasSnapshotForLocalAi();
+			if (!snap || snap.nodeCount <= 0) {
+				setCanvasInfo('Canvas: none (keep the graph tab open, or restore a session)');
+				return snap;
+			}
+			setCanvasInfo(
+				`Canvas: ${snap.nodeCount} nodes / ${snap.linkCount} links (${snap.source}${snap.truncated ? ', truncated' : ''})`,
+			);
+			return snap;
+		} catch {
+			setCanvasInfo('Canvas: unavailable');
+			return null;
+		}
+	}, []);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -48,11 +70,12 @@ export default function LocalAiClient() {
 			} catch (e: any) {
 				if (!cancelled) setStatus({ ok: false, error: e?.message || String(e) });
 			}
+			if (!cancelled) await refreshCanvasInfo();
 		})();
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [refreshCanvasInfo]);
 
 	const ask = useCallback(async () => {
 		const q = question.trim();
@@ -63,6 +86,8 @@ export default function LocalAiClient() {
 		setHistory((prev) => [...prev, { role: 'user', content: q }]);
 		setQuestion('');
 		try {
+			const canvasSnapshot: CanvasSnapshot | null = aboutNodeGraph ? await refreshCanvasInfo() : null;
+			if (!aboutNodeGraph) void refreshCanvasInfo();
 			const res = await fetch('/api/local-ai/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -70,6 +95,8 @@ export default function LocalAiClient() {
 					question: q,
 					model,
 					history: history.slice(-8),
+					aboutNodeGraph,
+					canvasSnapshot,
 				}),
 			});
 			const data = await res.json();
@@ -84,7 +111,7 @@ export default function LocalAiClient() {
 		} finally {
 			setBusy(false);
 		}
-	}, [busy, history, model, question]);
+	}, [aboutNodeGraph, busy, history, model, question, refreshCanvasInfo]);
 
 	return (
 		<main
@@ -96,19 +123,41 @@ export default function LocalAiClient() {
 				color: 'var(--text, #111)',
 			}}>
 			<header style={{ marginBottom: 16 }}>
-				<p style={{ margin: 0, opacity: 0.7, fontSize: 13 }}>
-					<a href="/" style={{ color: 'inherit' }}>
-						← Graph
-					</a>
-					{' · '}
-					local only · Ollama
-				</p>
+				<p style={{ margin: 0, opacity: 0.7, fontSize: 13 }}>local only · Ollama</p>
 				<h1 style={{ margin: '6px 0 8px', fontSize: 28 }}>Local AI</h1>
 				<p style={{ margin: 0, opacity: 0.8, lineHeight: 1.45 }}>
 					Ask about current dual-firm people, firm rosters, and employment timelines. The model calls local
 					tools over your firm-connections / individual data.
 				</p>
 			</header>
+
+			<label
+				style={{
+					display: 'flex',
+					gap: 10,
+					alignItems: 'center',
+					marginBottom: 16,
+					padding: '10px 12px',
+					border: '1px solid var(--border-strong, #ccc)',
+					borderRadius: 8,
+					background: aboutNodeGraph ? 'rgba(249, 115, 22, 0.10)' : 'var(--surface, #fafafa)',
+					cursor: 'pointer',
+					userSelect: 'none',
+					fontSize: 14,
+					fontWeight: 600,
+				}}>
+				<input
+					type="checkbox"
+					checked={aboutNodeGraph}
+					onChange={(e) => setAboutNodeGraph(e.target.checked)}
+					disabled={busy}
+					style={{ width: 16, height: 16 }}
+				/>
+				<span>Question about node graph</span>
+				<span style={{ fontWeight: 400, opacity: 0.7, fontSize: 12 }}>
+					{aboutNodeGraph ? 'Attaches live/session canvas · uses inspect_canvas_graph' : 'Off · roster/Redis tools only'}
+				</span>
+			</label>
 
 			<section
 				style={{
@@ -141,6 +190,21 @@ export default function LocalAiClient() {
 					: status.ok ? `Ollama ok · ${status.models?.length || 0} models`
 					:	`Ollama unreachable: ${status.error || 'unknown error'}`}
 				</span>
+				<span style={{ fontSize: 13, opacity: 0.75 }}>{canvasInfo}</span>
+				<button
+					type="button"
+					onClick={() => void refreshCanvasInfo()}
+					disabled={busy}
+					style={{
+						fontSize: 12,
+						padding: '4px 8px',
+						borderRadius: 6,
+						border: '1px solid var(--border-strong, #ccc)',
+						background: 'transparent',
+						cursor: 'pointer',
+					}}>
+					Refresh canvas
+				</button>
 			</section>
 
 			<section style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
@@ -264,6 +328,12 @@ export default function LocalAiClient() {
 					</pre>
 				</details>
 			:	null}
+
+			<LocalOnlyCornerLink
+				href="/"
+				label="Graph"
+				title="Back to graph"
+			/>
 		</main>
 	);
 }

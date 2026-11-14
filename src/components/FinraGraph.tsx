@@ -4,6 +4,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 
 import ThemeToggle from './ThemeToggle';
+import LocalOnlyCornerLink from './LocalOnlyCornerLink';
 import { applyStickyParamsToUrl, buildNodeRouteHref, buildNodeRoutePath, parseNodeIdFromPathname } from '@/lib/node-route';
 import { consumeQueueGraphBridgePayload } from '@/lib/queueGraphBridge';
 import {
@@ -1945,6 +1946,12 @@ export default function FinraGraph() {
 					id='fg-log-body'
 					className='fg-log-body'></pre>
 			</div>
+
+			<LocalOnlyCornerLink
+				href='/local-ai'
+				label='Local AI'
+				title='Open local Ollama AI page'
+			/>
 		</div>
 	);
 }

@@ -1,16 +1,40 @@
 import fs from 'fs';
 import path from 'path';
-import { getRedisClient } from '@/lib/redisCache';
+import { decompressPayload, getRedisClient } from '@/lib/redisCache';
+import { unwrapCachedIndividualDetail } from '@/lib/graphConnections';
+import { inspectCanvasSnapshot, type CanvasSnapshot } from '@/lib/localAi/canvasSnapshot';
 
 const FIRM_CONN_DIR = path.join(process.cwd(), 'data', 'firm-connections');
 
 export type LocalAiToolName =
+	| 'inspect_canvas_graph'
 	| 'find_dual_current_people'
 	| 'firm_current_roster'
 	| 'person_employment_timeline'
 	| 'people_bridging_firm_sets';
 
 export const LOCAL_AI_TOOL_DEFINITIONS = [
+	{
+		type: 'function' as const,
+		function: {
+			name: 'inspect_canvas_graph',
+			description:
+				'Inspect the user\'s currently loaded FINRA canvas graph snapshot (nodes/links on screen or restored session). Use for questions about what is on the graph right now. Actions: summary, list_people, list_firms, selection_log, neighbors, dual_on_canvas, search.',
+			parameters: {
+				type: 'object',
+				properties: {
+					action: {
+						type: 'string',
+						description:
+							'summary | list_people | list_firms | selection_log | neighbors | dual_on_canvas | search',
+					},
+					query: { type: 'string', description: 'Optional name/CRD filter for list/search actions' },
+					nodeId: { type: 'string', description: 'Node id for neighbors, e.g. person:5417517 or firm:2525' },
+					limit: { type: 'number', description: 'Max rows to return (default 40)' },
+				},
+			},
+		},
+	},
 	{
 		type: 'function' as const,
 		function: {
@@ -56,7 +80,7 @@ export const LOCAL_AI_TOOL_DEFINITIONS = [
 		function: {
 			name: 'person_employment_timeline',
 			description:
-				'Get current and previous employment firms with registration begin/end dates for a person CRD. Use for timeline questions.',
+				'Get current and previous employment firms with registration begin/end dates for a person CRD from the local Redis cache only. Never fetches new CRDs; if missing, report that the cache lacks this person (cron owns hydration).',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -183,39 +207,30 @@ function buildPersonCurrentFirmIndex(options: {
 	return index;
 }
 
+/**
+ * Local Redis only. Cron owns CRD hydration — local-ai never calls
+ * /api/finra/individual (that route can queue live FINRA/SEC fetches).
+ * With USE_LOCAL_REDIS=1, getRedisClient() talks to 127.0.0.1:6379.
+ */
 async function loadIndividualDetail(personCrd: string): Promise<any | null> {
 	const crd = normalizeCrd(personCrd);
 	if (!crd) return null;
 	try {
 		const redis = getRedisClient();
-		if (redis) {
-			for (const key of [`finra:individual:${crd}`, `sec:individual:${crd}`]) {
-				const raw = await redis.get(key);
-				if (!raw) continue;
-				const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-				// Redis may store search-hit wrappers or raw detail.
-				if (parsed?.basicInformation || parsed?.currentEmployments) return parsed;
-				const hit = parsed?.hits?.hits?.[0]?._source;
-				if (hit?.content) {
-					const content = typeof hit.content === 'string' ? JSON.parse(hit.content) : hit.content;
-					if (content) return content;
-				}
-			}
+		if (!redis) return null;
+		for (const key of [`finra:individual:${crd}`, `sec:individual:${crd}`]) {
+			const raw = await redis.get(key);
+			if (raw == null) continue;
+			const text =
+				typeof raw === 'string' && raw.startsWith('br:') ? decompressPayload(raw) : raw;
+			const envelope = typeof text === 'string' ? JSON.parse(text) : text;
+			const detail = unwrapCachedIndividualDetail(envelope);
+			if (detail) return detail;
 		}
-	} catch {
-		/* fall through */
-	}
-
-	// Local API fallback (same Next process / localhost).
-	try {
-		const res = await fetch(`http://127.0.0.1:4444/api/finra/individual/${crd}`, { cache: 'no-store' });
-		if (!res.ok) return null;
-		const data = await res.json();
-		if (data?.found === false) return null;
-		return data;
 	} catch {
 		return null;
 	}
+	return null;
 }
 
 function employmentRows(list: any[] | undefined, kind: 'current' | 'previous') {
@@ -239,8 +254,14 @@ function employmentRows(list: any[] | undefined, kind: 'current' | 'previous') {
 export async function runLocalAiTool(
 	name: string,
 	args: Record<string, unknown> = {},
+	context: { canvasSnapshot?: CanvasSnapshot | null } = {},
 ): Promise<{ ok: boolean; tool: string; result: unknown }> {
 	const tool = String(name || '').trim() as LocalAiToolName;
+
+	if (tool === 'inspect_canvas_graph') {
+		const inspected = inspectCanvasSnapshot(context.canvasSnapshot, args);
+		return { ok: inspected.ok, tool, result: inspected.result };
+	}
 
 	if (tool === 'firm_current_roster') {
 		const firmCrd = normalizeCrd(args.firmCrd);
@@ -368,7 +389,11 @@ export async function runLocalAiTool(
 			return {
 				ok: false,
 				tool,
-				result: { error: 'individual detail not found in local redis/API', personCrd },
+				result: {
+					error: 'individual detail not in local Redis cache',
+					personCrd,
+					hint: 'Cron owns CRD hydration; local-ai does not fetch new individuals',
+				},
 			};
 		}
 		const bi = detail.basicInformation || {};

@@ -25,8 +25,11 @@ export async function POST(request: Request) {
 
 	const model = String(body?.model || DEFAULT_LOCAL_AI_MODEL).trim() || DEFAULT_LOCAL_AI_MODEL;
 	const history = Array.isArray(body?.history) ? body.history : [];
+	const aboutNodeGraph = Boolean(body?.aboutNodeGraph);
+	const canvasSnapshot =
+		aboutNodeGraph && body?.canvasSnapshot && typeof body.canvasSnapshot === 'object' ? body.canvasSnapshot : null;
 
-	const result = await runLocalAiAgent({ question, model, history });
+	const result = await runLocalAiAgent({ question, model, history, canvasSnapshot, aboutNodeGraph });
 	return NextResponse.json(result, {
 		status: result.ok ? 200 : 500,
 		headers: { 'Cache-Control': 'no-store' },
