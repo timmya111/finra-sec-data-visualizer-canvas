@@ -248,7 +248,9 @@ async function fetchUrlForLocalAi(
 		return { ok: false, result: { error: 'invalid URL' } };
 	}
 	const allowed = isFetchUrlAllowed(parsed);
-	if (!allowed.ok) return { ok: false, result: { error: allowed.error, url: parsed.href } };
+	if (allowed.ok === false) {
+		return { ok: false, result: { error: allowed.error, url: parsed.href } };
+	}
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), FETCH_URL_TIMEOUT_MS);
@@ -650,10 +652,12 @@ export async function runLocalAiTool(
 	}
 
 	if (tool === 'people_crd_year_stats') {
+		const fromYear = Number(args.fromYear);
+		const toYear = Number(args.toYear);
 		const stats = getPeopleCrdYearStats({
-			fromYear: args.fromYear,
-			toYear: args.toYear,
-			includeFirms: args.includeFirms as boolean | undefined,
+			fromYear: Number.isFinite(fromYear) ? fromYear : undefined,
+			toYear: Number.isFinite(toYear) ? toYear : undefined,
+			includeFirms: args.includeFirms === undefined ? undefined : Boolean(args.includeFirms),
 		});
 		return { ok: stats.ok, tool, result: stats.result };
 	}
