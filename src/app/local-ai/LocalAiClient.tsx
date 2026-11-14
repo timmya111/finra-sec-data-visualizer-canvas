@@ -7,7 +7,28 @@ import type { CanvasSnapshot } from '@/lib/localAi/canvasSnapshot';
 import { filterFreeLocalOllamaModels } from '@/lib/localAi/ollama';
 import { LOCAL_AI_AUTO_MODEL } from '@/lib/localAi/orchestrator';
 
-type ChatTurn = { role: 'user' | 'assistant'; content: string };
+type ChatTurn = {
+	role: 'user' | 'assistant';
+	content: string;
+	charts?: Array<{ src: string; label?: string }>;
+};
+
+function chartsFromToolTrace(toolTrace: any[] | null | undefined): Array<{ src: string; label?: string }> {
+	const out: Array<{ src: string; label?: string }> = [];
+	const seen = new Set<string>();
+	for (const entry of toolTrace || []) {
+		if (entry?.tool !== 'people_crd_year_stats') continue;
+		const chart = entry?.result?.chart;
+		if (!chart || typeof chart !== 'object') continue;
+		const png = typeof chart.png === 'string' ? chart.png : '';
+		const svg = typeof chart.svg === 'string' ? chart.svg : '';
+		const src = png || svg;
+		if (!src || seen.has(src)) continue;
+		seen.add(src);
+		out.push({ src, label: 'People by year — first registration begin vs inactive end (local Redis)' });
+	}
+	return out;
+}
 
 type StatusPayload = {
 	ok: boolean;
@@ -23,6 +44,7 @@ const EXAMPLES = [
 	'List people currently at 2+ firms in BrokerCheck data. Return Name :: CRD# lines.',
 	'Show the employment timeline for CRD 5417517 including begin/end dates.',
 	'Fetch https://127.0.0.1:4444/api/local-ai/status and summarize what models are available.',
+	'Show every-year new vs disabled/terminated people and firm CRDs from the local Redis census.',
 ];
 
 export default function LocalAiClient() {
@@ -137,8 +159,17 @@ export default function LocalAiClient() {
 					}
 				:	{ mode: autoMode ? 'auto' : 'manual', model: data.model, pipeline: 'single' },
 			);
-			setHistory((prev) => [...prev, { role: 'assistant', content: String(data.answer || '') }]);
-			setToolTrace(Array.isArray(data.toolTrace) ? data.toolTrace : []);
+			const nextTrace = Array.isArray(data.toolTrace) ? data.toolTrace : [];
+			const charts = chartsFromToolTrace(nextTrace);
+			setHistory((prev) => [
+				...prev,
+				{
+					role: 'assistant',
+					content: String(data.answer || ''),
+					charts: charts.length ? charts : undefined,
+				},
+			]);
+			setToolTrace(nextTrace);
 			setWorkerTraces(Array.isArray(data.workerTraces) ? data.workerTraces : null);
 		} catch (e: any) {
 			setError(e?.message || String(e));
@@ -343,7 +374,7 @@ export default function LocalAiClient() {
 							key={`${turn.role}-${index}`}
 							style={{
 								alignSelf: turn.role === 'user' ? 'flex-end' : 'flex-start',
-								maxWidth: '92%',
+								maxWidth: turn.charts?.length ? '100%' : '92%',
 								padding: '10px 12px',
 								borderRadius: 10,
 								whiteSpace: 'pre-wrap',
@@ -354,6 +385,36 @@ export default function LocalAiClient() {
 								{turn.role === 'user' ? 'You' : 'Assistant'}
 							</div>
 							{turn.content}
+							{turn.charts?.length ?
+								<div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+									{turn.charts.map((chart) => (
+										<figure key={chart.src} style={{ margin: 0 }}>
+											{chart.label ?
+												<figcaption style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
+													{chart.label}{' '}
+													<a href={chart.src} target="_blank" rel="noreferrer">
+														open
+													</a>
+												</figcaption>
+											:	null}
+											{/* Prefer PNG in chat; SVG can be huge horizontally */}
+											<img
+												src={chart.src}
+												alt={chart.label || 'CRD year stats chart'}
+												style={{
+													display: 'block',
+													width: '100%',
+													maxWidth: '100%',
+													height: 'auto',
+													borderRadius: 8,
+													border: '1px solid var(--border-strong, #ccc)',
+													background: '#fff',
+												}}
+											/>
+										</figure>
+									))}
+								</div>
+							:	null}
 						</div>
 					))
 				}

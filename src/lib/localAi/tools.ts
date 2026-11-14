@@ -3,6 +3,7 @@ import path from 'path';
 import { decompressPayload, getRedisClient } from '@/lib/redisCache';
 import { unwrapCachedIndividualDetail } from '@/lib/graphConnections';
 import { inspectCanvasSnapshot, type CanvasSnapshot } from '@/lib/localAi/canvasSnapshot';
+import { getPeopleCrdYearStats } from '@/lib/localAi/crdYearStats';
 
 const FIRM_CONN_DIR = path.join(process.cwd(), 'data', 'firm-connections');
 
@@ -12,7 +13,8 @@ export type LocalAiToolName =
 	| 'firm_current_roster'
 	| 'person_employment_timeline'
 	| 'people_bridging_firm_sets'
-	| 'fetch_url';
+	| 'fetch_url'
+	| 'people_crd_year_stats';
 
 export const LOCAL_AI_TOOL_DEFINITIONS = [
 	{
@@ -132,6 +134,31 @@ export const LOCAL_AI_TOOL_DEFINITIONS = [
 					},
 				},
 				required: ['url'],
+			},
+		},
+	},
+	{
+		type: 'function' as const,
+		function: {
+			name: 'people_crd_year_stats',
+			description:
+				'Yearly census from local Redis for EVERY year present (default full range). People: first employment registrationBeginDate vs inactive/terminated end year. Firms: corporate formedDate (can be early 1900s — NOT CRD creation) vs firmStatusDate when terminated/inactive. Use for yearly charts/stats. Do NOT refuse or sample — call this tool. Clarify formedDate vs CRD creation if the user asks about 1900. Returns asciiTable + byYear + chart.',
+			parameters: {
+				type: 'object',
+				properties: {
+					fromYear: {
+						type: 'number',
+						description: 'Start year inclusive (default: earliest year in cache)',
+					},
+					toYear: {
+						type: 'number',
+						description: 'End year inclusive (default: latest year in cache)',
+					},
+					includeFirms: {
+						type: 'boolean',
+						description: 'Include firm new/disabled columns (default true)',
+					},
+				},
 			},
 		},
 	},
@@ -620,6 +647,15 @@ export async function runLocalAiTool(
 	if (tool === 'fetch_url') {
 		const fetched = await fetchUrlForLocalAi(args.url, args.maxChars);
 		return { ok: fetched.ok, tool, result: fetched.result };
+	}
+
+	if (tool === 'people_crd_year_stats') {
+		const stats = getPeopleCrdYearStats({
+			fromYear: args.fromYear,
+			toYear: args.toYear,
+			includeFirms: args.includeFirms as boolean | undefined,
+		});
+		return { ok: stats.ok, tool, result: stats.result };
 	}
 
 	return { ok: false, tool: name, result: { error: `unknown tool: ${name}` } };

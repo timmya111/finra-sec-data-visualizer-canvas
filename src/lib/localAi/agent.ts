@@ -33,6 +33,7 @@ Rules:
 - Use firm_current_roster / find_dual_current_people / people_bridging_firm_sets for BrokerCheck current-roster facts beyond what is drawn.
 - person_employment_timeline reads local Redis only. Never request new CRDs; cron hydrates the cache. If a person is missing, say they are not in the local cache.
 - When the user pastes an API endpoint or page URL for cross-reference, call fetch_url with that URL. Only allowlisted hosts work (localhost, BrokerCheck, AdviserInfo, this app). Do not invent page contents.
+- For yearly CRD/people/firm counts or charts (all years or a range), call people_crd_year_stats once (defaults to every year). Never refuse as "too large". The UI renders the chart — reply with a short summary (unique people/firms + window totals + year min/max). Do NOT paste the full multi-decade table into the chat. If asked about early years like 1900: firm rows use corporate formedDate (e.g. Stifel 02/20/1900), not CRD issuance.
 - When listing people, use the format: Name :: CRD# 1234567
 - If a tool returns no matches, say so clearly and suggest a narrower query.
 - Keep answers concise. Lead with the list or conclusion, then brief notes.
@@ -118,10 +119,27 @@ async function runToolAgentLoop(options: {
 				const args = normalizeToolCallArguments(call?.function?.arguments);
 				const ran = await runLocalAiTool(toolName, args, { canvasSnapshot: options.canvasSnapshot });
 				toolTrace.push({ tool: toolName, args, result: ran.result });
+				// Slim year-stats payload for the model (full result stays in toolTrace for the UI/chart).
+				let toolContent: unknown = ran.result;
+				if (toolName === 'people_crd_year_stats' && ran.result && typeof ran.result === 'object') {
+					const full = ran.result as Record<string, unknown>;
+					toolContent = {
+						ok: full.ok,
+						fromYear: full.fromYear,
+						toYear: full.toYear,
+						yearCount: full.yearCount,
+						uniquePeopleInCache: full.uniquePeopleInCache,
+						uniqueFirmsInCache: full.uniqueFirmsInCache,
+						totalsInWindow: full.totalsInWindow,
+						chart: full.chart,
+						definitions: full.definitions,
+						note: 'Full byYear table omitted here. UI shows the chart. Summarize totals only; do not reprint every year.',
+					};
+				}
 				messages.push({
 					role: 'tool',
 					tool_name: toolName,
-					content: JSON.stringify(ran.result),
+					content: JSON.stringify(toolContent),
 				});
 			}
 		}

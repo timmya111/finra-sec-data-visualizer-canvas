@@ -38,6 +38,13 @@ const TOOLISH_RE =
 const HARD_RE =
 	/\b(compar|analy[sz]e|explain why|synthesize|multi[- ]step|strategy|cross[- ]ref|reconcile|debate|summarize (all|everything)|complex|versus|vs\.?)\b/i;
 const URL_RE = /https?:\/\/[^\s]+/i;
+/** Precomputed Redis census — must stay single+fast (no planner LLM / multi merge). */
+const CRD_YEAR_STATS_RE =
+	/\b(year(ly)?\s+stats?|stats?\s+by\s+year|each\s+year|every\s+year|all\s+years?|new\s+(people\s+)?crd|disabled\/?terminated|people\s+crd\s+year|crd\s+year\s+stats?|chart\s+.*(crd|year|people)|census)\b/i;
+
+export function isCrdYearStatsQuestion(question: string): boolean {
+	return CRD_YEAR_STATS_RE.test(String(question || ''));
+}
 
 export function isLocalAiChatModel(name: string): boolean {
 	const n = String(name || '').trim();
@@ -117,6 +124,15 @@ export function heuristicRouteModel(question: string, candidates: string[]): Loc
 	const toolsModel = toolsModelOf(candidates);
 	const reasonModel = reasonModelOf(candidates);
 
+	if (isCrdYearStatsQuestion(q)) {
+		return {
+			mode: 'auto',
+			pipeline: 'single',
+			model: toolsModel,
+			reason: 'heuristic: CRD year census → fast single tools model (skip multi)',
+			candidates,
+		};
+	}
 	if (shouldHeuristicMulti(q)) {
 		return buildMultiPlan(q, candidates, 'heuristic: adaptive multi — tools/fetch + reason + merge', undefined);
 	}
@@ -263,6 +279,11 @@ export async function routeLocalAiModel(options: {
 	const candidates = listAutoChatCandidates(installed || []);
 	const fallback = heuristicRouteModel(options.question, candidates);
 	const routerModel = pickAvailable(candidates, ['qwen2.5:7b', 'llama3.2:latest', 'qwen3.6:latest'], DEFAULT_LOCAL_AI_MODEL);
+
+	// Year-census questions: skip the planner LLM entirely (huge latency win).
+	if (isCrdYearStatsQuestion(options.question)) {
+		return { ...fallback, routerModel: undefined, reason: `${fallback.reason} (planner skipped)` };
+	}
 
 	try {
 		const { message } = await ollamaChat({
