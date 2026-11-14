@@ -18,6 +18,11 @@ export type GraphSearchClickConfig = {
 	/** Firm click only: reveal roster people matching any of these keyword tags (empty = all). */
 	clickRevealKeywords: string[];
 	/**
+	 * When false, committed keyword tags stay saved but are not applied on firm click
+	 * (same idea as the dashboard Connections "Tags" checkbox). Default true.
+	 */
+	clickRevealKeywordsEnabled: boolean;
+	/**
 	 * Firm click keyword matching mode.
 	 * false (default) = fuzzy: every token of a tag may appear anywhere in the name/CRD.
 	 * true = strict: tag must appear as an exact contiguous phrase within the name/CRD.
@@ -35,6 +40,7 @@ export const DEFAULT_GRAPH_SEARCH_CLICK_CONFIG: GraphSearchClickConfig = {
 	firmRevealLimit: DEFAULT_FIRM_REVEAL_LIMIT,
 	firmRevealPrevious: false,
 	clickRevealKeywords: [],
+	clickRevealKeywordsEnabled: true,
 	clickRevealStrict: false,
 };
 
@@ -86,6 +92,7 @@ export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickCon
 	const legacyKeyword = (base as { clickRevealKeyword?: unknown }).clickRevealKeyword;
 	const fromArray = Array.isArray(base.clickRevealKeywords) ? base.clickRevealKeywords : null;
 	const clickRevealKeywords = parseClickRevealKeywordTags(fromArray ?? legacyKeyword ?? []);
+	const hasKeywordsEnabled = Object.prototype.hasOwnProperty.call(base, 'clickRevealKeywordsEnabled');
 	return {
 		searchScope: normalizeGraphSearchScope(base.searchScope),
 		includeInactive: Boolean(base.includeInactive),
@@ -93,8 +100,17 @@ export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickCon
 		firmRevealLimit: normalizeFirmRevealLimit(base.firmRevealLimit),
 		firmRevealPrevious: Boolean(base.firmRevealPrevious),
 		clickRevealKeywords,
+		clickRevealKeywordsEnabled: hasKeywordsEnabled ? Boolean(base.clickRevealKeywordsEnabled) : true,
 		clickRevealStrict: Boolean(base.clickRevealStrict),
 	};
+}
+
+/** Keywords applied on firm click — empty when Tags is unchecked. */
+export function effectiveClickRevealKeywords(
+	config: Pick<GraphSearchClickConfig, 'clickRevealKeywords' | 'clickRevealKeywordsEnabled'>,
+): string[] {
+	if (!config?.clickRevealKeywordsEnabled) return [];
+	return parseClickRevealKeywordTags(config.clickRevealKeywords);
 }
 
 export function loadGraphSearchClickConfig(): GraphSearchClickConfig {
@@ -323,6 +339,7 @@ export function syncGraphSearchClickConfigToDom(config: GraphSearchClickConfig, 
 	el.dataset.fgClickFirmLimit = String(normalized.firmRevealLimit);
 	el.dataset.fgClickFirmPrevious = normalized.firmRevealPrevious ? 'true' : 'false';
 	el.dataset.fgClickKeywords = JSON.stringify(normalized.clickRevealKeywords);
+	el.dataset.fgClickKeywordsEnabled = normalized.clickRevealKeywordsEnabled ? 'true' : 'false';
 	el.dataset.fgClickStrict = normalized.clickRevealStrict ? 'true' : 'false';
 	// Legacy single-string dataset for older readers.
 	el.dataset.fgClickKeyword = normalized.clickRevealKeywords.join(', ');
@@ -343,6 +360,7 @@ export function readGraphSearchClickConfigFromDom(root: HTMLElement | null = nul
 	} else {
 		keywords = el.dataset.fgClickKeyword || '';
 	}
+	const keywordsEnabledRaw = el.dataset.fgClickKeywordsEnabled;
 	return normalizeGraphSearchClickConfig({
 		searchScope: el.dataset.fgSearchScope as GraphSearchScope,
 		includeInactive: el.dataset.fgSearchIncludeInactive === 'true',
@@ -350,6 +368,7 @@ export function readGraphSearchClickConfigFromDom(root: HTMLElement | null = nul
 		firmRevealLimit: Number(el.dataset.fgClickFirmLimit),
 		firmRevealPrevious: el.dataset.fgClickFirmPrevious === 'true',
 		clickRevealKeywords: keywords as string[],
+		clickRevealKeywordsEnabled: keywordsEnabledRaw == null ? true : keywordsEnabledRaw === 'true',
 		clickRevealStrict: el.dataset.fgClickStrict === 'true',
 	});
 }

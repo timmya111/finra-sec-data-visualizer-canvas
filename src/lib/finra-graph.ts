@@ -81,6 +81,7 @@ import {
 	connectionMatchesClickRevealKeyword,
 	DEFAULT_FIRM_REVEAL_LIMIT,
 	graphSearchConfigQueryKeyPart,
+	effectiveClickRevealKeywords,
 	readGraphSearchClickConfigFromDom,
 	searchConfigActivityMode,
 	searchConfigIncludesFirms,
@@ -11246,8 +11247,11 @@ export function init(
 								label: e?.firm_name || e?.firmName || `Firm ${fid}`,
 								group: 'firm',
 								firmId: fid,
-								bdSecNumber: e?.firm_bd_sec_number || e?.bdSecNumber,
-								iaSecNumber: e?.firm_ia_sec_number || e?.iaSecNumber,
+								bdSecNumber: e?.firm_bd_sec_number || e?.bdSecNumber || e?.bdSECNumber,
+								iaSecNumber: e?.firm_ia_sec_number || e?.iaSecNumber || e?.iaSECNumber,
+								bcScope: e?.firmBCScope || null,
+								iaScope: e?.firmIAScope || null,
+								firmStatus: e?.firmStatus || null,
 							});
 						}
 						const employmentLink = {
@@ -12946,6 +12950,9 @@ async function fetchIndividualBatch(crd, queryLabel = null, options: { includePr
 				firmId: String(fid),
 				bdSecNumber: e?.bdSECNumber || e?.bdSecNumber || e?.firm_bd_sec_number || null,
 				iaSecNumber: e?.iaSECNumber || e?.iaSecNumber || null,
+				bcScope: e?.firmBCScope || null,
+				iaScope: e?.firmIAScope || null,
+				firmStatus: e?.firmStatus || null,
 			});
 		}
 		links.push({
@@ -15776,28 +15783,9 @@ function isNodeInactive(node, visited = new Set()) {
 		if (finraFlags.hasInactive || secFlags.hasInactive || registrationStatusFlags.hasInactive) return true;
 		if ((sourceTruth.finra || sourceTruth.sec) && Array.isArray(node.activeStates) && node.activeStates.length) return false;
 		if (node.isLegacy === 'Y' && !sourceTruth.sec) return true;
-		const isFirmStub = node.stub || (!node.basicInformation && !node.bcScope && !node.firmStatus && !node.iaScope && !node.bdSecNumber && !node.iaSecNumber);
-		if (isFirmStub) {
-			const connectedLinks = (globalState.layoutLinks || []).filter((l) => {
-				const srcId = l.source?.id || l.source;
-				const tgtId = l.target?.id || l.target;
-				return srcId === node.id || tgtId === node.id;
-			});
-			if (connectedLinks.length > 0) {
-				const hasActiveLink = connectedLinks.some((l) => {
-					if (isPreviousEmploymentLink(l)) return false;
-					const otherId = (l.source?.id || l.source) === node.id ? (l.target?.id || l.target) : (l.source?.id || l.source);
-					const otherNode = globalState.layoutNodes?.find((n) => n.id === otherId);
-					if (!otherNode) return true;
-					if (isNodeInactive(otherNode, visited)) return false;
-					return true;
-				});
-				if (!hasActiveLink) return true;
-			} else {
-				return true;
-			}
-		}
-
+		// Unknown firm stubs (no registration scopes yet) stay colored until detail
+		// hydrates — previous_employed_by alone must not gray an active SEC/FINRA firm
+		// (same rule as individual stubs). Real inactive scopes still win above.
 		return false;
 	}
 
@@ -18937,10 +18925,15 @@ function syncIndividualConnectionsFromDetail(personNode, detail, options: { incl
 				label: firmName || `Firm ${firmId}`,
 				group: 'firm',
 				firmId: firmId || undefined,
-				bdSecNumber: employment?.bdSECNumber || employment?.firm_bd_sec_number,
-				iaSecNumber: employment?.iaSECNumber || employment?.firm_ia_sec_number,
+				bdSecNumber: employment?.bdSECNumber || employment?.bdSecNumber || employment?.firm_bd_sec_number,
+				iaSecNumber: employment?.iaSECNumber || employment?.iaSecNumber || employment?.firm_ia_sec_number,
+				// Stamp both scopes from employment — SEC-only firms often carry
+				// firmBCScope NotInScope + firmIAScope ACTIVE (e.g. Exodus CRD 174328).
+				// Dropping IA left canvas/SVG painting gray until click hydrate.
 				bcScope: employment?.firmBCScope || null,
-				firmStatus: employment?.employmentStatus || employment?.status || employment?.firmStatus || null,
+				iaScope: employment?.firmIAScope || null,
+				// Employment relationship status is not firm registration status.
+				firmStatus: employment?.firmStatus || null,
 			});
 		}
 
@@ -19783,11 +19776,12 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 
 	const currentRaw = Array.isArray(firmNode.currentConnections) ? firmNode.currentConnections : [];
 	const previousRaw = includePrevious && Array.isArray(firmNode.previousConnections) ? firmNode.previousConnections : [];
+	const clickKeywords = effectiveClickRevealKeywords(clickConfig);
 	const current = currentRaw.filter((connection) =>
-		connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeywords, clickConfig.clickRevealStrict),
+		connectionMatchesClickRevealKeyword(connection, clickKeywords, clickConfig.clickRevealStrict),
 	);
 	const previous = previousRaw.filter((connection) =>
-		connectionMatchesClickRevealKeyword(connection, clickConfig.clickRevealKeywords, clickConfig.clickRevealStrict),
+		connectionMatchesClickRevealKeyword(connection, clickKeywords, clickConfig.clickRevealStrict),
 	);
 	if (!current.length && !previous.length) {
 		updateFetchStatus(`No more connections to reveal for ${firmLabel}`);

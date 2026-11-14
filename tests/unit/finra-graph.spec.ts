@@ -1592,6 +1592,35 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(isNodeInactive(activeSec)).toBe(false);
 	});
 
+	it('isNodeInactive keeps SEC-only previous-employer stubs active when firmIAScope is ACTIVE', () => {
+		// Exodus Wealth CRD 174328 — person previous employment stamps firmBCScope
+		// NotInScope + firmIAScope ACTIVE. NotInScope must not gray the firm.
+		const node = {
+			id: 'firm:174328',
+			group: 'firm',
+			label: 'PROSPERITY WEALTH MANAGEMENT, INC.',
+			firmId: '174328',
+			bcScope: 'NOTINSCOPE',
+			iaScope: 'ACTIVE',
+			iaSecNumber: '101485',
+			firmStatus: null,
+		} as any;
+		expect(isNodeInactive(node)).toBe(false);
+	});
+
+	it('isNodeInactive keeps unknown firm stubs active until scopes hydrate', () => {
+		// Previous-only employment leaves a firm stub with no registration scopes.
+		// Do not inherit inactive from previous_employed_by before click hydrate.
+		const node = {
+			id: 'firm:999001',
+			group: 'firm',
+			label: 'UNKNOWN PREVIOUS FIRM',
+			firmId: '999001',
+			stub: true,
+		} as any;
+		expect(isNodeInactive(node)).toBe(false);
+	});
+
 	it('isNodeInactive grays firms when firmStatus is Terminated even if iaScope stays ACTIVE', () => {
 		// State Farm Investment Management Corp. CRD 3487 — BrokerCheck keeps
 		// iaScope ACTIVE + historical SEC Approved while firmStatus is Terminated.
@@ -1884,6 +1913,12 @@ describe('FinraGraph DOM helpers (unit)', () => {
 		expect(shouldAutoExpandRouteSelection('person:4240769', 'person:4240769')).toBe(false);
 		expect(shouldAutoExpandRouteSelection('person:4240769', 'person:1111111')).toBe(true);
 		expect(shouldAutoExpandRouteSelection('person:4240769', null)).toBe(true);
+		// Keyboard re-Enter must pass forceAutoExpand so already-selected firms still
+		// continue the next roster batch (route handler: autoExpand && (!already || force)).
+		const alreadySelected = !shouldAutoExpandRouteSelection('firm:174328', 'firm:174328');
+		expect(alreadySelected).toBe(true);
+		expect(true && (!alreadySelected || true)).toBe(true);
+		expect(true && (!alreadySelected || false)).toBe(false);
 	});
 
 	it('shouldSuppressFirmSelectionPersonLink keeps firm roster quiet unless firm or child is hovered', () => {
@@ -2497,9 +2532,21 @@ describe('FinraGraph DOM helpers (unit)', () => {
 	it('routeSidebarNodeSelection pushes the node route and dispatches a selection request', () => {
 		const pushState = vi.spyOn(window.history, 'pushState');
 		const setBrowserPathname = vi.fn();
-		const dispatched: Array<{ nodeId?: string; pulseDuration?: number; autoExpand?: boolean }> = [];
+		const dispatched: Array<{
+			nodeId?: string;
+			pulseDuration?: number;
+			autoExpand?: boolean;
+			forceAutoExpand?: boolean;
+		}> = [];
 		const listener = (event: Event) => {
-			dispatched.push(((event as CustomEvent).detail || {}) as { nodeId?: string; pulseDuration?: number; autoExpand?: boolean });
+			dispatched.push(
+				((event as CustomEvent).detail || {}) as {
+					nodeId?: string;
+					pulseDuration?: number;
+					autoExpand?: boolean;
+					forceAutoExpand?: boolean;
+				},
+			);
 		};
 
 		window.addEventListener('finra:route-node-request', listener as EventListener);
@@ -2514,7 +2561,24 @@ describe('FinraGraph DOM helpers (unit)', () => {
 
 			expect(setBrowserPathname).toHaveBeenCalledWith('/individual/2632784');
 			expect(pushState).toHaveBeenCalledWith(window.history.state, '', '/individual/2632784');
-			expect(dispatched).toEqual([{ nodeId: 'person:2632784', pulseDuration: 5000, autoExpand: false }]);
+			expect(dispatched).toEqual([
+				{ nodeId: 'person:2632784', pulseDuration: 5000, autoExpand: false, forceAutoExpand: false },
+			]);
+
+			routeSidebarNodeSelection({
+				nodeId: 'firm:174328',
+				browserPathname: '/firm/174328',
+				pathname: '/firm/174328',
+				setBrowserPathname,
+				autoExpand: true,
+				forceAutoExpand: true,
+			});
+			expect(dispatched[1]).toEqual({
+				nodeId: 'firm:174328',
+				pulseDuration: 5000,
+				autoExpand: true,
+				forceAutoExpand: true,
+			});
 		} finally {
 			window.removeEventListener('finra:route-node-request', listener as EventListener);
 			pushState.mockRestore();

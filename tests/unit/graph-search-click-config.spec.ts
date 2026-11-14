@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	connectionMatchesClickRevealKeyword,
 	DEFAULT_FIRM_REVEAL_LIMIT,
+	effectiveClickRevealKeywords,
 	graphSearchConfigQueryKeyPart,
 	graphSearchConfigToLegacySearchType,
 	matchesClickRevealKeywords,
@@ -30,6 +31,7 @@ describe('graphSearchClickConfig', () => {
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
 			clickRevealKeywords: ['  hopper  ', 'smith'],
+			clickRevealKeywordsEnabled: false,
 			clickRevealStrict: true,
 			// Legacy single-string field migrates into tags.
 			clickRevealKeyword: 'ignored-when-array-present',
@@ -41,13 +43,22 @@ describe('graphSearchClickConfig', () => {
 			firmRevealLimit: 40,
 			firmRevealPrevious: true,
 			clickRevealKeywords: ['hopper', 'smith'],
+			clickRevealKeywordsEnabled: false,
 			clickRevealStrict: true,
 		});
 		expect(normalizeGraphSearchClickConfig({ clickRevealKeyword: 'jane, hopper' } as any).clickRevealKeywords).toEqual([
 			'jane',
 			'hopper',
 		]);
+		// Legacy configs without the field keep Tags enabled.
+		expect(normalizeGraphSearchClickConfig({ clickRevealKeywords: ['a'] } as any).clickRevealKeywordsEnabled).toBe(true);
 		expect(parseClickRevealKeywordTags('a, a, B')).toEqual(['a', 'B']);
+		expect(
+			effectiveClickRevealKeywords({ clickRevealKeywords: ['hopper'], clickRevealKeywordsEnabled: false }),
+		).toEqual([]);
+		expect(
+			effectiveClickRevealKeywords({ clickRevealKeywords: ['hopper'], clickRevealKeywordsEnabled: true }),
+		).toEqual(['hopper']);
 	});
 
 	it('maps include-inactive to active+inactive (no inactive-only mode)', () => {

@@ -9,6 +9,7 @@ export type E2ESearchClickConfig = {
 	firmRevealLimit?: number;
 	firmRevealPrevious?: boolean;
 	clickRevealKeywords?: string[];
+	clickRevealKeywordsEnabled?: boolean;
 	clickRevealStrict?: boolean;
 };
 
@@ -58,15 +59,23 @@ export async function setGraphSearchClickConfig(page: Page, patch: E2ESearchClic
 		if (patch.firmRevealPrevious) await box.check();
 		else await box.uncheck();
 	}
-	if (Array.isArray(patch.clickRevealKeywords)) {
-		// Clear existing chips then add each tag via Enter.
-		const removeButtons = panel.locator('.fg-click-keyword-chip-remove');
-		while ((await removeButtons.count()) > 0) {
-			await removeButtons.first().click();
+	if (Array.isArray(patch.clickRevealKeywords) || typeof patch.clickRevealKeywordsEnabled === 'boolean') {
+		const enabledBox = page.locator('#fg-click-keyword-tags-enabled');
+		// Chips only render while Tags is on — enable before clear/add.
+		if (Array.isArray(patch.clickRevealKeywords)) {
+			await enabledBox.check();
+			const removeButtons = panel.locator('.fg-click-keyword-chip-remove');
+			while ((await removeButtons.count()) > 0) {
+				await removeButtons.first().click();
+			}
+			for (const tag of patch.clickRevealKeywords) {
+				await page.locator('#fg-click-keyword').fill(tag);
+				await page.locator('#fg-click-keyword').press('Enter');
+			}
 		}
-		for (const tag of patch.clickRevealKeywords) {
-			await page.locator('#fg-click-keyword').fill(tag);
-			await page.locator('#fg-click-keyword').press('Enter');
+		if (typeof patch.clickRevealKeywordsEnabled === 'boolean') {
+			if (patch.clickRevealKeywordsEnabled) await enabledBox.check();
+			else await enabledBox.uncheck();
 		}
 	}
 	if (typeof patch.clickRevealStrict === 'boolean') {

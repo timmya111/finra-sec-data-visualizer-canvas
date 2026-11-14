@@ -221,6 +221,7 @@ function routeSidebarNodeSelection({
 	setBrowserPathname,
 	pulseDuration = 5000,
 	autoExpand = false,
+	forceAutoExpand = false,
 }: {
 	nodeId: string;
 	browserPathname: string;
@@ -228,6 +229,8 @@ function routeSidebarNodeSelection({
 	setBrowserPathname: (nextPath: string) => void;
 	pulseDuration?: number;
 	autoExpand?: boolean;
+	/** When true, expand even if this node is already selected (keyboard re-Enter continue-reveal). */
+	forceAutoExpand?: boolean;
 }) {
 	const nextHref = buildNodeRouteHref(nodeId);
 	const nextPath = buildNodeRoutePath(nodeId);
@@ -236,7 +239,11 @@ function routeSidebarNodeSelection({
 		setBrowserPathname(nextPath);
 		updateNodeRouteHistory(nextHref, 'push');
 	}
-	window.dispatchEvent(new CustomEvent('finra:route-node-request', { detail: { nodeId, pulseDuration, autoExpand } }));
+	window.dispatchEvent(
+		new CustomEvent('finra:route-node-request', {
+			detail: { nodeId, pulseDuration, autoExpand, forceAutoExpand },
+		}),
+	);
 }
 
 function isFindShortcut(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'defaultPrevented'>) {
@@ -318,7 +325,11 @@ export default function FinraGraph() {
 	const [graphReady, setGraphReady] = useState(false);
 	const [browserPathname, setBrowserPathname] = useState('');
 	const [fetchQuery, setFetchQuery] = useState('');
-	const [searchClickConfig, setSearchClickConfig] = useState<GraphSearchClickConfig>(DEFAULT_GRAPH_SEARCH_CLICK_CONFIG);
+	// Lazy-load from localStorage so remount (dashboard → graph) never starts from
+	// empty defaults that the persist effect could write back and wipe tags.
+	const [searchClickConfig, setSearchClickConfig] = useState<GraphSearchClickConfig>(() =>
+		typeof window === 'undefined' ? DEFAULT_GRAPH_SEARCH_CLICK_CONFIG : loadGraphSearchClickConfig(),
+	);
 	const [clickKeywordDraft, setClickKeywordDraft] = useState('');
 	const [isSearchConfigOpen, setIsSearchConfigOpen] = useState(false);
 	const [isFindBarOpen, setIsFindBarOpen] = useState(false);
@@ -347,9 +358,8 @@ export default function FinraGraph() {
 			setIsSidebarToolsOpen(stored === 'true');
 		}
 
-		const loadedConfig = loadGraphSearchClickConfig();
-		setSearchClickConfig(loadedConfig);
-		syncGraphSearchClickConfigToDom(loadedConfig);
+		// Config already came from localStorage via useState lazy init; only sync DOM here.
+		syncGraphSearchClickConfigToDom(loadGraphSearchClickConfig());
 
 		// Lightweight heap beacon for navigation crash diagnosis (Chrome only).
 		let lastPostedMb = 0;
@@ -409,8 +419,8 @@ export default function FinraGraph() {
 
 	const isSearchConfigFirstRenderRef = useRef(true);
 	useEffect(() => {
-		// Skip the mount-time run: the load-from-storage effect above hasn't
-		// applied its persisted value yet during this same commit.
+		// Skip the mount-time run so React Strict Mode's effect re-run cannot
+		// persist a pre-hydration snapshot. State is already loaded via lazy init.
 		if (isSearchConfigFirstRenderRef.current) {
 			isSearchConfigFirstRenderRef.current = false;
 			syncGraphSearchClickConfigToDom(searchClickConfig);
@@ -448,6 +458,7 @@ export default function FinraGraph() {
 		if (!newTags.length) return false;
 		updateSearchClickConfig({
 			clickRevealKeywords: [...searchClickConfig.clickRevealKeywords, ...newTags],
+			clickRevealKeywordsEnabled: true,
 		});
 		setClickKeywordDraft('');
 		return true;
@@ -925,12 +936,16 @@ export default function FinraGraph() {
 				event.preventDefault();
 				event.stopPropagation();
 
+				// forceAutoExpand: arrow→Enter uses route selection (not SVG click).
+				// Without force, a second Enter on the already-selected firm only
+				// re-focuses and skips the next roster batch.
 				routeSidebarNodeSelection({
 					nodeId,
 					browserPathname,
 					pathname,
 					setBrowserPathname,
 					autoExpand: true,
+					forceAutoExpand: true,
 				});
 
 				// Ensure selection emphasis is re-applied after keyboard-driven routing
@@ -1309,10 +1324,13 @@ export default function FinraGraph() {
 														<span>Keyword filter</span>
 														<div
 															id='fg-click-keyword-tags'
-															className='fg-click-keyword-tags'
+															className={`fg-click-keyword-tags${searchClickConfig.clickRevealKeywordsEnabled ? '' : ' is-disabled'}`}
 															role='group'
 															aria-label='Firm click keyword tags'>
-															{searchClickConfig.clickRevealKeywords.map((tag) => (
+															{(searchClickConfig.clickRevealKeywordsEnabled ?
+																searchClickConfig.clickRevealKeywords
+															:	[]
+															).map((tag) => (
 																<span key={tag} className='fg-click-keyword-chip'>
 																	{tag}
 																	<button
@@ -1333,7 +1351,7 @@ export default function FinraGraph() {
 																type='text'
 																value={clickKeywordDraft}
 																placeholder={
-																	searchClickConfig.clickRevealKeywords.length ?
+																	searchClickConfig.clickRevealKeywordsEnabled && searchClickConfig.clickRevealKeywords.length ?
 																		'Add another keyword…'
 																	:	'name / CRD, Enter to add'
 																}
@@ -1348,6 +1366,7 @@ export default function FinraGraph() {
 																	if (!newTags.length) return;
 																	updateSearchClickConfig({
 																		clickRevealKeywords: [...searchClickConfig.clickRevealKeywords, ...newTags],
+																		clickRevealKeywordsEnabled: true,
 																	});
 																}}
 																onKeyDown={(e) => {
@@ -1357,6 +1376,7 @@ export default function FinraGraph() {
 																	} else if (
 																		e.key === 'Backspace' &&
 																		!clickKeywordDraft &&
+																		searchClickConfig.clickRevealKeywordsEnabled &&
 																		searchClickConfig.clickRevealKeywords.length > 0
 																	) {
 																		updateSearchClickConfig({
@@ -1370,17 +1390,33 @@ export default function FinraGraph() {
 															/>
 														</div>
 													</div>
-													<label
-														className='fg-search-config-option fg-search-config-option--check'
-														title='Strict: tag must appear as an exact phrase in the name. Unchecked uses fuzzy token matching.'>
-														<input
-															id='fg-click-keyword-strict'
-															type='checkbox'
-															checked={searchClickConfig.clickRevealStrict}
-															onChange={(e) => updateSearchClickConfig({ clickRevealStrict: e.target.checked })}
-														/>
-														<span>Strict match</span>
-													</label>
+													<div className='fg-search-config-checks'>
+														<label
+															className='fg-search-config-option fg-search-config-option--check'
+															title='Strict: tag must appear as an exact phrase in the name. Unchecked uses fuzzy token matching.'>
+															<input
+																id='fg-click-keyword-strict'
+																type='checkbox'
+																checked={searchClickConfig.clickRevealStrict}
+																onChange={(e) => updateSearchClickConfig({ clickRevealStrict: e.target.checked })}
+															/>
+															<span>Strict match</span>
+														</label>
+														<label
+															className='fg-click-keyword-tags-enabled'
+															title='When checked, committed keyword tags filter firm click reveals. Unchecked keeps tags saved but does not apply them.'>
+															<input
+																id='fg-click-keyword-tags-enabled'
+																type='checkbox'
+																checked={searchClickConfig.clickRevealKeywordsEnabled}
+																onChange={(e) =>
+																	updateSearchClickConfig({ clickRevealKeywordsEnabled: e.target.checked })
+																}
+																aria-label='Apply committed keyword tags'
+															/>
+															Tags
+														</label>
+													</div>
 												</div>
 											</div>
 										:	null}
