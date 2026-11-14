@@ -21,6 +21,18 @@ export function getOllamaBaseUrl(): string {
 	return String(process.env.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL).replace(/\/$/, '');
 }
 
+/** Ollama Cloud tags (`*:cloud`) are paid; hide them from the local-ai picker. */
+export function isFreeLocalOllamaModel(name: string): boolean {
+	const n = String(name || '').trim().toLowerCase();
+	if (!n) return false;
+	if (n.endsWith(':cloud') || n.includes(':cloud-') || n.includes('/cloud:')) return false;
+	return true;
+}
+
+export function filterFreeLocalOllamaModels(models: string[]): string[] {
+	return (Array.isArray(models) ? models : []).filter(isFreeLocalOllamaModel);
+}
+
 export async function ollamaTags(baseUrl = getOllamaBaseUrl()): Promise<{
 	ok: boolean;
 	models: string[];
@@ -31,7 +43,7 @@ export async function ollamaTags(baseUrl = getOllamaBaseUrl()): Promise<{
 		if (!res.ok) return { ok: false, models: [], error: `ollama tags HTTP ${res.status}` };
 		const data = await res.json();
 		const models = Array.isArray(data?.models) ?
-			data.models.map((m: any) => String(m?.name || '')).filter(Boolean)
+			filterFreeLocalOllamaModels(data.models.map((m: any) => String(m?.name || '')).filter(Boolean))
 		:	[];
 		return { ok: true, models };
 	} catch (error: any) {

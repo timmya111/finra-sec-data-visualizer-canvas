@@ -16,6 +16,7 @@ Live demo: https://finra-sec-data-visualizer-canvas.vercel.app/
 - Inspect rich sidebar detail with timelines, disclosures, and ownership context
 - Run locally from cached artifacts or deploy with bundled graph and primed cache data
 - Hydrate search, expand, and graph **firm names** from gzip search-index sidecars (`public/search-indexes/search-index.*.json.gz`) so nodes do not stay stuck as `Firm <CRD>`
+- Optional **Local AI** on localhost (`/local-ai`) via Ollama + local Redis (see Quick start)
 
 See `docs/search-sidecar.md` for the sidecar hydration path.
 
@@ -149,25 +150,146 @@ When trace or selection behavior changes in code, update this section only after
 
 ---
 
-## Quick start
+## Quick start (new machine)
 
-### Install and run locally
+Follow these steps in order. You only need Node.js, pnpm, and a local Redis. Ollama is optional and only needed for Local AI.
+
+### 1. Install basics
+
+- **Node.js** 20+ — https://nodejs.org/
+- **pnpm** — after Node is installed:
 
 ```bash
+npm install -g pnpm
+```
+
+Clone the repo, then install dependencies:
+
+```bash
+git clone <this-repo-url>
+cd finra-sec-data-visualizer-canvas
 pnpm install
+```
+
+### 2. Start local Redis (required for a normal local run)
+
+The app expects Redis at **`127.0.0.1:6379`**. Easiest option for a new setup is Docker:
+
+```bash
+docker run -d --name finra-local-redis \
+  -p 6379:6379 \
+  redis:7-alpine
+```
+
+Check that it responds:
+
+```bash
+docker exec finra-local-redis redis-cli ping
+# expect: PONG
+```
+
+**Without Docker**, install Redis another way and start it on port `6379`:
+
+- macOS (Homebrew): `brew install redis && brew services start redis`
+- Ubuntu/Debian: `sudo apt install redis-server` then start the service
+- Or build/run any Redis that listens on `127.0.0.1:6379`
+
+Optional browser UI for keys: after Redis is up, you can open Redis Commander at `http://127.0.0.1:8081/` when the app’s `pnpm run dev` helper starts it.
+
+> Note: `pnpm run dev` calls `.local/scripts/start-local-redis.sh`, which may point at a machine-specific Redis start script. If that script fails on your machine, start Redis yourself with Docker (above), then run `pnpm run dev` again. You can also set `REDIS_START_SCRIPT=/path/to/your/start-redis.sh` if you have your own starter.
+
+### 3. Create a local env file
+
+Create `.env.local` in the repo root (do **not** commit secrets). Minimum for local Redis:
+
+```bash
+cat > .env.local <<'EOF'
+USE_LOCAL_REDIS=1
+UPSTASH_ALLOW_WRITES=1
+USE_REDIS_ONLY=1
+EOF
+```
+
+What these mean:
+
+- `USE_LOCAL_REDIS=1` — talk to `127.0.0.1:6379` instead of cloud Upstash
+- `UPSTASH_ALLOW_WRITES=1` — allow the local app to write cache keys
+- `USE_REDIS_ONLY=1` — prefer Redis when it is healthy
+
+You can copy extra keys later from a teammate’s `.env.local` if you need Upstash tokens for production tooling. For day-to-day local graph work, the three lines above are enough.
+
+### 4. Run the app
+
+```bash
+pnpm run dev
+```
+
+Open:
+
+- Graph: http://localhost:4444/
+- Dashboard: http://localhost:4444/dashboard
+
+If the Next cache is stuck, use a clean start:
+
+```bash
 pnpm run dev:clean
 ```
 
-Local app URL:
+### 5. Optional — Local AI with Ollama
 
-- `http://localhost:4444`
+Local AI is a **localhost-only** page that uses models on your machine. It does not require a cloud API key.
 
-`dev:clean` is the safest option when the local `.next` cache gets grumpy.
+#### 5a. Install Ollama
+
+- Download: https://ollama.com/download  
+- Or Linux install script:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Confirm the service answers:
+
+```bash
+ollama --version
+curl -s http://127.0.0.1:11434/api/tags | head
+```
+
+#### 5b. Pull a free local chat model
+
+Start with the default tools-friendly model (~4–5 GB download):
+
+```bash
+ollama pull qwen2.5:7b
+```
+
+Optional stronger model (larger / slower):
+
+```bash
+ollama pull qwen2.5:14b
+```
+
+Skip Ollama Cloud tags such as `*:cloud` — those are paid and are hidden in the Local AI UI.
+
+#### 5c. Use Local AI in the app
+
+1. Keep `pnpm run dev` running (and Redis up).
+2. Open http://localhost:4444/local-ai  
+3. Leave **Auto model** checked (planner picks a free local model; harder questions may run tools + reason + merge).
+4. Ask a question (rosters, dual CRDs, timelines, or paste an allowlisted URL).
+
+Optional env:
+
+```text
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+(Only set this if Ollama is not on the default port.)
 
 ### Useful local commands
 
 ```bash
-# Standard dev server (automatically starts local Redis server)
+# Standard dev server (tries to start local Redis helper, then Next on :4444)
 pnpm run dev
 
 # Iteratively expand the local FINRA/SEC cache from identifiers already discovered
@@ -305,6 +427,12 @@ env NODE_OPTIONS=--max-old-space-size=8192 pnpm build
 
 | Variable                                              | Purpose                                                                                         |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `USE_LOCAL_REDIS`                                     | Set to `1` for local Redis at `127.0.0.1:6379` (recommended for localhost)                      |
+| `UPSTASH_ALLOW_WRITES`                                | Set to `1` locally so the app can write cache keys                                              |
+| `USE_REDIS_ONLY`                                      | Prefer Redis when healthy; still falls back to disk/mem when Redis is down                      |
+| `OLLAMA_BASE_URL`                                     | Optional Local AI Ollama base (default `http://127.0.0.1:11434`)                                |
+| `ALLOW_LOCAL_AI`                                      | Set to `1` only if you intentionally expose `/local-ai` off loopback                            |
+| `LOCAL_AI_FETCH_HOSTS`                                | Optional comma-separated extra hosts for Local AI `fetch_url`                                   |
 | `NEXT_PUBLIC_API_URL`                                 | Optional API base URL for client-side requests; leave unset for relative `/api/...` calls       |
 | `NEXT_PUBLIC_ENABLE_SERVER_PROFILE_SYNC`              | When set to `1`, fetched node selections can be synced into the server-side `custom` profile    |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Enables shared Redis-backed graph, seed bank, recent-seed tracking, and response caching        |
@@ -637,10 +765,13 @@ This keeps the deployment payload smaller while still shipping the consolidated 
 
 ### Local development
 
-1. `pnpm install`
-2. `pnpm run dev:clean`
-3. Optionally expand the local cache with `pnpm run prime:all`
-4. Rebuild graph artifacts with `pnpm run build:graph`
+1. Start Redis on `127.0.0.1:6379` (Docker one-liner in **Quick start** above)
+2. Ensure `.env.local` has `USE_LOCAL_REDIS=1`
+3. `pnpm install`
+4. `pnpm run dev` (or `pnpm run dev:clean`)
+5. Optionally expand the local cache with `pnpm run prime:all`
+6. Rebuild graph artifacts with `pnpm run build:graph`
+7. Optional Local AI: install Ollama, `ollama pull qwen2.5:7b`, open http://localhost:4444/local-ai
 
 ### Preparing a deployment
 
@@ -706,5 +837,4 @@ When adding new Playwright specs in this repo, prefer:
 - The graph UI is intentionally optimized for incremental growth rather than a single massive one-shot render.
 - Global People / Firms counts shown by the app come from the **seed bank**, not just the currently rendered subset.
 - The prime-check route warms recent usage paths; it is **not** a continuous crawler.
-
-exportConnectedRenderedGraphSnapshot()
+- Local AI (`/local-ai`) is loopback-only by default and reads local Redis / firm-connection files; cron owns new CRD hydration.

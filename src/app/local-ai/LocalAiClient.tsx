@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import LocalOnlyCornerLink from '@/components/LocalOnlyCornerLink';
 import { captureCanvasSnapshotForLocalAi } from '@/lib/localAi/captureCanvasSnapshotClient';
 import type { CanvasSnapshot } from '@/lib/localAi/canvasSnapshot';
+import { filterFreeLocalOllamaModels } from '@/lib/localAi/ollama';
+import { LOCAL_AI_AUTO_MODEL } from '@/lib/localAi/orchestrator';
 
 type ChatTurn = { role: 'user' | 'assistant'; content: string };
 
@@ -20,21 +22,33 @@ const EXAMPLES = [
 	'Which people on the canvas connect to two different firms?',
 	'List people currently at 2+ firms in BrokerCheck data. Return Name :: CRD# lines.',
 	'Show the employment timeline for CRD 5417517 including begin/end dates.',
+	'Fetch https://127.0.0.1:4444/api/local-ai/status and summarize what models are available.',
 ];
 
 export default function LocalAiClient() {
 	const [status, setStatus] = useState<StatusPayload | null>(null);
+	const [autoMode, setAutoMode] = useState(true);
 	const [model, setModel] = useState('qwen2.5:7b');
+	const [showAdvancedModel, setShowAdvancedModel] = useState(false);
 	const [question, setQuestion] = useState('');
 	const [history, setHistory] = useState<ChatTurn[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [toolTrace, setToolTrace] = useState<any[] | null>(null);
+	const [lastRoute, setLastRoute] = useState<{
+		mode?: string;
+		model?: string;
+		reason?: string;
+		pipeline?: string;
+		workers?: Array<{ id?: string; role?: string; model?: string }>;
+		mergeModel?: string;
+	} | null>(null);
+	const [workerTraces, setWorkerTraces] = useState<any[] | null>(null);
 	const [canvasInfo, setCanvasInfo] = useState<string>('Checking canvas…');
 	const [aboutNodeGraph, setAboutNodeGraph] = useState(false);
 
 	const preferredModels = useMemo(() => {
-		const models = status?.models || [];
+		const models = filterFreeLocalOllamaModels(status?.models || []);
 		const prefer = ['qwen2.5:7b', 'qwen2.5:14b', 'qwen3.6:latest', 'llama3.2:latest'];
 		const ordered = [...prefer.filter((m) => models.includes(m)), ...models.filter((m) => !prefer.includes(m))];
 		return ordered.length ? ordered : prefer;
@@ -65,8 +79,11 @@ export default function LocalAiClient() {
 				const data = (await res.json()) as StatusPayload;
 				if (cancelled) return;
 				setStatus(data);
-				if (data.defaultModel) setModel(data.defaultModel);
-				else if (data.models?.includes('qwen2.5:7b')) setModel('qwen2.5:7b');
+				const free = filterFreeLocalOllamaModels(data.models || []);
+				if (data.defaultModel && free.includes(data.defaultModel)) setModel(data.defaultModel);
+				else if (free.includes('qwen2.5:7b')) setModel('qwen2.5:7b');
+				else if (free[0]) setModel(free[0]);
+				// Auto mode stays on; manual override only when Advanced is opened.
 			} catch (e: any) {
 				if (!cancelled) setStatus({ ok: false, error: e?.message || String(e) });
 			}
@@ -83,35 +100,53 @@ export default function LocalAiClient() {
 		setBusy(true);
 		setError(null);
 		setToolTrace(null);
+		setWorkerTraces(null);
+		setLastRoute(null);
 		setHistory((prev) => [...prev, { role: 'user', content: q }]);
 		setQuestion('');
 		try {
 			const canvasSnapshot: CanvasSnapshot | null = aboutNodeGraph ? await refreshCanvasInfo() : null;
 			if (!aboutNodeGraph) void refreshCanvasInfo();
+			const requestedModel = autoMode ? LOCAL_AI_AUTO_MODEL : model;
 			const res = await fetch('/api/local-ai/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					question: q,
-					model,
+					model: requestedModel,
 					history: history.slice(-8),
 					aboutNodeGraph,
 					canvasSnapshot,
+					availableModels: status?.models || preferredModels,
 				}),
 			});
 			const data = await res.json();
 			if (!res.ok || !data?.ok) {
 				throw new Error(data?.error || `chat failed (${res.status})`);
 			}
+			const route = data?.route && typeof data.route === 'object' ? data.route : null;
+			setLastRoute(
+				route ?
+					{
+						mode: route.mode,
+						model: route.model || data.model,
+						reason: route.reason,
+						pipeline: route.pipeline,
+						workers: Array.isArray(route.workers) ? route.workers : undefined,
+						mergeModel: route.mergeModel,
+					}
+				:	{ mode: autoMode ? 'auto' : 'manual', model: data.model, pipeline: 'single' },
+			);
 			setHistory((prev) => [...prev, { role: 'assistant', content: String(data.answer || '') }]);
 			setToolTrace(Array.isArray(data.toolTrace) ? data.toolTrace : []);
+			setWorkerTraces(Array.isArray(data.workerTraces) ? data.workerTraces : null);
 		} catch (e: any) {
 			setError(e?.message || String(e));
 			setHistory((prev) => [...prev, { role: 'assistant', content: `Error: ${e?.message || String(e)}` }]);
 		} finally {
 			setBusy(false);
 		}
-	}, [aboutNodeGraph, busy, history, model, question, refreshCanvasInfo]);
+	}, [aboutNodeGraph, autoMode, busy, history, model, preferredModels, question, refreshCanvasInfo, status?.models]);
 
 	return (
 		<main
@@ -126,8 +161,9 @@ export default function LocalAiClient() {
 				<p style={{ margin: 0, opacity: 0.7, fontSize: 13 }}>local only · Ollama</p>
 				<h1 style={{ margin: '6px 0 8px', fontSize: 28 }}>Local AI</h1>
 				<p style={{ margin: 0, opacity: 0.8, lineHeight: 1.45 }}>
-					Ask about current dual-firm people, firm rosters, and employment timelines. The model calls local
-					tools over your firm-connections / individual data.
+					Ask about current dual-firm people, firm rosters, and employment timelines. Paste an allowlisted
+					API/page URL to cross-reference via <code>fetch_url</code>. Auto mode plans adaptively: simple
+					lookups use one specialist; harder cross-checks run tools/fetch + reason workers, then merge.
 				</p>
 			</header>
 
@@ -171,26 +207,85 @@ export default function LocalAiClient() {
 					borderRadius: 8,
 					background: 'var(--surface, #fafafa)',
 				}}>
-				<label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-					<span style={{ fontSize: 13, opacity: 0.8 }}>Model</span>
-					<select
-						value={model}
-						onChange={(e) => setModel(e.target.value)}
+				<label
+					style={{
+						display: 'flex',
+						gap: 8,
+						alignItems: 'center',
+						fontSize: 13,
+						fontWeight: 600,
+						cursor: 'pointer',
+						userSelect: 'none',
+					}}>
+					<input
+						type="checkbox"
+						checked={autoMode}
+						onChange={(e) => {
+							const on = e.target.checked;
+							setAutoMode(on);
+							if (on) setShowAdvancedModel(false);
+						}}
 						disabled={busy}
-						style={{ padding: '6px 8px', borderRadius: 6, minWidth: 180 }}>
-						{preferredModels.map((m) => (
-							<option key={m} value={m}>
-								{m}
-							</option>
-						))}
-					</select>
+						style={{ width: 15, height: 15 }}
+					/>
+					<span>Auto model</span>
+					<span style={{ fontWeight: 400, opacity: 0.7 }}>
+						{autoMode ? 'plans single or tools+reason→merge' : 'manual override'}
+					</span>
 				</label>
+				{!autoMode || showAdvancedModel ?
+					<label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+						<span style={{ fontSize: 13, opacity: 0.8 }}>Model</span>
+						<select
+							value={model}
+							onChange={(e) => {
+								setModel(e.target.value);
+								setAutoMode(false);
+							}}
+							disabled={busy}
+							style={{ padding: '6px 8px', borderRadius: 6, minWidth: 180 }}>
+							{preferredModels.map((m) => (
+								<option key={m} value={m}>
+									{m}
+								</option>
+							))}
+						</select>
+					</label>
+				:	<button
+						type="button"
+						onClick={() => {
+							setShowAdvancedModel(true);
+							setAutoMode(false);
+						}}
+						disabled={busy}
+						style={{
+							fontSize: 12,
+							padding: '4px 8px',
+							borderRadius: 6,
+							border: '1px solid var(--border-strong, #ccc)',
+							background: 'transparent',
+							cursor: 'pointer',
+						}}>
+						Advanced…
+					</button>
+				}
 				<span style={{ fontSize: 13, opacity: 0.75 }}>
 					{status == null ? 'Checking Ollama…'
-					: status.ok ? `Ollama ok · ${status.models?.length || 0} models`
+					: status.ok ? `Ollama ok · ${status.models?.length || 0} free models`
 					:	`Ollama unreachable: ${status.error || 'unknown error'}`}
 				</span>
 				<span style={{ fontSize: 13, opacity: 0.75 }}>{canvasInfo}</span>
+				{lastRoute?.model ?
+					<span style={{ fontSize: 12, opacity: 0.85, maxWidth: '100%' }}>
+						Last route:{' '}
+						{lastRoute.pipeline === 'multi' ?
+							`Auto multi → ${(lastRoute.workers || []).map((w) => `${w.role}:${w.model}`).join(' + ')} → merge:${lastRoute.mergeModel || lastRoute.model}`
+						: lastRoute.mode === 'auto' ?
+							`Auto → ${lastRoute.model}`
+						:	lastRoute.model}
+						{lastRoute.reason ? ` · ${lastRoute.reason}` : ''}
+					</span>
+				:	null}
 				<button
 					type="button"
 					onClick={() => void refreshCanvasInfo()}
@@ -310,6 +405,33 @@ export default function LocalAiClient() {
 
 			{error ?
 				<p style={{ color: '#b91c1c', marginTop: 10 }}>{error}</p>
+			:	null}
+
+			{workerTraces && workerTraces.length > 0 ?
+				<details style={{ marginTop: 16 }}>
+					<summary style={{ cursor: 'pointer' }}>Worker traces ({workerTraces.length})</summary>
+					<pre
+						style={{
+							overflow: 'auto',
+							padding: 12,
+							borderRadius: 8,
+							background: 'rgba(0,0,0,0.04)',
+							fontSize: 12,
+							lineHeight: 1.4,
+						}}>
+						{JSON.stringify(
+							workerTraces.map((w) => ({
+								id: w.id,
+								role: w.role,
+								model: w.model,
+								answer: w.answer,
+								tools: w.toolTrace?.length || 0,
+							})),
+							null,
+							2,
+						)}
+					</pre>
+				</details>
 			:	null}
 
 			{toolTrace && toolTrace.length > 0 ?
