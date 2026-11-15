@@ -2162,6 +2162,16 @@ describe('FinraGraph DOM helpers (unit)', () => {
 				currentConnections: [{ individualId: '9' }],
 			}),
 		).toBe(false);
+		// Filtered reveal stamped exhausted under Tags; default (Tags off / empty) filter key unlocks.
+		const filteredExhausted = {
+			id: 'firm:3',
+			group: 'firm',
+			_secOnlyCurrentConnectionsExpanded: true,
+			_clickRevealFilterKey: JSON.stringify({ kw: ['smith'], strict: false, prev: false }),
+			currentConnections: [{ individualId: '9' }, { individualId: '10' }],
+		};
+		expect(nodeHasNoAdditionalNodesToReveal(filteredExhausted)).toBe(false);
+		expect(filteredExhausted._secOnlyCurrentConnectionsExpanded).toBeUndefined();
 		expect(
 			nodeHasNoAdditionalNodesToReveal({
 				id: 'person:1',

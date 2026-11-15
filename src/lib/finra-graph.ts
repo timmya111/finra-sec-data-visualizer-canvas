@@ -19640,6 +19640,54 @@ function firmHasAllCurrentConnectionsOnCanvas(firmNode: any) {
 	return total > 0 && present >= total;
 }
 
+/**
+ * Fingerprint of firm click-reveal filters. When Tags is unchecked (or keywords /
+ * previous / strict change), exhausted locks from a prior filtered reveal must clear
+ * so the next firm click resumes the normal unfiltered batch.
+ */
+function firmClickRevealFilterKey(
+	config: {
+		clickRevealKeywords?: string[] | string | null;
+		clickRevealKeywordsEnabled?: boolean;
+		clickRevealStrict?: boolean;
+		firmRevealPrevious?: boolean;
+	} | null | undefined,
+): string {
+	const keywords = effectiveClickRevealKeywords({
+		clickRevealKeywords: config?.clickRevealKeywords || [],
+		clickRevealKeywordsEnabled: config?.clickRevealKeywordsEnabled !== false,
+	});
+	return JSON.stringify({
+		kw: keywords.map((tag) => String(tag || '').toLowerCase()).sort(),
+		strict: Boolean(config?.clickRevealStrict) && keywords.length > 0,
+		prev: Boolean(config?.firmRevealPrevious),
+	});
+}
+
+/**
+ * Clear `_secOnlyCurrentConnectionsExpanded` when the active Tags/previous filter
+ * no longer matches the filter that stamped the lock.
+ */
+function syncFirmClickRevealFilterState(
+	firmNode: any,
+	config: {
+		clickRevealKeywords?: string[] | string | null;
+		clickRevealKeywordsEnabled?: boolean;
+		clickRevealStrict?: boolean;
+		firmRevealPrevious?: boolean;
+	} | null | undefined = null,
+): boolean {
+	if (!firmNode || firmNode.group !== 'firm') return false;
+	const nextKey = firmClickRevealFilterKey(config || readGraphSearchClickConfigFromDom());
+	const prevKey = typeof firmNode._clickRevealFilterKey === 'string' ? firmNode._clickRevealFilterKey : null;
+	firmNode._clickRevealFilterKey = nextKey;
+	if (prevKey != null && prevKey !== nextKey && firmNode._secOnlyCurrentConnectionsExpanded) {
+		delete firmNode._secOnlyCurrentConnectionsExpanded;
+		return true;
+	}
+	return false;
+}
+
 /** After clear-non-log prunes people, firms must be allowed to expand again. */
 function resetFirmConnectionExpandFlagsAfterPrune(keepIds: Set<string>) {
 	const clearedIds: string[] = [];
@@ -19702,6 +19750,8 @@ export function shouldExpandFirmCurrentConnections(firmNode: any) {
 export function nodeHasNoAdditionalNodesToReveal(node: any): boolean {
 	if (!node) return false;
 	if (node.group === 'firm') {
+		// Tags unchecked / filter changed after a filtered reveal → allow another expand.
+		syncFirmClickRevealFilterState(node);
 		if (node._secOnlyCurrentConnectionsExpanded === true) return true;
 		return firmHasAllCurrentConnectionsOnCanvas(node);
 	}
@@ -19731,6 +19781,8 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 	const clickConfig = readGraphSearchClickConfigFromDom();
 	const firmRevealLimit = Number.isFinite(clickConfig.firmRevealLimit) ? clickConfig.firmRevealLimit : DEFAULT_FIRM_REVEAL_LIMIT;
 	const includePrevious = Boolean(clickConfig.firmRevealPrevious);
+	// Unchecking Tags (or changing keywords) must unlock firms that were exhausted under a filter.
+	syncFirmClickRevealFilterState(firmNode, clickConfig);
 	// Already fully revealed — do not re-hit /connections or rebuild batches.
 	// When previous is enabled, current-only completeness is not enough to bail out.
 	const currentComplete = firmHasAllCurrentConnectionsOnCanvas(firmNode);
@@ -19763,8 +19815,15 @@ async function expandSecOnlyFirmCurrentConnections(firmNode: any) {
 		const current = currentRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickKeywords, clickConfig.clickRevealStrict));
 		const previous = previousRaw.filter((connection) => connectionMatchesClickRevealKeyword(connection, clickKeywords, clickConfig.clickRevealStrict));
 		if (!current.length && !previous.length) {
+			const rawAvailable = currentRaw.length + previousRaw.length;
+			if (rawAvailable > 0 && clickKeywords.length > 0) {
+				// Tags hid everyone — do not lock the firm; unchecking Tags must allow a normal reveal.
+				updateFetchStatus(`No connections match Tags for ${firmLabel} (${rawAvailable} available — uncheck Tags to reveal)`);
+				delete firmNode._secOnlyCurrentConnectionsExpanded;
+				return { added: 0, linked: 0, remaining: rawAvailable, bridged: 0 };
+			}
 			updateFetchStatus(`No more connections to reveal for ${firmLabel}`);
-			// Stamp exhausted so paint can darken; allow retry only if connections later hydrate.
+			// Truly empty roster — stamp exhausted so paint can darken.
 			firmNode._secOnlyCurrentConnectionsExpanded = true;
 			try {
 				rerenderGraphNodesByIds([firmNode.id]);
