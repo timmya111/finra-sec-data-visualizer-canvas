@@ -216,7 +216,9 @@ What these mean:
 - `UPSTASH_ALLOW_WRITES=1` — allow the local app to write cache keys
 - `USE_REDIS_ONLY=1` — prefer Redis when it is healthy
 
-You can copy extra keys later from a teammate’s `.env.local` if you need Upstash tokens for production tooling. For day-to-day local graph work, the three lines above are enough.
+Production Redis (Upstash, cron-hydrated) is the source of truth. `pnpm run dev` starts local Redis and backgrounds an incremental **Upstash → local** pull (`pull_delta_from_prod.mjs`) so localhost catches up without writing cloud. Manual: `pnpm run redis:pull-from-prod` (optional `--crd=…`, `--overwrite`, `--limit=N`). Skip with `SKIP_REDIS_PULL_FROM_PROD=1`.
+
+You can copy extra keys later from a teammate’s `.env.local` if you need Upstash tokens for production tooling. For day-to-day local graph work, the three lines above plus Upstash tokens (for the pull) are enough.
 
 ### 4. Run the app
 

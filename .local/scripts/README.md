@@ -15,11 +15,12 @@ Nuclear keep-list: only what `pnpm dev` / `pnpm build` / tests need, plus approv
 Specialized (keep; do not duplicate):
 
 - `gap_scan_top_crds.mjs` — probe missing CRDs in the top window
-- `push_delta_to_prod.mjs` — **preferred** quota-friendly batched MSET (e.g. `--match='firm-connections:firm:*' --batch=50 --sleep=150`)
+- `pull_delta_from_prod.mjs` — **Upstash → local only** (prod cron is source of truth). Incremental SCAN with saved cursor; never writes cloud. `pnpm run redis:pull-from-prod` or auto from `start-local-redis.sh`.
+- `push_delta_to_prod.mjs` — **preferred** quota-friendly batched MSET local→cloud when the user explicitly asks (e.g. `--match='firm-connections:firm:*' --batch=50 --sleep=150`)
 - `push_all_to_prod.mjs` — full DB dump via MSET (avoid unless necessary; burns Upstash read/write quota)
 
 ## Dev
-- `start-local-redis.sh` — used by `pnpm dev` / `pnpm dev:clean`
+- `start-local-redis.sh` — used by `pnpm dev` / `pnpm dev:clean`; starts Redis + Commander and backgrounds an Upstash→local pull (`SKIP_REDIS_PULL_FROM_PROD=1` to skip)
 
 ## Build (`pnpm build` / `prebuild`)
 - `prebuild.js` — Next prebuild hook
