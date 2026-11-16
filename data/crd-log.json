@@ -1,6 +1,94 @@
 {
   "firms": [
     {
+      "id": 104556,
+      "name": "H.D. VEST ADVISORY SERVICES, INC"
+    },
+    {
+      "id": 17507,
+      "name": "FIDELITY INVESTMENTS INSTITUTIONAL SERVICES COMPANY, INC."
+    },
+    {
+      "id": 7784,
+      "name": "FIDELITY BROKERAGE SERVICES, INC."
+    },
+    {
+      "id": 13041,
+      "name": "NATIONAL FINANCIAL SERVICES CORPORATION"
+    },
+    {
+      "id": 13686,
+      "name": "H.D. VEST INVESTMENT SERVICES"
+    },
+    {
+      "id": 23131,
+      "name": "ROYAL ALLIANCE ASSOCIATES, INC."
+    },
+    {
+      "id": 4031,
+      "name": "PENN MUTUAL EQUITY SERVICES, INC."
+    },
+    {
+      "id": 2882,
+      "name": "WASHINGTON SQUARE SECURITIES, INC."
+    },
+    {
+      "id": 133967,
+      "name": "SECHRIST FINANCIAL SERVICES"
+    },
+    {
+      "id": 6363,
+      "name": "AMERICAN EXPRESS FINANCIAL ADVISORS INC."
+    },
+    {
+      "id": 12963,
+      "name": "MONEY CONCEPTS CAPITAL CORP"
+    },
+    {
+      "id": 109441,
+      "name": "COMPASS FINANCIAL SERVICES"
+    },
+    {
+      "id": 3227,
+      "name": "JOSEPHTHAL LYON & ROSS INCORPORATED"
+    },
+    {
+      "id": 154255,
+      "name": "MBIA CAPITAL ADVISORS"
+    },
+    {
+      "id": 153902,
+      "name": "ASHTON THOMAS PRIVATE WEALTH"
+    },
+    {
+      "id": 125402,
+      "name": "CREW CAPITAL MANAGEMENT, LTD."
+    },
+    {
+      "id": 6320,
+      "name": "IDS/AMERICAN EXPRESS INC."
+    },
+    {
+      "id": 7519,
+      "name": "REYNOLDS DEWITT SECURITIES COMPANY"
+    },
+    {
+      "id": 10293,
+      "name": "LINCOLN NATIONAL PENSION INSURANCE COMPANY"
+    },
+    {
+      "id": 3978,
+      "name": "LINCOLN FINANCIAL ADVISORS CORPORATION"
+    },
+    {
+      "id": 8642,
+      "name": "STUART, COLEMAN & CO., INC."
+    },
+    {
+      "id": 15876,
+      "name": "EQUITY ANALYSTS INC."
+    },
+    {
       "id": 5685,
       "name": "PRUCO SECURITIES, LLC."
     },
@@ -11,10 +99,6 @@
     {
       "id": 79,
       "name": "BEAR, STEARNS & CO. INC."
-    },
-    {
-      "id": 17507,
-      "name": "FIDELITY DISTRIBUTORS COMPANY LLC"
     },
     {
       "id": 8174,
@@ -95,10 +179,6 @@
     {
       "id": 35371,
       "name": "INFINEX INVESTMENTS, INC."
-    },
-    {
-      "id": 6363,
-      "name": "AMERIPRISE FINANCIAL SERVICES, LLC"
     },
     {
       "id": 128851,
@@ -251,14 +331,6 @@
     {
       "id": 530,
       "name": "LORD ABBETT DISTRIBUTOR LLC"
-    },
-    {
-      "id": 13041,
-      "name": "NATIONAL FINANCIAL SERVICES LLC"
-    },
-    {
-      "id": 4031,
-      "name": "HORNOR, TOWNSEND & KENT, LLC"
     },
     {
       "id": 4386,
@@ -461,14 +533,6 @@
       "name": "OSAIC FS, INC."
     },
     {
-      "id": 3978,
-      "name": "OSAIC FA, INC."
-    },
-    {
-      "id": 23131,
-      "name": "OSAIC WEALTH, INC."
-    },
-    {
       "id": 1763,
       "name": "H. BECK, INC."
     },
@@ -483,14 +547,6 @@
     {
       "id": 285,
       "name": "FERRIS, BAKER WATTS, LLC"
-    },
-    {
-      "id": 2882,
-      "name": "VOYA FINANCIAL ADVISORS, INC."
-    },
-    {
-      "id": 104556,
-      "name": "AVANTAX ADVISORY SERVICES"
     },
     {
       "id": 13572,
@@ -1261,10 +1317,6 @@
       "name": "FENNER FINANCIAL, INC."
     },
     {
-      "id": 7784,
-      "name": "FIDELITY BROKERAGE SERVICES LLC"
-    },
-    {
       "id": 169794,
       "name": "ULSTRA"
     },
@@ -1799,10 +1851,6 @@
     {
       "id": 17433,
       "name": "ACADEMY SECURITIES, INC."
-    },
-    {
-      "id": 6320,
-      "name": "INVESTORS DIVERSIFIED SERVICES, INC."
     },
     {
       "id": 7109,
@@ -3369,10 +3417,6 @@
       "name": "SEEDS"
     },
     {
-      "id": 13686,
-      "name": "AVANTAX INVESTMENT SERVICES, INC."
-    },
-    {
       "id": 104840,
       "name": "BOYS ARNOLD & CO. INC."
     },
@@ -3503,10 +3547,6 @@
     {
       "id": 292817,
       "name": "MAIA WEALTH"
-    },
-    {
-      "id": 3227,
-      "name": "JOSEPHTHAL & CO., INC."
     },
     {
       "id": 20746,
@@ -3671,10 +3711,6 @@
     {
       "id": 152878,
       "name": "FWS RETIREMENT SERVICES, LLC"
-    },
-    {
-      "id": 12963,
-      "name": "INTERNATIONAL FINANCIAL SERVICES CAPITAL CORPORATION"
     },
     {
       "id": 23737,
@@ -15982,6 +16018,46 @@
     }
   ],
   "individuals": [
+    {
+      "id": 1046706,
+      "name": "TIMOTHY MOORE CREECH"
+    },
+    {
+      "id": 2590161,
+      "name": "ROBERT JOSEPH SECHRIST"
+    },
+    {
+      "id": 2340964,
+      "name": "LOUIS FERREE ALLEN"
+    },
+    {
+      "id": 6784263,
+      "name": "David E. Spellman"
+    },
+    {
+      "id": 4715086,
+      "name": "Chihshang Fang"
+    },
+    {
+      "id": 6102971,
+      "name": "MATTHEW CREEL ANDERSON"
+    },
+    {
+      "id": 8176167,
+      "name": "Steven Kent TALLMAN"
+    },
+    {
+      "id": 6684400,
+      "name": "Aleksandr Philip Pope"
+    },
+    {
+      "id": 1276237,
+      "name": "TIMOTHY MATTHEW STRATFORD"
+    },
+    {
+      "id": 1058490,
+      "name": "TIMOTHY EDWARD MACKEY"
+    },
     {
       "id": 7009011,
       "name": "DAVID R MARTIN"

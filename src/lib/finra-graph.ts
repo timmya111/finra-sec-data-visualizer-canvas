@@ -5006,17 +5006,6 @@ function isSelectionLogChildNode(nodeId: string) {
 	return false;
 }
 
-function clearChildNodeSelectionVisualState(nodeId: string) {
-	const normalizedNodeId = String(nodeId || '').trim();
-	if (!normalizedNodeId) return;
-	globalState.highlightedSelections = globalState.highlightedSelections.filter((entry) => String(entry?.id || '').trim() !== normalizedNodeId);
-	globalState.visitedNodeIds.delete(normalizedNodeId);
-	globalState.persistentSelectedIds.delete(normalizedNodeId);
-	if (globalState.selectedId && String(globalState.selectedId).trim() === normalizedNodeId) {
-		globalState.selectedId = null;
-	}
-}
-
 function restoreChildNodeSelectionVisualState(nodeId: string) {
 	const normalizedNodeId = String(nodeId || '').trim();
 	if (!normalizedNodeId) return;
@@ -6020,65 +6009,6 @@ function clearGraphAction(button?: HTMLButtonElement) {
 	if (button) flashSelectionLogActionButton(button, 'Cleared!');
 }
 
-function isPersonNodeId(nodeId: string) {
-	const normalized = String(nodeId || '').trim();
-	if (!normalized) return false;
-	if (normalized.startsWith('person:')) return true;
-	const node = (Array.isArray(globalState.graphData?.nodes) ? globalState.graphData.nodes : []).find((entry) => String(entry?.id || '').trim() === normalized);
-	return Boolean(node && (node.group === 'individual' || node.type === 'individual'));
-}
-
-function isPersonEmploymentHistoryLink(link: any, personId: string) {
-	const sourceId = String(link?.source?.id ?? link?.source ?? '').trim();
-	const targetId = String(link?.target?.id ?? link?.target ?? '').trim();
-	if (!sourceId || !targetId) return false;
-	if (sourceId !== personId && targetId !== personId) return false;
-	const otherId = sourceId === personId ? targetId : sourceId;
-	if (!otherId.startsWith('firm:')) return false;
-	const rel = String(link?.relationship || '')
-		.trim()
-		.toLowerCase();
-	if (rel.includes('employ') || rel.includes('registered') || rel.includes('associated')) return true;
-	return isPreviousEmploymentLink(link) || usesCurrentEmploymentStyling(link);
-}
-
-/** Employment-history link identity keys for one person in the current graph. */
-function collectPersonEmploymentHistoryLinkKeys(personId: string, links: Array<any> = globalState.graphData?.links || []) {
-	const normalizedPersonId = String(personId || '').trim();
-	if (!normalizedPersonId || !Array.isArray(links)) return new Set<string>();
-	const keys = new Set<string>();
-	for (const link of links) {
-		if (!isPersonEmploymentHistoryLink(link, normalizedPersonId)) continue;
-		keys.add(getLinkIdentityKey(link));
-	}
-	return keys;
-}
-
-function collectSelectedPersonNodeIds() {
-	const ids = new Set<string>();
-	if (globalState.selectedId && isPersonNodeId(String(globalState.selectedId))) ids.add(String(globalState.selectedId).trim());
-	for (const id of globalState.persistentSelectedIds) {
-		const normalized = String(id || '').trim();
-		if (normalized && isPersonNodeId(normalized)) ids.add(normalized);
-	}
-	return ids;
-}
-
-function clearPersonSelectionVisualState(nodeId: string) {
-	const normalizedNodeId = String(nodeId || '').trim();
-	if (!normalizedNodeId) return;
-	clearChildNodeSelectionVisualState(normalizedNodeId);
-	if (sidebarSelectedNode && String(sidebarSelectedNode.id || '').trim() === normalizedNodeId) {
-		sidebarSelectedNode = null;
-		sidebarViewMode = 'none';
-		showSidebarHint();
-	}
-	if (!globalState.selectedId) {
-		emitSelectedNodeRoute(null, { replace: true });
-		updateFocusReadout(null);
-	}
-}
-
 /**
  * Remove previous-employment links, then drop nodes that are no longer reachable from
  * selection-log terminals over the remaining (non-previous) edges.
@@ -6401,12 +6331,6 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 		return;
 	}
 
-	const selectedPeople = collectSelectedPersonNodeIds();
-	const employmentKeysBefore = new Map<string, Set<string>>();
-	for (const personId of selectedPeople) {
-		employmentKeysBefore.set(personId, collectPersonEmploymentHistoryLinkKeys(personId, globalState.graphData?.links || []));
-	}
-
 	// Single rebuild path: sync live positions, prune to log+bridges, strip previous-employment
 	// reachability, then render once. The old double-renderGraph wiped zoom and left nodes at 0,0.
 	syncLayoutPositionsIntoGraphDataNodes();
@@ -6437,24 +6361,8 @@ function clearNonLogAction(button?: HTMLButtonElement) {
 		updateFetchStatus('No previous connections to clear');
 	}
 
-	// Selected people who lost any employment-history links should no longer look selected.
-	for (const personId of selectedPeople) {
-		const beforeKeys = employmentKeysBefore.get(personId) || new Set<string>();
-		if (beforeKeys.size === 0) continue;
-		const afterKeys = collectPersonEmploymentHistoryLinkKeys(personId, globalState.graphData?.links || []);
-		let removedAny = beforeKeys.size > afterKeys.size;
-		if (!removedAny) {
-			for (const key of beforeKeys) {
-				if (!afterKeys.has(key)) {
-					removedAny = true;
-					break;
-				}
-			}
-		}
-		if (removedAny) clearPersonSelectionVisualState(personId);
-	}
-
 	// Drop prior hop/line connection emphasis left over from earlier expansions.
+	// Keep person click/selection chrome (persistentSelectedIds / selectedId) intact.
 	// Avoid full clearHighlights() here — it re-walks every node/link and feels like another multi-second hitch.
 	globalState.highlightedSelections = [];
 	globalState.hoveredNodeId = null;
