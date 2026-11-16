@@ -107,7 +107,10 @@ export function normalizeGraphSearchClickConfig(raw: Partial<GraphSearchClickCon
 
 /** Keywords applied on firm click — empty when Tags is unchecked. */
 export function effectiveClickRevealKeywords(
-	config: Pick<GraphSearchClickConfig, 'clickRevealKeywords' | 'clickRevealKeywordsEnabled'>,
+	config: {
+		clickRevealKeywords?: string[] | string | null;
+		clickRevealKeywordsEnabled?: boolean;
+	} | null | undefined,
 ): string[] {
 	if (!config?.clickRevealKeywordsEnabled) return [];
 	return parseClickRevealKeywordTags(config.clickRevealKeywords);
